@@ -19,7 +19,6 @@ import {
   Chip,
   Menu,
   MenuItem,
-  Tooltip,
   Divider,
 } from '@mui/material';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -27,7 +26,6 @@ import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import WarningIcon from '@mui/icons-material/Warning';
-import CleaningServicesIcon from '@mui/icons-material/CleaningServices';
 import { api } from '@/lib/api';
 import type { Chapter } from '@/types';
 
@@ -77,8 +75,8 @@ export default function ChapterManager({
   // 打开删除对话框
   const handleDeleteOpen = useCallback(() => {
     setDeleteDialogOpen(true);
-    handleMenuClose();
-  }, [handleMenuClose]);
+    setAnchorEl(null);
+  }, []);
 
   // 打开创建对话框
   const handleCreateOpen = useCallback(() => {
@@ -97,8 +95,7 @@ export default function ChapterManager({
 
     setLoading(true);
     try {
-      await api.createChapter(novelId, {
-        chapter_number: chapterNumber,
+      await api.createNextChapter(novelId, {
         title: chapterTitle.trim(),
         content: '',
       });
@@ -111,7 +108,7 @@ export default function ChapterManager({
     } finally {
       setLoading(false);
     }
-  }, [novelId, chapterNumber, chapterTitle, onChaptersUpdated, onError]);
+  }, [novelId, chapterTitle, onChaptersUpdated, onError]);
 
   // 打开编辑对话框
   const handleEditOpen = useCallback(() => {
@@ -120,8 +117,8 @@ export default function ChapterManager({
       setChapterNumber(selectedChapter.chapter_number);
       setEditDialogOpen(true);
     }
-    handleMenuClose();
-  }, [selectedChapter, handleMenuClose]);
+    setAnchorEl(null);
+  }, [selectedChapter]);
 
   // 更新章节
   const handleEditChapter = useCallback(async () => {
@@ -135,6 +132,7 @@ export default function ChapterManager({
       await api.updateChapter(novelId, selectedChapter.id, {
         title: chapterTitle.trim(),
         chapter_number: chapterNumber,
+        expected_version: selectedChapter.version,
       });
 
       setEditDialogOpen(false);
@@ -213,6 +211,7 @@ export default function ChapterManager({
               onClick={() => onChapterSelected(chapter.id)}
             >
               <ListItemText
+                disableTypography
                 primary={
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     <Typography variant="body2" fontWeight="medium">
@@ -281,15 +280,9 @@ export default function ChapterManager({
       <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>新建章节</DialogTitle>
         <DialogContent>
-          <TextField
-            fullWidth
-            label="章节序号"
-            type="number"
-            value={chapterNumber}
-            onChange={(e) => setChapterNumber(Number(e.target.value))}
-            margin="normal"
-            inputProps={{ min: 1 }}
-          />
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            章节序号由系统按当前最后一章自动分配。
+          </Typography>
           <TextField
             fullWidth
             label="章节标题"
@@ -307,6 +300,44 @@ export default function ChapterManager({
             disabled={loading || !chapterTitle.trim()}
           >
             {loading ? '创建中...' : '创建章节'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 编辑章节对话框 */}
+      <Dialog
+        open={editDialogOpen}
+        onClose={() => setEditDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>编辑章节</DialogTitle>
+        <DialogContent>
+          <TextField
+            fullWidth
+            label="章节序号"
+            type="number"
+            value={chapterNumber}
+            onChange={(e) => setChapterNumber(Number(e.target.value))}
+            margin="normal"
+            inputProps={{ min: 1 }}
+          />
+          <TextField
+            fullWidth
+            label="章节标题"
+            value={chapterTitle}
+            onChange={(e) => setChapterTitle(e.target.value)}
+            margin="normal"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditDialogOpen(false)}>取消</Button>
+          <Button
+            variant="contained"
+            onClick={handleEditChapter}
+            disabled={loading || !chapterTitle.trim()}
+          >
+            {loading ? '保存中...' : '保存'}
           </Button>
         </DialogActions>
       </Dialog>

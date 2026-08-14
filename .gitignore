@@ -44,6 +44,8 @@ pytest-debug.log
 *.log
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 .cache/
@@ -200,3 +202,7 @@ docker-compose.override.yml
 *.backup
 *.bak
 *.old
+
+# AI 会话工作产物（不入库）
+.claude/
+.Codex/

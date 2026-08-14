@@ -1,7 +1,7 @@
 """
 内容生成路由
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.models.schemas import (
@@ -13,7 +13,7 @@ from app.models.schemas import (
     PlotOptionsResponse,
     PlotOption,
     AutoChapterRequest,
-    ChapterCreate,
+    ChapterNextCreate,
     ChapterResponse,
     RewriteRequest,
     RewriteResponse,
@@ -22,17 +22,50 @@ from app.services.agent_service import agent_service
 from app.services.rag_service import rag_service
 from app.db.base import get_db
 from app.crud import novel as novel_crud
-from app.api.routes.auth import get_current_user
+from app.api.dependencies import get_current_user
 from app.models.user import User
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
 from loguru import logger
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from app.core.config import settings
 import json
 import asyncio
+from app.services.context_budget import (
+    MAX_CURRENT_CONTENT_CHARS,
+    MAX_GENERATION_PROMPT_CHARS,
+    MAX_PLOT_HINT_CHARS,
+    MAX_STORY_CONTEXT_CHARS,
+    MAX_WORLDVIEW_CONTEXT_CHARS,
+    compact_text,
+    ensure_generation_prompt_budget,
+)
 
 router = APIRouter()
+
+
+async def _index_auto_chapter_projection(**kwargs) -> None:
+    """后台刷新自动生成章节的RAG投影，并记录真实执行结果。"""
+    indexed = await rag_service.index_content(**kwargs)
+    if indexed:
+        logger.info(
+            "自动章节RAG后台索引完成：novel_id={}, chapter={}",
+            kwargs["novel_id"],
+            kwargs["chapter"],
+        )
+    elif not settings.EMBEDDING_ENABLED:
+        logger.info(
+            "自动章节RAG后台索引已按配置跳过：novel_id={}, chapter={}",
+            kwargs["novel_id"],
+            kwargs["chapter"],
+        )
+    else:
+        logger.warning(
+            "自动章节RAG后台索引失败：novel_id={}, chapter={}",
+            kwargs["novel_id"],
+            kwargs["chapter"],
+        )
 
 
 # 初始化设定使用的LLM
@@ -41,36 +74,39 @@ init_llm = ChatOpenAI(
     api_key=settings.OPENAI_API_KEY,
     base_url=settings.OPENAI_API_BASE,
     temperature=0.8,
+    max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+    timeout=settings.LLM_TIMEOUT_SECONDS,
+    max_retries=settings.LLM_MAX_RETRIES,
 )
 
 
 class ContinueRequest(BaseModel):
     """章节续写请求"""
-    novel_id: int
-    chapter_id: int
-    current_content: str
-    target_length: int = 500
+    novel_id: int = Field(..., gt=0)
+    chapter_id: int = Field(..., gt=0)
+    current_content: str = Field(..., max_length=MAX_CURRENT_CONTENT_CHARS)
+    target_length: int = Field(500, ge=100, le=3000)
     # 用户可控参数
-    style_strength: float = 0.7  # 文风强度 (0-1)
-    pace: str = "medium"  # 节奏：slow/medium/fast
-    tone: str = "neutral"  # 基调：neutral/tense/relaxed/sad/joyful
+    style_strength: float = Field(0.7, ge=0, le=1)  # 文风强度 (0-1)
+    pace: Literal["slow", "medium", "fast"] = "medium"
+    tone: Literal["neutral", "tense", "relaxed", "sad", "joyful"] = "neutral"
     use_rag_style: bool = True  # 是否使用RAG学习文风
     style_sample_id: int | None = None  # 文风样本ID（用户上传的参考文风）
-    plot_direction_hint: str | None = None  # 选定的剧情走向提示，用于引导续写方向
+    plot_direction_hint: str | None = Field(None, max_length=MAX_PLOT_HINT_CHARS)
 
 
 class OutlineRequest(BaseModel):
     """大纲生成请求"""
-    novel_id: int
-    theme: str
-    target_chapters: int = 10
+    novel_id: int = Field(..., gt=0)
+    theme: str = Field(..., min_length=1, max_length=1000)
+    target_chapters: int = Field(10, ge=1, le=80)
 
 
 class CharacterRequest(BaseModel):
     """角色生成请求"""
-    novel_id: int
-    character_type: str  # 主角/配角/反派
-    character_description: str
+    novel_id: int = Field(..., gt=0)
+    character_type: str = Field(..., min_length=1, max_length=20)
+    character_description: str = Field(..., min_length=1, max_length=1000)
 
 
 @router.post("/init", response_model=InitNovelResponse)
@@ -85,15 +121,20 @@ async def init_novel(
     """
     try:
         logger.info(
-            "生成剧情选项请求：novel_id=%s, chapter_id=%s, num_options=%s",
+            "AI初始化小说设定：novel_id={}, target_chapters={}, theme_length={}",
             request.novel_id,
-            request.chapter_id,
-            request.num_options,
+            request.target_chapters,
+            len(request.theme or ""),
         )
         # 校验小说归属
         novel = novel_crud.get_novel_by_id(db, request.novel_id)
         if not novel or novel.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="小说不存在或无权访问")
+        if not 1 <= request.target_chapters <= 80:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="目标章节数必须在 1 到 80 之间",
+            )
 
         # 构造提示词（注意：示例JSON中的花括号需要用双花括号转义，避免被当作模板变量）
         prompt = ChatPromptTemplate.from_messages(
@@ -135,9 +176,13 @@ async def init_novel(
             {
                 "title": novel.title,
                 "genre": novel.genre or "未指定",
-                "description": novel.description or "暂无简介",
+                "description": compact_text(
+                    novel.description,
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep="head",
+                ) or "暂无简介",
                 "target_chapters": request.target_chapters,
-                "theme": request.theme or "",
+                "theme": compact_text(request.theme, 1000, keep="head"),
             }
         )
 
@@ -190,7 +235,11 @@ async def init_novel(
 
 
 @router.post("/generate", response_model=GenerationResponse)
-async def generate_content(request: GenerationRequest):
+async def generate_content(
+    request: GenerationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     生成小说内容
 
@@ -209,9 +258,27 @@ async def generate_content(request: GenerationRequest):
         HTTPException: 生成失败时抛出
     """
     try:
-        logger.info(f"收到生成请求：小说{request.novel_id}，提示词:'{request.prompt}'")
+        novel = novel_crud.get_novel_by_id(db, request.novel_id)
+        if not novel or novel.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="小说不存在或无权访问")
+
+        try:
+            ensure_generation_prompt_budget(request.prompt)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        logger.info(
+            "收到生成请求：小说{}，章节{}，提示词长度={}",
+            request.novel_id,
+            request.chapter,
+            len(request.prompt),
+        )
         response = await agent_service.generate_content(request)
         return response
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"生成失败: {e}")
         raise HTTPException(
@@ -340,7 +407,7 @@ async def generate_plot_options(
             options=options,
         )
         logger.info(
-            "生成剧情选项完成：novel_id=%s, chapter_id=%s, 实际返回选项数=%s",
+            "生成剧情选项完成：novel_id={}, chapter_id={}, 实际返回选项数={}",
             response.novel_id,
             response.chapter_id,
             len(response.options),
@@ -357,6 +424,7 @@ async def generate_plot_options(
 @router.post("/auto-chapter", response_model=ChapterResponse)
 async def auto_create_chapter(
     request: AutoChapterRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -377,17 +445,14 @@ async def auto_create_chapter(
             if not base_chapter or base_chapter.novel_id != request.novel_id:
                 raise HTTPException(status_code=404, detail="参考章节不存在")
         else:
-            # 使用最后一章作为参考
-            chapters = novel_crud.get_chapters_by_novel(db, request.novel_id)
-            if chapters:
-                base_chapter = chapters[-1]
+            # 只读取最后一章，避免为选取参考内容加载整部小说正文。
+            base_chapter = novel_crud.get_latest_chapter(db, request.novel_id)
 
-        # 计算下一章章节号
+        # 该编号仅用于提示模型；真正的章节号在写入时由服务端重新分配。
+        next_chapter_number = novel_crud.get_max_chapter_number(db, request.novel_id) + 1
         if base_chapter:
-            next_chapter_number = base_chapter.chapter_number + 1
             base_content = base_chapter.content or ""
         else:
-            next_chapter_number = 1
             base_content = ""
 
         # 构造提示词
@@ -421,10 +486,22 @@ async def auto_create_chapter(
             ),
         ])
 
-        base_excerpt = base_content[-800:] if len(base_content) > 800 else base_content
-        worldview_excerpt = (
-            novel.worldview[:500] + "..." if novel.worldview and len(novel.worldview) > 500 else (novel.worldview or "未设定")
-        )
+        base_excerpt = compact_text(base_content, 800, keep="tail")
+        worldview_excerpt = compact_text(
+            novel.worldview,
+            MAX_WORLDVIEW_CONTEXT_CHARS,
+            keep="head",
+        ) or "未设定"
+        description_excerpt = compact_text(
+            novel.description,
+            MAX_STORY_CONTEXT_CHARS,
+            keep="head",
+        ) or "暂无简介"
+        theme_excerpt = compact_text(
+            request.theme,
+            MAX_PLOT_HINT_CHARS,
+            keep="head",
+        ) or "无特别说明"
 
         chain = prompt | init_llm
         response = await chain.ainvoke(
@@ -432,11 +509,11 @@ async def auto_create_chapter(
                 "title": novel.title,
                 "genre": novel.genre or "未指定",
                 "worldview": worldview_excerpt,
-                "description": novel.description or "暂无简介",
+                "description": description_excerpt,
                 "base_chapter_number": base_chapter.chapter_number if base_chapter else "无",
                 "base_chapter_title": base_chapter.title if base_chapter else "无",
                 "base_excerpt": base_excerpt or "暂无内容",
-                "theme": request.theme or "无特别说明",
+                "theme": theme_excerpt,
                 "target_chapter_number": next_chapter_number,
                 "target_length": request.target_length,
             }
@@ -448,37 +525,49 @@ async def auto_create_chapter(
             end = raw.rfind("}") + 1
             json_str = raw[start:end] if start != -1 and end != 0 else raw
             data = json.loads(json_str)
-            title = str(data.get("title") or f"第{next_chapter_number}章")
+            title = str(data.get("title") or "").strip() or None
             content = str(data.get("content") or "")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"解析自动章节JSON失败，将原始内容作为正文返回: {e}")
-            title = f"第{next_chapter_number}章"
+            title = None
             content = raw
 
-        chapter_create = ChapterCreate(
-            chapter_number=next_chapter_number,
+        # 模型若只回显预测编号，让数据库写入后的真实编号决定默认标题。
+        if title == f"第{next_chapter_number}章":
+            title = None
+        chapter_create = ChapterNextCreate(
             title=title,
             content=content,
         )
 
-        # 创建章节
-        db_chapter = novel_crud.create_chapter(db, request.novel_id, chapter_create)
-
-        # 将章节内容索引到RAG（忽略失败）
+        # 在模型调用结束后重新计算并分配章节号，数据库唯一约束负责并发兜底。
         try:
-            await rag_service.index_content(
-                novel_id=request.novel_id,
-                chapter=db_chapter.chapter_number,
-                content=db_chapter.content,
-                metadata={"source": "chapter", "chapter_id": db_chapter.id},
+            db_chapter = novel_crud.create_next_chapter(
+                db,
+                request.novel_id,
+                chapter_create,
             )
-            logger.info(
-                f"AI自动创建章节已索引到RAG：小说{request.novel_id}，章节{db_chapter.chapter_number}"
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                f"AI自动章节索引到RAG失败（novel_id={request.novel_id}, chapter={db_chapter.chapter_number}）: {e}"
-            )
+        except novel_crud.ChapterNumberConflictError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+        # 向量索引是可重建投影，不阻塞章节创建响应。
+        projection_token = rag_service.prepare_chapter_projection(
+            request.novel_id,
+            db_chapter.id,
+            db=db,
+        )
+        background_tasks.add_task(
+            _index_auto_chapter_projection,
+            novel_id=request.novel_id,
+            chapter=db_chapter.chapter_number,
+            content=db_chapter.content,
+            metadata={
+                "source": "chapter",
+                "chapter_id": db_chapter.id,
+                "version": db_chapter.version,
+                **projection_token,
+            },
+        )
 
         return ChapterResponse.model_validate(db_chapter)
 
@@ -699,15 +788,25 @@ async def continue_chapter(
         plot_hint_part = f"\n- 剧情走向：{plot_direction_hint}" if plot_direction_hint else ""
 
         # 构造完整的续写提示词
+        worldview_context = compact_text(
+            novel.worldview,
+            MAX_WORLDVIEW_CONTEXT_CHARS,
+            keep="head",
+        ) or "无"
+        current_context = compact_text(
+            request.current_content,
+            MAX_STORY_CONTEXT_CHARS,
+            keep="tail",
+        )
         prompt = f"""请根据以下内容继续创作约{request.target_length}字的小说段落。
 
 【小说信息】
 标题：{novel.title}
 类型：{novel.genre or '未指定'}
-世界观：{novel.worldview or '无'}
+世界观：{worldview_context}
 
 【已有内容】
-{request.current_content[-1000:] if len(request.current_content) > 1000 else request.current_content}
+{current_context}
 
 【创作要求】
 - 目标字数：约{request.target_length}字
@@ -718,6 +817,11 @@ async def continue_chapter(
 请自然地续写故事，保持情节连贯性和人物一致性。
 
 续写："""
+        prompt = compact_text(
+            prompt,
+            MAX_GENERATION_PROMPT_CHARS,
+            keep="both",
+        )
 
         # 调用生成服务
         gen_request = GenerationRequest(
@@ -748,6 +852,11 @@ async def continue_chapter(
             "rag_style_context": rag_style_context,
             "rag_story_context": response.worldview_context + response.character_context,
             "agent_outputs": [output.model_dump() for output in response.agent_outputs],
+            "consistency_checks": [
+                check.model_dump() for check in response.consistency_checks
+            ],
+            "retry_count": response.retry_count,
+            "final_consistency": response.final_consistency.model_dump(),
             "workflow_trace": workflow_trace,
             "settings": {
                 "pace": request.pace,
@@ -766,6 +875,7 @@ async def continue_chapter(
 @router.post("/continue-stream")
 async def continue_chapter_stream(
     request: ContinueRequest,
+    http_request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -860,15 +970,25 @@ async def continue_chapter_stream(
         plot_hint_part = f"\n- 剧情走向：{plot_direction_hint}" if plot_direction_hint else ""
 
         # 构造完整的续写提示词
+        worldview_context = compact_text(
+            novel.worldview,
+            MAX_WORLDVIEW_CONTEXT_CHARS,
+            keep="head",
+        ) or "无"
+        current_context = compact_text(
+            request.current_content,
+            MAX_STORY_CONTEXT_CHARS,
+            keep="tail",
+        )
         prompt = f"""请根据以下内容继续创作约{request.target_length}字的小说段落。
 
 【小说信息】
 标题：{novel.title}
 类型：{novel.genre or '未指定'}
-世界观：{novel.worldview or '无'}
+世界观：{worldview_context}
 
 【已有内容】
-{request.current_content[-1000:] if len(request.current_content) > 1000 else request.current_content}
+{current_context}
 
 【创作要求】
 - 目标字数：约{request.target_length}字
@@ -879,6 +999,11 @@ async def continue_chapter_stream(
 请自然地续写故事，保持情节连贯性和人物一致性。
 
 续写："""
+        prompt = compact_text(
+            prompt,
+            MAX_GENERATION_PROMPT_CHARS,
+            keep="both",
+        )
 
         # 构造生成请求
         gen_request = GenerationRequest(
@@ -893,6 +1018,13 @@ async def continue_chapter_stream(
             """SSE事件生成器"""
             try:
                 async for event in agent_service.generate_content_stream(gen_request):
+                    if await http_request.is_disconnected():
+                        logger.info(
+                            "客户端已断开续写流：novel_id={}, chapter_id={}",
+                            request.novel_id,
+                            request.chapter_id,
+                        )
+                        break
                     if event["type"] == "final_response":
                         response = event["data"]
                         
@@ -909,6 +1041,11 @@ async def continue_chapter_stream(
                             "rag_style_context": rag_style_context,
                             "rag_story_context": response.worldview_context + response.character_context,
                             "agent_outputs": [output.model_dump() for output in response.agent_outputs],
+                            "consistency_checks": [
+                                check.model_dump() for check in response.consistency_checks
+                            ],
+                            "retry_count": response.retry_count,
+                            "final_consistency": response.final_consistency.model_dump(),
                             "workflow_trace": workflow_trace,
                             "settings": {
                                 "pace": request.pace,
@@ -922,6 +1059,8 @@ async def continue_chapter_stream(
                         full_content = response.final_content
                         chunk_size = 5  # 每次发送5个字符，模拟打字
                         for i in range(0, len(full_content), chunk_size):
+                            if await http_request.is_disconnected():
+                                return
                             chunk = full_content[i:i+chunk_size]
                             yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
                             await asyncio.sleep(0.01)
@@ -938,6 +1077,13 @@ async def continue_chapter_stream(
                         }
                         yield f"data: {json.dumps(safe_event, ensure_ascii=False)}\n\n"
 
+            except asyncio.CancelledError:
+                logger.info(
+                    "续写流任务已取消：novel_id={}, chapter_id={}",
+                    request.novel_id,
+                    request.chapter_id,
+                )
+                raise
             except Exception as e:
                 logger.error(f"流式生成过程中发生错误: {e}")
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
@@ -976,12 +1122,17 @@ async def generate_outline(
             raise HTTPException(status_code=404, detail="小说不存在或无权访问")
 
         # 构造大纲生成提示词
+        worldview_context = compact_text(
+            novel.worldview,
+            MAX_WORLDVIEW_CONTEXT_CHARS,
+            keep="head",
+        ) or "未设定"
         prompt = f"""请为以下小说生成{request.target_chapters}章的详细大纲：
 
 小说标题：{novel.title}
 小说类型：{novel.genre or '未指定'}
 故事主题：{request.theme}
-世界观：{novel.worldview or '未设定'}
+世界观：{worldview_context}
 
 请按照以下格式生成大纲：
 第X章 章节标题
@@ -989,6 +1140,7 @@ async def generate_outline(
 - 主要情节点2
 - 主要情节点3
 """
+        prompt = compact_text(prompt, MAX_GENERATION_PROMPT_CHARS, keep="both")
 
         # 调用生成服务
         gen_request = GenerationRequest(
@@ -1038,11 +1190,16 @@ async def generate_character(
             raise HTTPException(status_code=404, detail="小说不存在或无权访问")
 
         # 构造角色生成提示词
+        worldview_context = compact_text(
+            novel.worldview,
+            MAX_WORLDVIEW_CONTEXT_CHARS,
+            keep="head",
+        ) or "未设定"
         prompt = f"""请为以下小说生成一个{request.character_type}角色的详细设定：
 
 小说标题：{novel.title}
 小说类型：{novel.genre or '未指定'}
-世界观：{novel.worldview or '未设定'}
+世界观：{worldview_context}
 
 角色类型：{request.character_type}
 角色描述：{request.character_description}
@@ -1056,6 +1213,7 @@ async def generate_character(
 6. 动机/目标
 7. 人物关系
 """
+        prompt = compact_text(prompt, MAX_GENERATION_PROMPT_CHARS, keep="both")
 
         # 调用生成服务
         gen_request = GenerationRequest(
@@ -1082,13 +1240,21 @@ async def generate_character(
 
 
 @router.get("/test")
-async def test_generation():
+async def test_generation(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     测试接口：生成示例内容
 
     用于快速测试系统是否正常工作
     """
     try:
+        if not settings.DEBUG:
+            raise HTTPException(status_code=404, detail="接口不存在")
+        novel = novel_crud.get_novel_by_id(db, 1)
+        if not novel or novel.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="小说不存在或无权访问")
         request = GenerationRequest(
             novel_id=1,
             prompt="主角在魔法塔顶与导师决裂",
@@ -1102,6 +1268,8 @@ async def test_generation():
             "final_content": response.final_content,
             "length": len(response.final_content)
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"测试失败: {e}")
         raise HTTPException(

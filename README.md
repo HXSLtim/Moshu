@@ -1,216 +1,157 @@
-# AI小说创作系统
+# Nai：AI 辅助长篇小说创作系统
 
-一个基于多Agent协作的智能小说创作平台，支持世界观管理、角色管理、大纲管理和一致性保障。
+Nai 是一个作者主导的本地小说创作工具，提供章节管理、版本化保存、Story Bible 事实与事件账本、AI 续写、RAG 上下文检索、一致性检查和多维审核。
 
-## 🚀 核心功能
+项目的核心原则是：**作者数据是唯一真源，AI 只提供候选内容；RAG、图谱和统计都是可重建的派生数据。** 详细设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-- **多Agent协作写作**：三个专业Agent分工协作
-  - Agent A：世界观描写（环境、氛围、魔法体系）
-  - Agent B：角色对话（性格、心理、动作描写）
-  - Agent C：剧情控制（整合、推进、伏笔）
+## 当前可用能力
 
-- **RAG检索增强**：混合检索策略
-  - 向量检索（语义相似度）
-  - BM25关键词检索（精确匹配）
-  - 元数据过滤（章节、时间线、角色）
+- 用户注册、登录和小说所有权隔离。
+- 小说、章节和角色基础管理。
+- Story Bible 基础能力：事实账本与剧情事件 CRUD。
+- 章节摘要分页、正文按需加载、服务端分配下一章编号。
+- 章节乐观版本控制，避免迟到的自动保存覆盖新稿。
+- 有界撤销历史、串行 latest-only 自动保存和可取消的 SSE 请求。
+- LangGraph 三阶段生成工作流，带统一上下文预算和有限重试。
+- Chroma 持久 RAG，按小说和章节范围过滤，支持覆盖更新和清理。
+- 六维章节审核，限制并发；任一审核失败时不会误报“可发布”。
+- Unified MCP 只公布真实实现的能力；未实现操作明确返回失败。
 
-- **一致性保障**：四层防护机制
-  - 规则引擎（硬规则验证）
-  - 知识图谱（关系验证）
-  - 时间线管理（时间验证）
-  - 情绪状态机（行为验证）
+## 当前技术基线
 
-## 🏗️ 技术栈
+后端：
 
-**后端**
-- FastAPI - 高性能API框架
-- LangGraph - 多Agent编排
-- LlamaIndex - RAG检索
-- Qdrant - 向量数据库
-- PostgreSQL - 关系数据库
-- Redis - 缓存
-- Neo4j - 知识图谱
+- Python 3.12
+- FastAPI、Pydantic 2、SQLAlchemy
+- SQLite
+- LangChain、LangGraph、LlamaIndex
+- Chroma
+- OpenAI 兼容模型接口（LM Studio 本地模型或 DeepSeek 远程模型）
 
-**前端**
-- Next.js 14 - React框架
-- TailwindCSS - UI样式
-- D3.js - 关系图谱可视化
+前端：
 
-**LLM**
-- GPT-4o（复杂任务）
-- GPT-4o-mini（简单任务）
+- Next.js 15、React 19、TypeScript
+- MUI 6、Emotion
 
-## 📂 项目结构
+PostgreSQL、Qdrant、Redis 和 Neo4j 仍属于可选演进方向。Docker Compose 中存在相关服务定义，不代表当前主链路已经依赖它们。
 
-```
-Nai/
-├── backend/                    # 后端服务
-│   ├── app/
-│   │   ├── main.py            # FastAPI入口
-│   │   ├── api/               # API路由
-│   │   ├── services/          # 业务逻辑
-│   │   │   ├── agent_service.py        # 多Agent服务
-│   │   │   ├── rag_service.py          # RAG检索服务
-│   │   │   ├── consistency_service.py  # 一致性检查服务
-│   │   ├── models/            # 数据模型
-│   │   └── core/              # 核心配置
-│   ├── requirements.txt
-│   └── Dockerfile
-├── frontend/                   # 前端界面
-│   ├── app/                   # Next.js页面
-│   ├── components/            # React组件
-│   ├── package.json
-│   └── Dockerfile
-├── docker-compose.yml         # 容器编排
-├── .env.example              # 环境变量模板
-└── README.md                 # 本文件
-```
+## 本机快速启动
 
-## 🚀 快速开始
+### 1. 启动 LM Studio
 
-### 1. 环境准备
+本项目默认使用：
+
+- 聊天模型：`google/gemma-4-26b-a4b-qat`
+- Embedding：`text-embedding-nomic-embed-text-v1.5`
 
 ```bash
-# 克隆项目
-cd Nai
+~/.lmstudio/bin/lms server start --port 1234 --bind 127.0.0.1
+~/.lmstudio/bin/lms load google/gemma-4-26b-a4b-qat \
+  --identifier google/gemma-4-26b-a4b-qat \
+  --context-length 32768 --parallel 2 -y
+~/.lmstudio/bin/lms load text-embedding-nomic-embed-text-v1.5 \
+  --identifier text-embedding-nomic-embed-text-v1.5 -y
+```
 
-# 复制环境变量
+可用以下命令检查模型：
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+### 2. 启动后端
+
+```bash
+uv venv --python 3.12 backend/.venv
+uv pip install --python backend/.venv/bin/python -r backend/requirements.txt
+
 cp .env.example .env
+python3 -c 'import secrets; print("SECRET_KEY=" + secrets.token_urlsafe(48))' >> .env
 
-# 编辑.env，填入OpenAI API密钥
-# OPENAI_API_KEY=your_api_key_here
+cd backend
+.venv/bin/python init_db.py
+.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### 2. 启动服务
+后端不会提供 JWT 默认密钥；`SECRET_KEY` 缺失、少于 32 个字符或仍为示例占位值时会安全失败。测试进程使用独立的显式测试密钥。
+
+不启动 LM Studio 时，小说和章节 CRUD 仍可使用；AI 与 RAG 会明确返回不可用或降级结果，而不是阻止应用启动。
+
+也可以只把生成链路切换到 DeepSeek。项目已按 OpenAI 兼容协议验证 `deepseek-v4-pro`；真实密钥仅写入本机 `.env` 或进程环境，不能提交到仓库：
+
+```dotenv
+OPENAI_API_KEY=请填写本机密钥
+OPENAI_API_BASE=https://api.deepseek.com/v1
+OPENAI_MODEL_COMPLEX=deepseek-v4-pro
+OPENAI_MODEL_SIMPLE=deepseek-v4-pro
+```
+
+这不会自动替换 Embedding 服务。LM Studio 关闭时，AI 生成仍可走 DeepSeek；建议同时设置 `EMBEDDING_ENABLED=false`，让 RAG 立即进入明确降级状态，不再探测已关闭的本地端口。
+
+### 3. 启动前端
 
 ```bash
-# 启动数据库（Qdrant + PostgreSQL + Redis）
-docker-compose up -d
-
-# 安装后端依赖
-cd backend
-pip install -r requirements.txt
-
-# 启动后端
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# 启动前端（新终端）
 cd frontend
 npm install
 npm run dev
 ```
 
-### 3. 访问系统
+访问地址：
 
-- 前端界面：http://localhost:3000
-- 后端API文档：http://localhost:8000/docs
-- Qdrant管理界面：http://localhost:6333/dashboard
+- 前端：http://127.0.0.1:3000
+- API 文档：http://127.0.0.1:8000/docs
+- 健康检查：http://127.0.0.1:8000/api/health
 
-## 📖 使用指南
+环境变量模板见 [.env.example](.env.example)。默认配置已经指向本机 LM Studio、SQLite 和 Chroma；如需覆盖，复制为项目根目录 `.env`。
 
-### 创建小说项目
+## 本地验证
 
-1. 在前端创建新小说项目
-2. 定义世界观规则（魔法体系、地理等）
-3. 创建角色（性格、关系、背景）
-4. 规划大纲（章节、剧情点）
+后端：
 
-### 生成内容
-
-1. 输入剧情提示词（如"主角在魔法塔顶与导师决裂"）
-2. 系统自动执行三Agent工作流：
-   - Agent A生成世界观描写
-   - Agent B生成角色对话
-   - Agent C整合并推进剧情
-3. 一致性检查
-4. 输出最终段落
-
-### 管理内容
-
-- **世界观管理**：编辑魔法规则、地理设定、历史事件
-- **角色管理**：更新角色性格、关系网、情绪状态
-- **大纲管理**：调整章节结构、剧情走向、伏笔
-
-## 🔧 配置说明
-
-### 环境变量（.env）
-
-```env
-# OpenAI API
-OPENAI_API_KEY=your_key
-
-# 数据库
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=novel_db
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=password
-
-# Qdrant
-QDRANT_HOST=localhost
-QDRANT_PORT=6333
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-
-# Neo4j（知识图谱）
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=password
+```bash
+cd backend
+.venv/bin/python run_tests.py --mode all
 ```
 
-## 📊 开发路线图
+前端：
 
-- [x] 技术方案设计
-- [x] 项目结构初始化
-- [ ] 后端核心模块开发
-  - [ ] FastAPI基础框架
-  - [ ] Qdrant集成
-  - [ ] LangGraph三Agent工作流
-  - [ ] LlamaIndex RAG检索
-  - [ ] 一致性检查系统
-- [ ] 前端界面开发
-  - [ ] 小说管理界面
-  - [ ] 世界观管理界面
-  - [ ] 角色管理界面
-  - [ ] 大纲管理界面
-  - [ ] 实时生成界面
-- [ ] 测试与优化
-- [ ] 部署上线
+```bash
+cd frontend
+npm run lint
+npx tsc --noEmit --incremental false
+npm run build
+```
 
-## 📚 文档
+`run_tests.py` 会原样返回 pytest 的退出码，任何依赖、收集或断言失败都会使命令失败。
 
-详细技术文档请查看 `.claude/` 目录：
-- `executive-summary.md` - 执行摘要
-- `technology-comparison.md` - 技术选型对比
-- `ai-novel-writing-system-analysis.md` - 完整技术方案
-- `quick-reference.md` - 快速参考
+## 目录
 
-## 🤝 贡献
+```text
+Nai/
+├── backend/
+│   ├── app/api/routes/       API 与权限边界
+│   ├── app/crud/             数据访问
+│   ├── app/models/           SQLAlchemy 与 Pydantic 模型
+│   ├── app/services/         AI、RAG、一致性和审核服务
+│   ├── migrations/           Alembic 迁移（结构演进的唯一入口）
+│   └── tests/                自动化测试
+├── frontend/
+│   ├── app/                  Next.js 页面
+│   ├── components/           UI 组件
+│   ├── hooks/                保存、历史和交互状态
+│   └── lib/                  API 与 SSE 客户端
+├── ARCHITECTURE.md           架构原则与演进边界
+├── REQUIREMENTS_ANALYSIS.md  需求分析与迭代排序
+└── .Codex/                   本次上下文、操作与验证记录
+```
 
-欢迎提交Issue和Pull Request！
+## 已知边界
 
-## 📄 许可证
+- 结构化 Story Bible 已落地事实与事件账本；仍需继续把 `Novel.worldview` 中的扁平文本迁移到地点、大纲等模型。角色已有独立管理，地点、大纲等模型尚未纳入当前能力。
+- 当前响应后的 RAG 投影不是可恢复任务；生产部署应升级为数据库 outbox。
+- 真正的模型 token 流仍受多 Agent 编排边界限制；客户端取消已经贯通，但最终正文主要在生成阶段完成后输出。
+- `init_db.py` 已统一空库/旧库/已管理库三种路径，Alembic 是结构演进唯一入口；旧库一次性过渡时会补建缺失表并 `stamp head`，其列级差异（如旧 chapters 缺检查约束）由兼容补齐覆盖，PostgreSQL 上线前需验证迁移在该方言上的回滚与数据量压测。
 
-MIT License
+## 项目状态
 
-## 📞 联系方式
-
-- **项目维护者**：hahage
-- **邮箱**：a2778978136@163.com
-- **GitHub**：HXSLtim
-- **技术交流**：欢迎提交Issue或Pull Request
-
-如有问题或建议，请通过以下方式联系：
-- 提交GitHub Issue（推荐）
-- 发送邮件至 a2778978136@163.com
-- GitHub: https://github.com/HXSLtim/Nai
-
----
-
-**开发时间**：2025-11-14
-**版本**：Alpha 0.1.0
-**状态**：开发中
-**项目维护者**：hahage
-**联系方式**：a2778978136@163.com
+当前阶段：本地 Alpha，优先保证长篇写作的数据正确性、可恢复性和上下文边界；不把未实现能力标记为完成。

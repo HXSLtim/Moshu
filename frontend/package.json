@@ -6,23 +6,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^6.3.0",
+    "@mui/material": "^6.3.0",
     "next": "^15.1.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "@mui/material": "^6.3.0",
-    "@mui/icons-material": "^6.3.0",
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "typescript": "^5",
     "eslint": "^9",
-    "eslint-config-next": "^15.1.4"
+    "eslint-config-next": "^15.1.4",
+    "jsdom": "^26.1.0",
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }

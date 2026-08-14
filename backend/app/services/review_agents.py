@@ -2,29 +2,119 @@
 
 包含所有审核 Agent 的详细实现逻辑
 """
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeVar
 from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.core.config import settings
 from app.models.workflow_schemas import AgentWorkflowStep
 from app.services.rag_service import rag_service
+from app.services.context_budget import (
+    build_previous_chapter_context,
+    build_review_content,
+)
 from loguru import logger
 import json
 
 
-def parse_json_response(response_text: str) -> Dict[str, Any]:
-    """解析LLM返回的JSON响应"""
+class StrictReviewModel(BaseModel):
+    """审核模型输出基类：禁止类型转换与未声明字段。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class PaceReviewPayload(StrictReviewModel):
+    """节奏审核模型输出。"""
+
+    score: int = Field(ge=0, le=100)
+    pace_type: Literal["slow", "medium", "fast", "uneven"]
+    issues: List[str]
+    suggestions: List[str]
+    details: Dict[str, Any]
+
+
+class QualityReviewPayload(StrictReviewModel):
+    """质量审核模型输出。"""
+
+    score: int = Field(ge=0, le=100)
+    grammar_score: int = Field(ge=0, le=100)
+    logic_score: int = Field(ge=0, le=100)
+    description_score: int = Field(ge=0, le=100)
+    issues: List[str]
+    suggestions: List[str]
+
+
+class PlotCoherencePayload(StrictReviewModel):
+    """情节连贯性审核模型输出。"""
+
+    score: int = Field(ge=0, le=100)
+    coherence_issues: List[str]
+    plot_holes: List[str]
+    suggestions: List[str]
+
+
+class CharacterInconsistencyPayload(StrictReviewModel):
+    """角色不一致问题。"""
+
+    type: Literal["性格", "对话", "能力", "关系"]
+    description: str = Field(min_length=1)
+
+
+class CharacterConsistencyPayload(StrictReviewModel):
+    """角色一致性审核模型输出。"""
+
+    score: int = Field(ge=0, le=100)
+    inconsistencies: List[CharacterInconsistencyPayload]
+    suggestions: List[str]
+
+
+class StyleReviewPayload(StrictReviewModel):
+    """文风审核模型输出。"""
+
+    score: int = Field(ge=0, le=100)
+    style_type: str = Field(min_length=1)
+    consistency_score: int = Field(ge=0, le=100)
+    issues: List[str]
+    suggestions: List[str]
+
+
+class FlaggedContentPayload(StrictReviewModel):
+    """内容安全命中项。"""
+
+    type: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    severity: Literal["low", "medium", "high"]
+
+
+class ContentSafetyPayload(StrictReviewModel):
+    """内容安全审核模型输出。"""
+
+    is_safe: StrictBool
+    risk_level: Literal["low", "medium", "high"]
+    flagged_content: List[FlaggedContentPayload]
+    suggestions: List[str]
+
+
+ReviewPayload = TypeVar("ReviewPayload", bound=StrictReviewModel)
+
+
+def parse_json_response(
+    response_text: str,
+    result_model: type[ReviewPayload],
+) -> Dict[str, Any]:
+    """解析并严格校验LLM返回的JSON响应。"""
     try:
         # 提取JSON部分（可能包含markdown代码块）
         if "```json" in response_text:
             response_text = response_text.split("```json")[1].split("```")[0].strip()
         elif "```" in response_text:
             response_text = response_text.split("```")[1].split("```")[0].strip()
-        
-        return json.loads(response_text)
+
+        raw_result = json.loads(response_text)
+        return result_model.model_validate(raw_result).model_dump()
     except Exception as e:
-        logger.error(f"JSON解析失败: {e}, 原文: {response_text[:200]}")
+        logger.error(f"审核结果解析或校验失败: {e}, 原文: {response_text[:200]}")
         raise
 
 
@@ -45,6 +135,7 @@ async def review_pace_agent(
     - 节奏变化的合理性
     """
     logger.info(f"节奏审核Agent开始工作：章节{chapter_number}")
+    content = build_review_content(content)
     
     step_start = datetime.utcnow()
     
@@ -74,17 +165,11 @@ async def review_pace_agent(
     try:
         chain = prompt | llm
         response = await chain.ainvoke({})
-        result = parse_json_response(response.content)
+        result = parse_json_response(response.content, PaceReviewPayload)
         
     except Exception as e:
         logger.error(f"节奏审核失败: {e}")
-        result = {
-            "score": 70,
-            "pace_type": "medium",
-            "issues": [f"审核过程出错: {str(e)}"],
-            "suggestions": ["请重新审核"],
-            "details": {}
-        }
+        raise
     
     step_end = datetime.utcnow()
     
@@ -138,6 +223,7 @@ async def review_quality_agent(
     - 表达清晰度
     """
     logger.info(f"质量审核Agent开始工作：章节{chapter_number}")
+    content = build_review_content(content)
     
     step_start = datetime.utcnow()
     
@@ -163,18 +249,11 @@ async def review_quality_agent(
     try:
         chain = prompt | llm
         response = await chain.ainvoke({})
-        result = parse_json_response(response.content)
+        result = parse_json_response(response.content, QualityReviewPayload)
         
     except Exception as e:
         logger.error(f"质量审核失败: {e}")
-        result = {
-            "score": 75,
-            "grammar_score": 80,
-            "logic_score": 75,
-            "description_score": 70,
-            "issues": [f"审核过程出错: {str(e)}"],
-            "suggestions": ["请重新审核"]
-        }
+        raise
     
     step_end = datetime.utcnow()
     
@@ -224,15 +303,13 @@ async def review_plot_coherence_agent(
     检查当前章节与前面章节的连贯性
     """
     logger.info(f"情节连贯性Agent开始工作：章节{chapter_number}")
+    content = build_review_content(content)
     
     step_start = datetime.utcnow()
     
     # 如果有前面的章节，进行连贯性检查
-    context = ""
-    if previous_chapters and len(previous_chapters) > 0:
-        # 只取最近的2-3章
-        recent_chapters = previous_chapters[-3:] if len(previous_chapters) > 3 else previous_chapters
-        context = "\n\n---\n\n".join(recent_chapters)
+    recent_chapters = build_previous_chapter_context(previous_chapters)
+    context = "\n\n---\n\n".join(recent_chapters)
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", """你是一位专业的情节连贯性审核专家。请检查当前章节与前面章节的连贯性：
@@ -255,16 +332,11 @@ async def review_plot_coherence_agent(
     try:
         chain = prompt | llm
         response = await chain.ainvoke({})
-        result = parse_json_response(response.content)
+        result = parse_json_response(response.content, PlotCoherencePayload)
         
     except Exception as e:
         logger.error(f"连贯性审核失败: {e}")
-        result = {
-            "score": 75,
-            "coherence_issues": [f"审核过程出错: {str(e)}"],
-            "plot_holes": [],
-            "suggestions": ["请重新审核"]
-        }
+        raise
     
     step_end = datetime.utcnow()
     
@@ -312,6 +384,7 @@ async def review_character_consistency_agent(
     检查角色性格、行为、说话方式是否一致
     """
     logger.info(f"角色一致性Agent开始工作：章节{chapter_number}")
+    content = build_review_content(content)
     
     step_start = datetime.utcnow()
     
@@ -349,15 +422,11 @@ async def review_character_consistency_agent(
         response = await chain.ainvoke({
             "character_context": "\n".join(character_context or ["无历史信息"])
         })
-        result = parse_json_response(response.content)
+        result = parse_json_response(response.content, CharacterConsistencyPayload)
         
     except Exception as e:
         logger.error(f"角色一致性审核失败: {e}")
-        result = {
-            "score": 80,
-            "inconsistencies": [],
-            "suggestions": [f"审核过程出错: {str(e)}，请重新审核"]
-        }
+        raise
     
     step_end = datetime.utcnow()
     
@@ -406,6 +475,7 @@ async def review_style_agent(
     检查语言风格的一致性和质量
     """
     logger.info(f"风格审核Agent开始工作：章节{chapter_number}")
+    content = build_review_content(content)
     
     step_start = datetime.utcnow()
     
@@ -431,17 +501,11 @@ async def review_style_agent(
     try:
         chain = prompt | llm
         response = await chain.ainvoke({})
-        result = parse_json_response(response.content)
+        result = parse_json_response(response.content, StyleReviewPayload)
         
     except Exception as e:
         logger.error(f"风格审核失败: {e}")
-        result = {
-            "score": 75,
-            "style_type": "现代",
-            "consistency_score": 75,
-            "issues": [f"审核过程出错: {str(e)}"],
-            "suggestions": ["请重新审核"]
-        }
+        raise
     
     step_end = datetime.utcnow()
     
@@ -489,6 +553,7 @@ async def review_content_safety_agent(
     检测敏感内容（简化版，实际应使用专业的内容审核API）
     """
     logger.info(f"内容安全Agent开始工作：章节{chapter_number}")
+    content = build_review_content(content)
     
     step_start = datetime.utcnow()
     
@@ -515,16 +580,11 @@ async def review_content_safety_agent(
     try:
         chain = prompt | llm
         response = await chain.ainvoke({})
-        result = parse_json_response(response.content)
+        result = parse_json_response(response.content, ContentSafetyPayload)
         
     except Exception as e:
         logger.error(f"内容安全审核失败: {e}")
-        result = {
-            "is_safe": True,
-            "risk_level": "low",
-            "flagged_content": [],
-            "suggestions": []
-        }
+        raise
     
     step_end = datetime.utcnow()
     

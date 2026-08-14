@@ -1,136 +1,61 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
-import { Chip, Typography } from '@mui/material';
-import { api } from '@/lib/api';
+import { Chip } from '@mui/material';
+import type { ChapterSaveStatus } from '@/hooks/useChapterSave';
 
 interface AutoSaverProps {
-  novelId: number;
-  chapterId: number | null;
-  title: string;
-  content: string;
-  lastSavedTitle: string;
-  lastSavedContent: string;
-  onSaved: (savedAt: Date) => void;
-  onError: (error: string) => void;
-  autoSaveDelay?: number;
+  status: ChapterSaveStatus;
+  lastSavedAt: Date | null;
 }
 
-export default function AutoSaver({
-  novelId,
-  chapterId,
-  title,
-  content,
-  lastSavedTitle,
-  lastSavedContent,
-  onSaved,
-  onError,
-  autoSaveDelay = 5000,
-}: AutoSaverProps) {
-  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const isSavingRef = useRef(false);
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
 
-  const hasUnsavedChanges = title !== lastSavedTitle || content !== lastSavedContent;
+/**
+ * 保存状态只负责展示，保存队列统一由 useChapterSave 管理。
+ */
+export default function AutoSaver({ status, lastSavedAt }: AutoSaverProps) {
+  if (status === 'idle') return null;
 
-  const performAutoSave = useCallback(async () => {
-    if (!chapterId || isSavingRef.current || !hasUnsavedChanges) {
-      return;
-    }
+  if (status === 'saving') {
+    return (
+      <Chip
+        label="保存中..."
+        size="small"
+        color="info"
+        aria-live="polite"
+        sx={{
+          animation: 'pulse 2s infinite',
+          '@keyframes pulse': {
+            '0%': { opacity: 1 },
+            '50%': { opacity: 0.5 },
+            '100%': { opacity: 1 },
+          },
+        }}
+      />
+    );
+  }
 
-    if (!title.trim() || !content.trim()) {
-      return; // 不保存空内容
-    }
+  if (status === 'error') {
+    return <Chip label="保存失败" size="small" color="error" aria-live="assertive" />;
+  }
 
-    isSavingRef.current = true;
-
-    try {
-      await api.updateChapter(novelId, chapterId, {
-        title: title.trim(),
-        content: content.trim(),
-      });
-      onSaved(new Date());
-    } catch (err) {
-      onError(err instanceof Error ? err.message : '自动保存失败');
-    } finally {
-      isSavingRef.current = false;
-    }
-  }, [novelId, chapterId, title, content, hasUnsavedChanges, onSaved, onError]);
-
-  // 设置自动保存定时器
-  useEffect(() => {
-    if (!hasUnsavedChanges) {
-      return;
-    }
-
-    // 清除之前的定时器
-    if (autoSaveTimerRef.current) {
-      clearTimeout(autoSaveTimerRef.current);
-    }
-
-    // 设置新的定时器
-    autoSaveTimerRef.current = setTimeout(() => {
-      performAutoSave();
-    }, autoSaveDelay);
-
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-      }
-    };
-  }, [hasUnsavedChanges, performAutoSave, autoSaveDelay]);
-
-  // 组件卸载时清理定时器
-  useEffect(() => {
-    return () => {
-      if (autoSaveTimerRef.current) {
-        clearTimeout(autoSaveTimerRef.current);
-      }
-    };
-  }, []);
-
-  // 页面失去焦点时立即保存
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedChanges) {
-        e.preventDefault();
-        e.returnValue = '您有未保存的更改，确定要离开吗？';
-        // 尝试立即保存
-        performAutoSave();
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden && hasUnsavedChanges) {
-        performAutoSave();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [hasUnsavedChanges, performAutoSave]);
-
-  if (!hasUnsavedChanges) {
-    return null;
+  if (status === 'dirty') {
+    return <Chip label="未保存" size="small" color="warning" aria-live="polite" />;
   }
 
   return (
     <Chip
-      label="自动保存中..."
+      label={lastSavedAt ? `${formatTime(lastSavedAt)} 已保存` : '已保存'}
       size="small"
-      color="info"
-      sx={{
-        animation: 'pulse 2s infinite',
-        '@keyframes pulse': {
-          '0%': { opacity: 1 },
-          '50%': { opacity: 0.5 },
-          '100%': { opacity: 1 },
-        },
-      }}
+      color="success"
+      variant="outlined"
+      aria-live="polite"
     />
   );
 }

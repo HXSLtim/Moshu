@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import type { Novel, Chapter } from '@/types';
+import type { Novel, Chapter, ChapterSummary } from '@/types';
 
 interface UseWorkspaceOptions {
   novelId: number;
@@ -13,7 +12,7 @@ interface UseWorkspaceOptions {
 interface UseWorkspaceReturn {
   // 数据
   novel: Novel | null;
-  chapters: Chapter[];
+  chapters: ChapterSummary[];
   currentChapter: Chapter | null;
   // 内容
   title: string;
@@ -38,11 +37,9 @@ interface UseWorkspaceReturn {
  * 封装工作区的数据加载、保存等核心业务逻辑
  */
 export function useWorkspace({ novelId, chapterId }: UseWorkspaceOptions): UseWorkspaceReturn {
-  const router = useRouter();
-
   // 数据状态
   const [novel, setNovel] = useState<Novel | null>(null);
-  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [chapters, setChapters] = useState<ChapterSummary[]>([]);
   const [currentChapter, setCurrentChapter] = useState<Chapter | null>(null);
 
   // 内容状态
@@ -50,7 +47,7 @@ export function useWorkspace({ novelId, chapterId }: UseWorkspaceOptions): UseWo
   const [content, setContent] = useState('');
 
   // 保存状态
-  const [autoSaving, setAutoSaving] = useState(false);
+  const autoSaving = false;
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [lastSavedTitle, setLastSavedTitle] = useState('');
   const [lastSavedContent, setLastSavedContent] = useState('');
@@ -69,27 +66,25 @@ export function useWorkspace({ novelId, chapterId }: UseWorkspaceOptions): UseWo
       setLoading(true);
       setError('');
 
-      const [novelData, chaptersData] = await Promise.all([
+      const [novelData, chaptersData, chapterData] = await Promise.all([
         api.getNovel(novelId),
-        api.getChapters(novelId),
+        api.getAllChapterSummaries(novelId),
+        chapterId ? api.getChapter(novelId, chapterId) : Promise.resolve(null),
       ]);
 
       setNovel(novelData);
       setChapters(chaptersData.sort((a, b) => a.chapter_number - b.chapter_number));
 
       // 加载当前章节
-      if (chapterId) {
-        const chapter = chaptersData.find(c => c.id === chapterId);
-        if (chapter) {
-          setCurrentChapter(chapter);
-          setContent(chapter.content);
-          setTitle(chapter.title);
-          setLastSavedTitle(chapter.title);
-          setLastSavedContent(chapter.content);
+      if (chapterData) {
+          setCurrentChapter(chapterData);
+          setContent(chapterData.content);
+          setTitle(chapterData.title);
+          setLastSavedTitle(chapterData.title);
+          setLastSavedContent(chapterData.content);
           setLastSavedAt(null);
-        }
       }
-    } catch (err) {
+    } catch {
       setError('加载失败，请返回重试');
     } finally {
       setLoading(false);
@@ -109,11 +104,13 @@ export function useWorkspace({ novelId, chapterId }: UseWorkspaceOptions): UseWo
     }
 
     try {
-      await api.updateChapter(novelId, currentChapter.id, {
+      const savedChapter = await api.updateChapter(novelId, currentChapter.id, {
         title: saveTitle,
         content: saveContent,
+        expected_version: currentChapter.version,
       });
 
+      setCurrentChapter(savedChapter);
       setLastSavedAt(new Date());
       setLastSavedTitle(saveTitle);
       setLastSavedContent(saveContent);

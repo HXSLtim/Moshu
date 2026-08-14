@@ -1,6 +1,13 @@
 'use client';
 
-import { useState, useCallback, forwardRef, useImperativeHandle, useRef } from 'react';
+import {
+  useState,
+  useCallback,
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+  useEffect,
+} from 'react';
 import {
   Card,
   CardContent,
@@ -9,7 +16,6 @@ import {
   Button,
   Box,
   LinearProgress,
-  Divider,
   FormControlLabel,
   Switch,
   Collapse,
@@ -32,10 +38,21 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import TuneIcon from '@mui/icons-material/Tune';
 import { api } from '@/lib/api';
 import type { SSEEvent } from '@/lib/sse';
-import type { AgentWorkflowTrace } from '@/types';
+import type {
+  AgentWorkflowTrace,
+  GenerationFinalConsistency,
+  GenerationMetadata,
+} from '@/types';
 import AgentWorkflowVisualization from './AgentWorkflowVisualization';
 import MultiAiStreamDisplay from './MultiAiStreamDisplay';
 import PlotOptionsGenerator, { PlotOption } from './PlotOptionsGenerator';
+
+const CONSISTENCY_CHECK_LABELS: Record<string, string> = {
+  rule_engine: '规则引擎',
+  knowledge_graph: '知识图谱',
+  timeline: '时间线',
+  emotion_state: '情绪状态',
+};
 
 interface AiWritingAssistantProps {
   novelId: number;
@@ -48,7 +65,7 @@ interface AiWritingAssistantProps {
   /** 用户选择的剧情走向提示，用于影响续写方向 */
   plotDirectionHint?: string | null;
   /** 将生成内容应用到下一章节的回调（可选） */
-  onApplyToNextChapter?: (generatedText: string) => void;
+  onApplyToNextChapter?: (generatedText: string) => Promise<void>;
 }
 
 export interface AiWritingAssistantRef {
@@ -69,8 +86,13 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
   const [aiGenerating, setAiGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState('');
   const [generatedText, setGeneratedText] = useState('');
+  const [finalConsistency, setFinalConsistency] = useState<GenerationFinalConsistency | null>(null);
+  const [applyingToNextChapter, setApplyingToNextChapter] = useState(false);
   const generatedTextRef = useRef('');
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const generationIdRef = useRef(0);
+  const renderFrameRef = useRef<number | null>(null);
+  const generationBaseContentRef = useRef('');
 
   // 剧情选项
   const [detectedPlotOptions, setDetectedPlotOptions] = useState<PlotOption[]>([]);
@@ -81,7 +103,6 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
   // 用户设置
   const [aiInstruction, setAiInstruction] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [targetLength, setTargetLength] = useState(500);
   const [styleStrength, setStyleStrength] = useState(0.7);
   const [pace, setPace] = useState<'slow' | 'medium' | 'fast'>('medium');
@@ -100,30 +121,54 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
       data?: any;
     }[]
   >([]);
-  const sseEventIdRef = useState(0);
+  const sseEventIdRef = useRef(0);
 
   // Agent 工作流追踪
   const [workflowTrace, setWorkflowTrace] = useState<AgentWorkflowTrace | null>(null);
 
-  // 获取事件类型对应的颜色
-  const getEventColor = (eventType: string) => {
-    switch (eventType) {
-      case 'agent':
-        return 'primary.main';
-      case 'generation':
-        return 'success.main';
-      case 'worldview':
-        return 'info.main';
-      case 'character':
-        return 'warning.main';
-      case 'plot':
-        return 'secondary.main';
-      case 'style':
-        return 'secondary.main';
-      default:
-        return 'grey.400';
+  const flushGeneratedText = useCallback(() => {
+    if (renderFrameRef.current !== null) {
+      cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
     }
-  };
+    setGeneratedText(generatedTextRef.current);
+  }, []);
+
+  const scheduleGeneratedTextRender = useCallback(() => {
+    if (renderFrameRef.current !== null) return;
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = null;
+      setGeneratedText(generatedTextRef.current);
+    });
+  }, []);
+
+  useEffect(() => {
+    generationIdRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    if (renderFrameRef.current !== null) {
+      cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
+    }
+    generatedTextRef.current = '';
+    setGeneratedText('');
+    setAiGenerating(false);
+    setGenerationStep('');
+    setFinalConsistency(null);
+    setSseEvents([]);
+    setWorkflowTrace(null);
+    onWorkflowTraceChange?.(null);
+
+    return () => {
+      generationIdRef.current += 1;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      if (renderFrameRef.current !== null) {
+        cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = null;
+      }
+    };
+  }, [chapterId, onWorkflowTraceChange]);
 
   const handleAiContinue = useCallback(async (overrideInstruction?: string) => {
     if (!chapterId) {
@@ -131,12 +176,17 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
       return;
     }
 
+    abortControllerRef.current?.abort();
     const controller = new AbortController();
-    setAbortController(controller);
+    abortControllerRef.current = controller;
+    const generationId = generationIdRef.current + 1;
+    generationIdRef.current = generationId;
+    generationBaseContentRef.current = currentContent;
     setAiGenerating(true);
     setGenerationStep('正在连接AI...');
     setGeneratedText('');
     generatedTextRef.current = '';
+    setFinalConsistency(null);
     setSseEvents([]);
     setDetectedPlotOptions([]);
     setStreamHeaderInfo('Agent实时生成状态');
@@ -158,14 +208,16 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
         },
         {
           onChunk: (chunk: string) => {
-            setGeneratedText(prev => prev + chunk);
+            if (generationIdRef.current !== generationId) return;
             generatedTextRef.current += chunk;
+            scheduleGeneratedTextRender();
             setGenerationStep('AI正在创作...');
           },
           onEvent: (event: SSEEvent) => {
+            if (generationIdRef.current !== generationId || event.type === 'chunk') return;
             const timestamp = new Date();
             setSseEvents(prev => {
-              const id = sseEventIdRef[0]++;
+              const id = sseEventIdRef.current++;
               let label = '';
               let agent = undefined;
               let status = undefined;
@@ -197,7 +249,11 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
               return next.slice(0, 20);
             });
           },
-          onMetadata: (metadata: any) => {
+          onMetadata: (metadata: GenerationMetadata) => {
+            if (generationIdRef.current !== generationId) return;
+            if (metadata.final_consistency) {
+              setFinalConsistency(metadata.final_consistency);
+            }
             // 更新文风提示
             if (metadata.style_features) {
               setGenerationStep(`应用文风特征: ${metadata.style_features.slice(0, 2).join(', ')}`);
@@ -220,9 +276,11 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
             }
           },
           onDone: () => {
+            if (generationIdRef.current !== generationId) return;
+            flushGeneratedText();
             setGenerationStep('生成完成');
             setAiGenerating(false);
-            setAbortController(null);
+            abortControllerRef.current = null;
 
             // 尝试解析剧情选项 JSON
             try {
@@ -243,28 +301,29 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
                   generatedTextRef.current = '';
                 }
               }
-            } catch (e) {
+            } catch {
               // 解析失败则忽略，视为普通文本
               console.log('[AiWritingAssistant] JSON parse failed, treating as text');
             }
           },
-          onError: (error: Error) => {
-            onError(error.message);
-            setGenerationStep('生成失败');
-            setAiGenerating(false);
-            setAbortController(null);
-          },
-        }
+        },
+        { signal: controller.signal },
       );
     } catch (err) {
-      if (err instanceof Error && err.name !== 'AbortError') {
+      if (generationIdRef.current !== generationId) return;
+      if (err instanceof Error && err.name === 'AbortError') {
+        setGenerationStep('已停止生成');
+      } else if (err instanceof Error) {
         onError(err.message);
+        setGenerationStep('生成失败');
+      } else {
+        onError('AI生成失败');
         setGenerationStep('生成失败');
       }
       setAiGenerating(false);
-      setAbortController(null);
+      abortControllerRef.current = null;
     }
-  }, [novelId, chapterId, currentContent, targetLength, styleStrength, pace, tone, useRagStyle, plotDirectionHint, aiInstruction, onError]);
+  }, [novelId, chapterId, currentContent, targetLength, styleStrength, pace, tone, useRagStyle, plotDirectionHint, aiInstruction, onError, onWorkflowTraceChange, flushGeneratedText, scheduleGeneratedTextRender]);
 
   const handlePlotOptionSelected = useCallback((option: PlotOption) => {
     setAiInstruction(`剧情走向：${option.title}\n${option.summary}`);
@@ -280,13 +339,15 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
   }, [handleAiContinue]);
 
   const handleStopGeneration = useCallback(() => {
-    if (abortController) {
-      abortController.abort();
-      setAbortController(null);
+    if (abortControllerRef.current) {
+      generationIdRef.current += 1;
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      flushGeneratedText();
       setAiGenerating(false);
       setGenerationStep('已停止生成');
     }
-  }, [abortController]);
+  }, [flushGeneratedText]);
 
   const handleApplyGenerated = useCallback(() => {
     if (generatedText) {
@@ -299,11 +360,12 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
       onContentGenerated(newContent);
       setGeneratedText('');
       setGenerationStep('');
+      setFinalConsistency(null);
       setWorkflowTrace(null); // 清空工作流追踪
     }
   }, [generatedText, currentContent, onContentGenerated]);
 
-  const handleApplyToNextChapter = useCallback(() => {
+  const handleApplyToNextChapter = useCallback(async () => {
     if (!generatedText) {
       return;
     }
@@ -313,23 +375,37 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
       return;
     }
 
-    console.log('[DEBUG] handleApplyToNextChapter 被调用');
-    console.log('[DEBUG] generatedText 长度:', generatedText.length);
-    onApplyToNextChapter(generatedText);
-    setGeneratedText('');
-    setGenerationStep('');
-    setWorkflowTrace(null);
-  }, [generatedText, onApplyToNextChapter, onError]);
+    setApplyingToNextChapter(true);
+    try {
+      await onApplyToNextChapter(generatedText);
+      setGeneratedText('');
+      generatedTextRef.current = '';
+      setGenerationStep('');
+      setFinalConsistency(null);
+      setWorkflowTrace(null);
+      onWorkflowTraceChange?.(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '创建下一章节失败';
+      onError(message);
+      setGenerationStep('应用失败，生成内容已保留，可重试');
+    } finally {
+      setApplyingToNextChapter(false);
+    }
+  }, [generatedText, onApplyToNextChapter, onError, onWorkflowTraceChange]);
 
   const handleDiscardGenerated = useCallback(() => {
     setGeneratedText('');
     setGenerationStep('');
+    setFinalConsistency(null);
   }, []);
 
   // 暴露给父组件的方法
   useImperativeHandle(ref, () => ({
     triggerContinue: handleAiContinue,
   }), [handleAiContinue]);
+
+  const generatedFromStaleContent =
+    Boolean(generatedText) && generationBaseContentRef.current !== currentContent;
 
   return (
     <Card sx={{ mb: 2, overflow: 'visible' }}>
@@ -357,7 +433,11 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
             )}
           </Box>
           <Tooltip title="AI参数设置">
-            <IconButton size="small" onClick={() => setShowAdvanced(!showAdvanced)}>
+            <IconButton
+              size="small"
+              aria-label="切换 AI 参数设置"
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
               <TuneIcon />
             </IconButton>
           </Tooltip>
@@ -480,6 +560,42 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
                   </Typography>
                 </Box>
               </Box>
+              {generatedFromStaleContent && (
+                <Alert severity="warning" sx={{ mx: 2, mt: 2 }}>
+                  生成期间正文已发生变化，本次结果基于生成开始时的版本。应用前请确认衔接位置。
+                </Alert>
+              )}
+              {finalConsistency?.is_complete === false && (
+                <Alert severity="warning" sx={{ mx: 2, mt: 2 }}>
+                  <Typography variant="body2" fontWeight="600">
+                    部分一致性检查未执行
+                  </Typography>
+                  {finalConsistency.checks_skipped.length > 0 && (
+                    <Typography variant="caption" display="block">
+                      未执行：{finalConsistency.checks_skipped
+                        .map((check) => CONSISTENCY_CHECK_LABELS[check] ?? check)
+                        .join('、')}
+                    </Typography>
+                  )}
+                </Alert>
+              )}
+              {finalConsistency?.has_conflict && (
+                <Alert
+                  severity={finalConsistency.retry_exhausted ? 'error' : 'warning'}
+                  sx={{ mx: 2, mt: 2 }}
+                >
+                  <Typography variant="body2" fontWeight="600">
+                    {finalConsistency.retry_exhausted
+                      ? '一致性检查重试已耗尽，当前仍是冲突稿'
+                      : '当前生成稿存在一致性冲突'}
+                  </Typography>
+                  {finalConsistency.violations.slice(0, 3).map((violation) => (
+                    <Typography key={violation} variant="caption" display="block">
+                      · {violation}
+                    </Typography>
+                  ))}
+                </Alert>
+              )}
               <Box
                 sx={{
                   p: 2,
@@ -523,13 +639,13 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
                   variant="contained"
                   color="secondary"
                   size="small"
-                  onClick={handleApplyToNextChapter}
+                  onClick={() => void handleApplyToNextChapter()}
                   sx={{
                     minWidth: 120,
                   }}
-                  disabled={!onApplyToNextChapter}
+                  disabled={!onApplyToNextChapter || applyingToNextChapter}
                 >
-                  应用到下一章节
+                  {applyingToNextChapter ? '正在创建...' : '应用到下一章节'}
                 </Button>
               </Box>
             </Paper>
@@ -730,11 +846,6 @@ const AiWritingAssistant = forwardRef<AiWritingAssistantRef, AiWritingAssistantP
       </CardContent>
     </Card>
   );
-
-  // 暴露给父组件的方法
-  useImperativeHandle(ref, () => ({
-    triggerContinue: handleAiContinue,
-  }), [handleAiContinue]);
 });
 
 export default AiWritingAssistant;

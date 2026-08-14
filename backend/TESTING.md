@@ -1,364 +1,60 @@
-# 测试文档
+# 后端测试说明
 
-完整的测试套件说明，包括单元测试、集成测试和端到端测试。
+## 测试基线
 
-## 📋 测试覆盖范围
+- 位置:`backend/tests/`,20 个测试文件,181 个收集项(179 通过、2 个真实模型集成项按标记跳过),当前全绿。
+- 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
+- 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
-### 1. 单元测试（Unit Tests）
+## 运行方式
 
-**test_rag_service.py** - RAG检索服务测试
-- ✅ 内容索引功能
-- ✅ 混合检索功能
-- ✅ 元数据过滤
-- ✅ 世界观检索
-- ✅ 文本分割
-- ✅ 索引删除
-
-**test_consistency_service.py** - 一致性检查服务测试
-- ✅ 规则引擎（魔法等级、飞行速度验证）
-- ✅ 时间线管理（时间倒退检测、地理移动合理性）
-- ✅ 情绪状态机（情绪转换合理性）
-- ✅ 完整一致性检查流程
-
-### 2. 集成测试（Integration Tests）
-
-需要外部服务（Qdrant、OpenAI API）：
-- ✅ RAG服务与Qdrant集成
-- ✅ Agent服务与OpenAI API集成
-- ✅ 完整的生成工作流
-
-### 3. 端到端测试（E2E Tests）
-
-**test_api.py** - API端点测试
-- ✅ 健康检查接口
-- ✅ 内容生成接口
-- ✅ 请求验证
-- ✅ 错误处理
-
-## 🚀 运行测试
-
-### 方式1：使用pytest直接运行
+统一通过 `run_tests.py` 执行,它原样传递 pytest 退出码:
 
 ```bash
-# 进入backend目录
 cd backend
-
-# 运行所有测试
-pytest tests/
-
-# 运行特定测试文件
-pytest tests/test_rag_service.py
-
-# 运行特定测试类
-pytest tests/test_consistency_service.py::TestRuleEngine
-
-# 运行特定测试函数
-pytest tests/test_consistency_service.py::TestRuleEngine::test_validate_magic_level_pass
-
-# 显示详细输出
-pytest tests/ -v
-
-# 显示print输出
-pytest tests/ -s
-
-# 运行并生成覆盖率报告
-pytest tests/ --cov=app --cov-report=html
+.venv/bin/python run_tests.py --mode all         # 全量(默认)
+.venv/bin/python run_tests.py --mode unit        # 排除 integration 标记
+.venv/bin/python run_tests.py --mode integration # 仅集成标记,需 --run-integration 显式放行
+.venv/bin/python run_tests.py --mode coverage    # 额外生成 htmlcov 报告
+.venv/bin/python run_tests.py --file test_rag_service.py  # 单文件
 ```
 
-### 方式2：使用测试脚本
+`integration` 标记的测试允许访问真实外部服务,默认不会在 unit/all 模式下误跑。
+
+## 测试主题索引
+
+| 主题 | 文件 | 覆盖点 |
+|---|---|---|
+| 章节 CRUD 与并发 | `test_chapter_management.py`、`test_auto_chapter.py` | 服务端分配章号、`(novel_id, chapter_number)` 唯一冲突、`expected_version` 乐观锁 409 |
+| 基础 API | `test_api.py` | 认证、小说所有权隔离、常规 CRUD 流程 |
+| AI 路由守卫 | `test_ai_route_guards.py` | AI 端点鉴权、模型不可用时的明确降级而非崩溃 |
+| 生成契约 | `test_generation_consistency_contract.py`、`test_agent_retry.py` | 生成结果结构、一致性状态、重试上限 |
+| 上下文预算 | `test_context_budget.py`、`test_schema_input_budgets.py` | 各类输入截断边界、schema 字段上限 |
+| 审核 | `test_review_fail_closed.py` | 任一审核失败时不得报告"可发布" |
+| RAG | `test_rag_service.py` | 投影真源、覆盖更新、按范围过滤、删除清理 |
+| 一致性 | `test_consistency_service.py` | 规则校验、关系抽取、降级行为 |
+| MCP | `test_unified_mcp_service.py`、`test_mcp_audit_service.py`、`test_character_mcp_route.py` | 能力公布与真实实现一致、审计落库、未实现操作返回失败 |
+| Story Bible | `test_story_bible.py` | 事实/事件 CRUD、退役状态流转、写入预算、跨小说 404 隔离 |
+| 基础设施 | `test_sqlite_compat.py`、`test_security_config.py`、`test_run_tests_script.py` | 旧库幂等迁移、SECRET_KEY 安全校验、退出码传播 |
+| 数据库初始化与并发 | `test_init_db.py`、`test_sqlite_pragmas.py` | 空库/旧库/已管理库三条 Alembic 升级路径、SQLite WAL 与写锁等待 |
+
+## 夹具与环境
+
+- `client`:覆盖 `get_db` 与用户依赖,隔离真实数据库;测试用 `SECRET_KEY` 由 conftest 显式注入。
+- `mock_openai_response`:模型调用打桩,不访问 LM Studio/DeepSeek。
+- **本机代理坑**:若环境设置了 `all_proxy=socks5://...`(如 Clash),openai/httpx 会在导入阶段抛 `ImportError: socksio`。运行测试前执行:
 
 ```bash
-# 运行所有测试
-python run_tests.py --mode all
-
-# 只运行单元测试
-python run_tests.py --mode unit
-
-# 运行集成测试（需要OpenAI API）
-python run_tests.py --mode integration
-
-# 生成覆盖率报告
-python run_tests.py --mode coverage
-
-# 运行特定文件
-python run_tests.py --file test_rag_service.py
+unset ALL_PROXY all_proxy
 ```
 
-### 方式3：使用Make命令（如果配置了Makefile）
+## 前端测试
 
 ```bash
-make test          # 运行所有测试
-make test-unit     # 单元测试
-make test-cov      # 覆盖率测试
+cd frontend
+npm run test        # vitest run
+npm run lint        # eslint .
+npm run typecheck   # tsc --noEmit
 ```
 
-## 📊 测试覆盖率
-
-### 查看覆盖率报告
-
-```bash
-# 生成HTML报告
-pytest tests/ --cov=app --cov-report=html
-
-# 在浏览器中打开
-# Windows: start htmlcov\index.html
-# Linux: xdg-open htmlcov/index.html
-# Mac: open htmlcov/index.html
-```
-
-### 目标覆盖率
-
-- **整体代码覆盖率**: ≥ 80%
-- **核心服务**: ≥ 90%
-  - agent_service.py
-  - rag_service.py
-  - consistency_service.py
-
-## 🔧 测试配置
-
-### pytest.ini
-
-```ini
-[pytest]
-testpaths = tests
-python_files = test_*.py
-python_classes = Test*
-python_functions = test_*
-
-addopts =
-    -v
-    --tb=short
-    --cov=app
-    --cov-report=html
-
-markers =
-    unit: 单元测试
-    integration: 集成测试
-    slow: 慢速测试
-```
-
-### conftest.py
-
-提供了测试夹具（fixtures）：
-- `client`: FastAPI测试客户端
-- `test_novel_id`: 测试用小说ID
-- `test_prompt`: 测试用剧情提示词
-- `test_worldview_rules`: 测试用世界观规则
-
-## 🐛 调试测试
-
-### 使用pytest调试
-
-```bash
-# 进入Python调试器（失败时）
-pytest tests/ --pdb
-
-# 在第一个测试处进入调试器
-pytest tests/ --trace
-
-# 显示所有print输出
-pytest tests/ -s
-
-# 显示局部变量
-pytest tests/ -l
-```
-
-### 使用VSCode调试
-
-在 `.vscode/launch.json` 中添加：
-
-```json
-{
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "name": "Python: Pytest",
-            "type": "python",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "tests/",
-                "-v"
-            ],
-            "console": "integratedTerminal",
-            "justMyCode": false
-        }
-    ]
-}
-```
-
-## ⚠️ 注意事项
-
-### 1. 集成测试需要外部服务
-
-运行集成测试前，确保以下服务正在运行：
-
-```bash
-# 启动Docker服务
-docker-compose up -d
-
-# 检查服务状态
-docker ps
-```
-
-### 2. OpenAI API密钥
-
-集成测试需要真实的OpenAI API密钥：
-
-```bash
-# 设置环境变量
-export OPENAI_API_KEY=your_key_here  # Linux/Mac
-set OPENAI_API_KEY=your_key_here     # Windows
-
-# 或者在.env文件中配置
-OPENAI_API_KEY=your_key_here
-```
-
-### 3. 跳过集成测试
-
-默认情况下，需要外部API的测试会被跳过。要运行这些测试：
-
-```bash
-pytest tests/ --run-integration
-```
-
-### 4. 测试隔离
-
-- 每个测试应该是独立的，不依赖其他测试
-- 使用fixtures创建测试数据
-- 测试后清理资源（索引、数据库记录）
-
-## 📝 编写新测试
-
-### 基本结构
-
-```python
-import pytest
-from app.services.your_service import YourService
-
-
-class TestYourService:
-    """你的服务测试类"""
-
-    @pytest.fixture
-    def your_service(self):
-        """创建服务实例"""
-        return YourService()
-
-    def test_basic_function(self, your_service):
-        """测试基本功能"""
-        result = your_service.basic_function()
-        assert result is not None
-
-    @pytest.mark.asyncio
-    async def test_async_function(self, your_service):
-        """测试异步功能"""
-        result = await your_service.async_function()
-        assert result["status"] == "success"
-```
-
-### 命名规范
-
-- 测试文件：`test_*.py`
-- 测试类：`Test*`
-- 测试函数：`test_*`
-- 测试应该清楚描述被测试的功能
-
-### 断言规范
-
-```python
-# 使用清晰的断言消息
-assert result is True, "结果应该为True"
-
-# 使用具体的断言
-assert len(items) == 3  # 而不是 assert items
-
-# 测试异常
-with pytest.raises(ValueError):
-    service.invalid_operation()
-```
-
-## 📈 持续集成（CI）
-
-### GitHub Actions配置示例
-
-```yaml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-
-    services:
-      qdrant:
-        image: qdrant/qdrant:latest
-        ports:
-          - 6333:6333
-
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: |
-          cd backend
-          pytest tests/ --cov=app
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-```
-
-## 🎯 测试最佳实践
-
-1. **测试应该快速**：单元测试应在几秒内完成
-2. **测试应该独立**：不依赖执行顺序
-3. **测试应该可重复**：每次运行结果一致
-4. **测试应该清晰**：命名和结构一目了然
-5. **测试应该全面**：覆盖正常流程、边界条件、异常情况
-
-## 🔍 常见问题
-
-### Q1: 测试失败："Qdrant connection refused"
-
-**解决方案**：
-```bash
-# 确保Qdrant正在运行
-docker-compose up -d qdrant
-
-# 检查端口
-netstat -an | findstr 6333  # Windows
-netstat -an | grep 6333     # Linux/Mac
-```
-
-### Q2: 测试失败："OpenAI API key not found"
-
-**解决方案**：
-```bash
-# 在.env文件中设置
-OPENAI_API_KEY=sk-your-key
-
-# 或者跳过集成测试
-pytest tests/ -m "not integration"
-```
-
-### Q3: 测试覆盖率太低
-
-**解决方案**：
-```bash
-# 查看未覆盖的行
-pytest tests/ --cov=app --cov-report=term-missing
-
-# 针对性编写测试覆盖这些行
-```
-
----
-
-**测试是代码质量的保障！** ✅
+覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端与工作台导航。

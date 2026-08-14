@@ -118,6 +118,7 @@ export default function StyleManager({
 
   // 删除样本
   const handleDeleteSample = useCallback(async (sampleId: number) => {
+    void sampleId;
     if (!confirm('确定要删除这个文风样本吗？')) {
       return;
     }
@@ -202,6 +203,7 @@ export default function StyleManager({
                     onClick={() => handleSelectSample(sample.id)}
                   >
                     <ListItemText
+                      disableTypography
                       primary={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <PaletteIcon color="primary" fontSize="small" />

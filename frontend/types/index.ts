@@ -42,8 +42,63 @@ export interface Chapter {
   title: string;
   content: string;
   word_count: number;
+  /**
+   * 章节乐观锁版本。每次持久化更新后由服务端递增。
+   */
+  version: number;
   created_at: string;
   updated_at?: string;
+}
+
+/**
+ * 章节列表只使用摘要，避免长篇小说在打开工作台时下载全部正文。
+ */
+export interface ChapterSummary {
+  id: number;
+  novel_id: number;
+  chapter_number: number;
+  title: string;
+  word_count: number;
+  version: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface ChapterSummaryPage {
+  items: ChapterSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export interface NovelStatistics {
+  novel_id: number;
+  chapter_count: number;
+  total_words: number;
+}
+
+export interface NovelStatisticsResponse {
+  items: NovelStatistics[];
+}
+
+export interface GenerationFinalConsistency {
+  status: 'passed' | 'incomplete' | 'conflict' | 'conflict_after_retries';
+  has_conflict: boolean;
+  retry_exhausted: boolean;
+  is_complete: boolean;
+  checks_skipped: string[];
+  violations: string[];
+}
+
+export interface GenerationMetadata {
+  style_features?: string[];
+  workflow_trace?: AgentWorkflowTrace | null;
+  agents?: string[];
+  agent_names?: string[];
+  consistency_checks?: unknown[];
+  retry_count?: number;
+  final_consistency?: GenerationFinalConsistency;
 }
 
 /**
@@ -89,6 +144,24 @@ export interface ChapterCreate {
   chapter_number: number;
   title: string;
   content: string;
+}
+
+/**
+ * 工作台更新章节时携带读取到的版本，防止旧请求覆盖新稿。
+ */
+export interface ChapterUpdate {
+  title?: string;
+  content?: string;
+  chapter_number?: number;
+  expected_version: number;
+}
+
+/**
+ * 新建下一章时章节号由服务端在事务中分配。
+ */
+export interface ChapterNextCreate {
+  title?: string;
+  content?: string;
 }
 
 /**

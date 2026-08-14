@@ -4,50 +4,14 @@ MCP操作审计服务
 """
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from sqlalchemy import and_, exists, func, or_
 from sqlalchemy.orm import Session
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, Boolean
-from sqlalchemy.orm import relationship
+from fastapi.encoders import jsonable_encoder
 
-from app.db.base import Base
+from app.models.mcp_audit import MCPAuditLog
+from app.models.novel import Novel
 from app.models.worldview_schemas import UnifiedMCPAction, UnifiedMCPResponse
 from loguru import logger
-
-
-class MCPAuditLog(Base):
-    """MCP操作审计日志模型"""
-    __tablename__ = "mcp_audit_logs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    
-    # 操作信息
-    user_id = Column(Integer, nullable=False, index=True)
-    novel_id = Column(Integer, nullable=True, index=True)
-    target_type = Column(String(50), nullable=False, index=True)
-    action = Column(String(50), nullable=False, index=True)
-    target_id = Column(Integer, nullable=True)
-    
-    # 操作详情
-    parameters = Column(JSON, default=dict)
-    context = Column(Text, nullable=True)
-    ai_instructions = Column(Text, nullable=True)
-    
-    # 执行结果
-    success = Column(Boolean, nullable=False)
-    result_data = Column(JSON, nullable=True)
-    error_message = Column(Text, nullable=True)
-    ai_reasoning = Column(Text, nullable=True)
-    
-    # 性能指标
-    execution_time_ms = Column(Integer, nullable=True)  # 执行时间（毫秒）
-    ai_tokens_used = Column(Integer, nullable=True)     # AI Token使用量
-    
-    # 元数据
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    ip_address = Column(String(45), nullable=True)     # 支持IPv6
-    user_agent = Column(Text, nullable=True)
-    
-    def __repr__(self):
-        return f"<MCPAuditLog {self.target_type}.{self.action} by user {self.user_id}>"
 
 
 class MCPAuditService:
@@ -80,11 +44,11 @@ class MCPAuditService:
                 target_type=action.target_type,
                 action=action.action,
                 target_id=action.target_id,
-                parameters=action.parameters,
+                parameters=jsonable_encoder(action.parameters),
                 context=action.context,
                 ai_instructions=action.ai_instructions,
                 success=response.success,
-                result_data=response.result,
+                result_data=jsonable_encoder(response.result) if response.result is not None else None,
                 error_message=response.message if not response.success else None,
                 ai_reasoning=response.ai_reasoning,
                 execution_time_ms=execution_time_ms,
@@ -147,6 +111,26 @@ class MCPAuditService:
                 )
         
         return warnings
+
+    @staticmethod
+    def _scope_query_to_user_novels(query, user_id: int):
+        """限制为当前用户自己的审计及其仍然拥有的小说。
+
+        审计表不使用小说外键，以便保留失败操作记录。因此必须在读取时同时
+        校验审计用户和小说当前所有权，避免 SQLite 删除后复用主键造成串租户。
+        未绑定小说的当前用户审计仍然可见。
+        """
+        owned_novel_exists = exists().where(
+            Novel.id == MCPAuditLog.novel_id,
+            Novel.user_id == user_id,
+        )
+        return query.filter(
+            MCPAuditLog.user_id == user_id,
+            or_(
+                MCPAuditLog.novel_id.is_(None),
+                owned_novel_exists,
+            ),
+        )
     
     def get_user_operation_history(
         self,
@@ -158,7 +142,10 @@ class MCPAuditService:
         success_only: Optional[bool] = None
     ) -> List[MCPAuditLog]:
         """获取用户操作历史"""
-        query = db.query(MCPAuditLog).filter(MCPAuditLog.user_id == user_id)
+        query = self._scope_query_to_user_novels(
+            db.query(MCPAuditLog),
+            user_id,
+        )
         
         if target_type:
             query = query.filter(MCPAuditLog.target_type == target_type)
@@ -174,34 +161,38 @@ class MCPAuditService:
     def get_novel_operation_history(
         self,
         db: Session,
+        user_id: int,
         novel_id: int,
         limit: int = 100
     ) -> List[MCPAuditLog]:
         """获取小说操作历史"""
-        return db.query(MCPAuditLog).filter(
-            MCPAuditLog.novel_id == novel_id
+        query = self._scope_query_to_user_novels(
+            db.query(MCPAuditLog),
+            user_id,
+        )
+        return query.filter(
+            MCPAuditLog.novel_id == novel_id,
         ).order_by(MCPAuditLog.created_at.desc()).limit(limit).all()
     
     def get_operation_statistics(
         self,
         db: Session,
-        user_id: Optional[int] = None,
+        user_id: int,
         novel_id: Optional[int] = None,
         days: int = 30
     ) -> Dict[str, Any]:
         """获取操作统计信息"""
-        from sqlalchemy import func, and_
         from datetime import timedelta
         
         # 计算时间范围
         start_date = datetime.utcnow() - timedelta(days=days)
         
-        query = db.query(MCPAuditLog).filter(MCPAuditLog.created_at >= start_date)
-        
-        if user_id:
-            query = query.filter(MCPAuditLog.user_id == user_id)
-        
-        if novel_id:
+        query = self._scope_query_to_user_novels(
+            db.query(MCPAuditLog),
+            user_id,
+        ).filter(MCPAuditLog.created_at >= start_date)
+
+        if novel_id is not None:
             query = query.filter(MCPAuditLog.novel_id == novel_id)
         
         # 基础统计
@@ -210,44 +201,45 @@ class MCPAuditService:
         failed_operations = total_operations - successful_operations
         
         # 按目标类型统计
-        target_type_stats = db.query(
-            MCPAuditLog.target_type,
-            func.count(MCPAuditLog.id).label('count')
+        target_type_stats = self._scope_query_to_user_novels(
+            db.query(
+                MCPAuditLog.target_type,
+                func.count(MCPAuditLog.id).label('count')
+            ),
+            user_id,
         ).filter(MCPAuditLog.created_at >= start_date)
-        
-        if user_id:
-            target_type_stats = target_type_stats.filter(MCPAuditLog.user_id == user_id)
-        if novel_id:
+
+        if novel_id is not None:
             target_type_stats = target_type_stats.filter(MCPAuditLog.novel_id == novel_id)
         
         target_type_stats = target_type_stats.group_by(MCPAuditLog.target_type).all()
         
         # 按操作类型统计
-        action_stats = db.query(
-            MCPAuditLog.action,
-            func.count(MCPAuditLog.id).label('count')
+        action_stats = self._scope_query_to_user_novels(
+            db.query(
+                MCPAuditLog.action,
+                func.count(MCPAuditLog.id).label('count')
+            ),
+            user_id,
         ).filter(MCPAuditLog.created_at >= start_date)
-        
-        if user_id:
-            action_stats = action_stats.filter(MCPAuditLog.user_id == user_id)
-        if novel_id:
+
+        if novel_id is not None:
             action_stats = action_stats.filter(MCPAuditLog.novel_id == novel_id)
         
         action_stats = action_stats.group_by(MCPAuditLog.action).all()
         
         # 性能统计
-        avg_execution_time = db.query(
-            func.avg(MCPAuditLog.execution_time_ms)
+        avg_execution_time = self._scope_query_to_user_novels(
+            db.query(func.avg(MCPAuditLog.execution_time_ms)),
+            user_id,
         ).filter(
             and_(
                 MCPAuditLog.created_at >= start_date,
                 MCPAuditLog.execution_time_ms.isnot(None)
             )
         )
-        
-        if user_id:
-            avg_execution_time = avg_execution_time.filter(MCPAuditLog.user_id == user_id)
-        if novel_id:
+
+        if novel_id is not None:
             avg_execution_time = avg_execution_time.filter(MCPAuditLog.novel_id == novel_id)
         
         avg_execution_time = avg_execution_time.scalar()
@@ -279,24 +271,23 @@ class MCPAuditService:
     def get_error_analysis(
         self,
         db: Session,
-        user_id: Optional[int] = None,
+        user_id: int,
         days: int = 7
     ) -> Dict[str, Any]:
         """获取错误分析"""
-        from sqlalchemy import func
         from datetime import timedelta
         
         start_date = datetime.utcnow() - timedelta(days=days)
         
-        query = db.query(MCPAuditLog).filter(
+        query = self._scope_query_to_user_novels(
+            db.query(MCPAuditLog),
+            user_id,
+        ).filter(
             and_(
                 MCPAuditLog.created_at >= start_date,
                 MCPAuditLog.success == False
             )
         )
-        
-        if user_id:
-            query = query.filter(MCPAuditLog.user_id == user_id)
         
         # 错误统计
         error_logs = query.all()

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo, useDeferredValue } from 'react';
 import {
   Card,
   CardContent,
@@ -43,7 +43,7 @@ export default function CharacterStats({
   previousContent = '',
 }: CharacterStatsProps) {
   const [expanded, setExpanded] = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
+  const deferredContent = useDeferredValue(currentContent);
 
   // 从世界观中提取角色名单
   const extractCharacterNames = (worldviewText: string): string[] => {
@@ -125,12 +125,16 @@ export default function CharacterStats({
     return stats;
   };
 
-  // 计算角色统计
-  const characterStats = useMemo(() => {
-    if (!novel?.worldview) return [];
-    const names = extractCharacterNames(novel.worldview);
-    return calculateCharacterStats(names, currentContent, previousContent);
-  }, [novel?.worldview, currentContent, previousContent]);
+  const characterNames = useMemo(
+    () => (novel?.worldview ? extractCharacterNames(novel.worldview) : []),
+    [novel?.worldview],
+  );
+
+  // 正文扫描使用延迟值，避免输入期间阻塞编辑器的高优先级更新。
+  const characterStats = useMemo(
+    () => calculateCharacterStats(characterNames, deferredContent, previousContent),
+    [characterNames, deferredContent, previousContent],
+  );
 
   // 获取活跃角色（出现次数 > 0）
   const activeCharacters = characterStats.filter(stat => stat.count > 0);
@@ -239,6 +243,7 @@ export default function CharacterStats({
           </Box>
           <Typography variant="caption" color="text.secondary">
             当前章节共 {currentContent.length} 字
+            {deferredContent !== currentContent ? '（统计更新中）' : ''}
           </Typography>
         </Box>
 
@@ -255,6 +260,7 @@ export default function CharacterStats({
                     <PersonIcon color="primary" fontSize="small" />
                   </ListItemIcon>
                   <ListItemText
+                    disableTypography
                     primary={
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <Typography variant="body2" fontWeight="medium">

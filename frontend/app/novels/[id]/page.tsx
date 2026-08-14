@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
   Container,
@@ -11,8 +11,6 @@ import {
   CardContent,
   List,
   ListItem,
-  ListItemText,
-  ListItemSecondaryAction,
   IconButton,
   Dialog,
   DialogTitle,
@@ -27,14 +25,19 @@ import {
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import PsychologyIcon from '@mui/icons-material/Psychology';
-import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import CreateIcon from '@mui/icons-material/Create';
 import { api } from '@/lib/api';
-import type { Novel, Chapter, ChapterCreate } from '@/types';
+import type {
+  ChapterNextCreate,
+  ChapterSummary,
+  Novel,
+  NovelStatistics,
+} from '@/types';
+
+const CHAPTER_PAGE_SIZE = 50;
 
 export default function NovelDetailPage() {
   const router = useRouter();
@@ -42,15 +45,22 @@ export default function NovelDetailPage() {
   const novelId = Number(params.id);
 
   const [novel, setNovel] = useState<Novel | null>(null);
-  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [chapters, setChapters] = useState<ChapterSummary[]>([]);
+  const [chapterPage, setChapterPage] = useState(1);
+  const [chapterTotal, setChapterTotal] = useState(0);
+  const [hasMoreChapters, setHasMoreChapters] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [lastChapter, setLastChapter] = useState<ChapterSummary | null>(null);
+  const [statistics, setStatistics] = useState<NovelStatistics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const loadRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const loadMoreRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const requestIdRef = useRef(0);
 
-  // 创建/编辑章节对话框
+  // 创建章节对话框
   const [openDialog, setOpenDialog] = useState(false);
-  const [editingChapter, setEditingChapter] = useState<Chapter | null>(null);
-  const [chapterForm, setChapterForm] = useState<ChapterCreate>({
-    chapter_number: 1,
+  const [chapterForm, setChapterForm] = useState<ChapterNextCreate>({
     title: '',
     content: '',
   });
@@ -72,27 +82,21 @@ export default function NovelDetailPage() {
     if (!openDialog) return;
     if (typeof window === 'undefined') return;
 
-    // 仅对新建章节使用本地草稿，避免与工作台编辑的已保存内容产生冲突
     try {
-      if (!editingChapter) {
-        const draftKey = `chapter_form_draft_new_${novelId}`;
-        const draft = window.localStorage.getItem(draftKey);
-        if (draft) {
-          const parsed = JSON.parse(draft) as ChapterCreate;
-          setChapterForm(parsed);
-        }
+      const draftKey = `chapter_form_draft_new_${novelId}`;
+      const draft = window.localStorage.getItem(draftKey);
+      if (draft) {
+        const parsed = JSON.parse(draft) as ChapterNextCreate;
+        setChapterForm(parsed);
       }
     } catch {
       // 忽略草稿恢复错误
     }
-  }, [openDialog, editingChapter, novelId]);
+  }, [openDialog, novelId]);
 
   useEffect(() => {
     if (!openDialog) return;
     if (typeof window === 'undefined') return;
-
-    // 仅在新建章节时持续写入本地草稿，编辑章节直接使用后端最新内容
-    if (editingChapter) return;
 
     try {
       const draftKey = `chapter_form_draft_new_${novelId}`;
@@ -100,39 +104,69 @@ export default function NovelDetailPage() {
     } catch {
       // 忽略草稿写入错误
     }
-  }, [openDialog, editingChapter, novelId, chapterForm]);
+  }, [openDialog, novelId, chapterForm]);
 
-  useEffect(() => {
-    loadNovelAndChapters();
-  }, [novelId]);
-
-  const loadNovelAndChapters = async () => {
+  const loadNovelAndChapters = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    loadRequestRef.current?.controller.abort();
+    loadMoreRequestRef.current?.controller.abort();
+    loadMoreRequestRef.current = null;
+    setLoadingMore(false);
+    const controller = new AbortController();
+    loadRequestRef.current = { id: requestId, controller };
+    setLoading(true);
     try {
-      const [novelData, chaptersData] = await Promise.all([
-        api.getNovel(novelId),
-        api.getChapters(novelId),
+      const [novelData, firstPage, allStatistics] = await Promise.all([
+        api.getNovel(novelId, { signal: controller.signal }),
+        api.getChapterSummaries(
+          novelId,
+          { page: 1, pageSize: CHAPTER_PAGE_SIZE },
+          { signal: controller.signal },
+        ),
+        api.getNovelStatistics({ signal: controller.signal }).catch(() => []),
       ]);
+      const lastPageNumber = Math.max(1, Math.ceil(firstPage.total / firstPage.page_size));
+      const lastPage = lastPageNumber > 1
+        ? await api.getChapterSummaries(
+            novelId,
+            { page: lastPageNumber, pageSize: firstPage.page_size },
+            { signal: controller.signal },
+          )
+        : firstPage;
+
+      if (loadRequestRef.current?.id !== requestId) return;
       setNovel(novelData);
-      setChapters(chaptersData.sort((a, b) => a.chapter_number - b.chapter_number));
+      setChapters(firstPage.items);
+      setChapterPage(firstPage.page);
+      setChapterTotal(firstPage.total);
+      setHasMoreChapters(firstPage.has_more);
+      setLastChapter(lastPage.items.at(-1) ?? null);
+      setStatistics(allStatistics.find((item) => item.novel_id === novelId) ?? null);
+      setError('');
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      if (loadRequestRef.current?.id !== requestId) return;
       setError(err instanceof Error ? err.message : '加载失败');
       setTimeout(() => router.push('/dashboard'), 2000);
     } finally {
-      setLoading(false);
+      if (loadRequestRef.current?.id === requestId) setLoading(false);
     }
-  };
+  }, [novelId, router]);
+
+  useEffect(() => {
+    void loadNovelAndChapters();
+    return () => {
+      loadRequestRef.current?.controller.abort();
+      loadMoreRequestRef.current?.controller.abort();
+    };
+  }, [loadNovelAndChapters]);
 
   const handleCreateChapter = () => {
-    const nextChapterNumber = chapters.length > 0
-      ? Math.max(...chapters.map(c => c.chapter_number)) + 1
-      : 1;
-
     setChapterForm({
-      chapter_number: nextChapterNumber,
       title: '',
       content: '',
     });
-    setEditingChapter(null);
     setOpenDialog(true);
   };
 
@@ -140,7 +174,6 @@ export default function NovelDetailPage() {
     try {
       setAiGenerating(true);
 
-      const lastChapter = chapters.length > 0 ? chapters[chapters.length - 1] : null;
       const newChapter = await api.autoCreateChapter({
         novel_id: novelId,
         base_chapter_id: lastChapter?.id,
@@ -156,52 +189,68 @@ export default function NovelDetailPage() {
     }
   };
 
-  const handleEditChapter = (chapter: Chapter) => {
-    setChapterForm({
-      chapter_number: chapter.chapter_number,
-      title: chapter.title,
-      content: chapter.content,
-    });
-    setEditingChapter(chapter);
-    setOpenDialog(true);
-  };
-
   const handleSaveChapter = async () => {
     try {
-      if (editingChapter) {
-        // 更新章节
-        await api.updateChapter(novelId, editingChapter.id, {
-          title: chapterForm.title,
-          content: chapterForm.content,
-        });
+      const newChapter = await api.createNextChapter(novelId, {
+        title: chapterForm.title?.trim() || undefined,
+        content: chapterForm.content,
+      });
 
-        if (typeof window !== 'undefined') {
-          const draftKey = `chapter_form_draft_edit_${novelId}_${editingChapter.id}`;
-          window.localStorage.removeItem(draftKey);
-        }
-
-        setOpenDialog(false);
-        await loadNovelAndChapters();
-      } else {
-        // 创建新章节
-        const newChapter = await api.createChapter(novelId, chapterForm);
-
-        if (typeof window !== 'undefined') {
-          const draftKey = `chapter_form_draft_new_${novelId}`;
-          window.localStorage.removeItem(draftKey);
-        }
-
-        setOpenDialog(false);
-        // 可选：刷新列表，确保返回列表时数据是最新的
-        await loadNovelAndChapters();
-
-        // 新建章节后直接进入写作工作台
-        router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
+      if (typeof window !== 'undefined') {
+        const draftKey = `chapter_form_draft_new_${novelId}`;
+        window.localStorage.removeItem(draftKey);
       }
+
+      setOpenDialog(false);
+      await loadNovelAndChapters();
+      router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
     }
   };
+
+  const handleLoadMore = useCallback(async () => {
+    if (loadingMore || !hasMoreChapters) return;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    loadMoreRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    loadMoreRequestRef.current = { id: requestId, controller };
+    setLoadingMore(true);
+    try {
+      const nextPage = chapterPage + 1;
+      const result = await api.getChapterSummaries(
+        novelId,
+        { page: nextPage, pageSize: CHAPTER_PAGE_SIZE },
+        { signal: controller.signal },
+      );
+      if (loadMoreRequestRef.current?.id !== requestId) return;
+      setChapters((previous) => {
+        const byId = new Map(previous.map((chapter) => [chapter.id, chapter]));
+        for (const chapter of result.items) byId.set(chapter.id, chapter);
+        return Array.from(byId.values()).sort(
+          (left, right) => left.chapter_number - right.chapter_number,
+        );
+      });
+      setChapterPage(result.page);
+      setChapterTotal(result.total);
+      setHasMoreChapters(result.has_more);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      if (loadMoreRequestRef.current?.id !== requestId) return;
+      setError(err instanceof Error ? err.message : '加载更多章节失败');
+    } finally {
+      if (loadMoreRequestRef.current?.id === requestId) {
+        loadMoreRequestRef.current = null;
+        setLoadingMore(false);
+      }
+    }
+  }, [chapterPage, hasMoreChapters, loadingMore, novelId]);
+
+  const maxChapterWords = useMemo(
+    () => Math.max(...chapters.map((chapter) => chapter.word_count || 0), 1),
+    [chapters],
+  );
 
   const handleGenerateInit = async () => {
     try {
@@ -260,6 +309,12 @@ export default function NovelDetailPage() {
     }
   };
 
+  const displayChapterCount = statistics?.chapter_count ?? chapterTotal;
+  const displayTotalWords = statistics?.total_words ?? chapters.reduce(
+    (sum, chapter) => sum + (chapter.word_count || 0),
+    0,
+  );
+
   if (loading) {
     return (
       <Container maxWidth="lg">
@@ -302,7 +357,7 @@ export default function NovelDetailPage() {
                   总字数
                 </Typography>
                 <Typography variant="h4">
-                  {chapters.reduce((sum, ch) => sum + (ch.word_count || 0), 0).toLocaleString()}
+                  {displayTotalWords.toLocaleString()}
                 </Typography>
               </CardContent>
             </Card>
@@ -314,7 +369,7 @@ export default function NovelDetailPage() {
                   章节数
                 </Typography>
                 <Typography variant="h4">
-                  {chapters.length}
+                  {displayChapterCount}
                 </Typography>
               </CardContent>
             </Card>
@@ -326,10 +381,8 @@ export default function NovelDetailPage() {
                   平均字数/章
                 </Typography>
                 <Typography variant="h4">
-                  {chapters.length > 0
-                    ? Math.round(
-                        chapters.reduce((sum, ch) => sum + (ch.word_count || 0), 0) / chapters.length
-                      ).toLocaleString()
+                  {displayChapterCount > 0
+                    ? Math.round(displayTotalWords / displayChapterCount).toLocaleString()
                     : 0}
                 </Typography>
               </CardContent>
@@ -350,7 +403,7 @@ export default function NovelDetailPage() {
                     <Chip label={novel.genre} size="small" color="primary" />
                   )}
                   <Chip
-                    label={`${chapters.length} 章节`}
+                    label={`${displayChapterCount} 章节`}
                     size="small"
                     variant="outlined"
                   />
@@ -369,7 +422,7 @@ export default function NovelDetailPage() {
             </Box>
 
             <Box sx={{ mt: 2 }}>
-              {chapters.length === 0 ? (
+              {!lastChapter ? (
                 <Button
                   variant="contained"
                   size="small"
@@ -382,11 +435,10 @@ export default function NovelDetailPage() {
                   variant="contained"
                   size="small"
                   onClick={() => {
-                    const last = chapters[chapters.length - 1];
-                    router.push(`/workspace?novel=${novelId}&chapter=${last.id}`);
+                    router.push(`/workspace?novel=${novelId}&chapter=${lastChapter.id}`);
                   }}
                 >
-                  继续写第 {chapters[chapters.length - 1].chapter_number} 章
+                  继续写第 {lastChapter.chapter_number} 章
                 </Button>
               )}
             </Box>
@@ -453,8 +505,7 @@ export default function NovelDetailPage() {
             ) : (
               <List>
                 {chapters.map((chapter, index) => {
-                  const maxWords = Math.max(...chapters.map(ch => ch.word_count || 0), 1);
-                  const progress = ((chapter.word_count || 0) / maxWords) * 100;
+                  const progress = ((chapter.word_count || 0) / maxChapterWords) * 100;
                   return (
                     <ListItem
                       key={chapter.id}
@@ -516,11 +567,21 @@ export default function NovelDetailPage() {
                 })}
               </List>
             )}
+            {hasMoreChapters && (
+              <Button
+                fullWidth
+                onClick={() => void handleLoadMore()}
+                disabled={loadingMore}
+                sx={{ mt: 2 }}
+              >
+                {loadingMore ? '加载中...' : `加载更多（已加载 ${chapters.length}/${chapterTotal}）`}
+              </Button>
+            )}
           </CardContent>
         </Card>
       </Box>
 
-      {/* 创建/编辑章节对话框 */}
+      {/* 创建章节对话框 */}
       <Dialog
         open={openDialog}
         onClose={() => setOpenDialog(false)}
@@ -528,40 +589,31 @@ export default function NovelDetailPage() {
         fullWidth
       >
         <DialogTitle>
-          {editingChapter ? '编辑章节' : '新建章节'}
+          新建章节
         </DialogTitle>
         <DialogContent>
-          <TextField
-            fullWidth
-            label="章节号"
-            type="number"
-            value={chapterForm.chapter_number}
-            onChange={(e) =>
-              setChapterForm({ ...chapterForm, chapter_number: Number(e.target.value) })
-            }
-            margin="normal"
-            required
-            disabled={!!editingChapter}
-          />
+          <Alert severity="info" sx={{ mt: 1 }}>
+            章节序号由服务端自动分配。
+          </Alert>
           <TextField
             fullWidth
             label="章节标题"
-            value={chapterForm.title}
+            value={chapterForm.title ?? ''}
             onChange={(e) => setChapterForm({ ...chapterForm, title: e.target.value })}
             margin="normal"
-            required
             autoFocus
+            placeholder="可留空，将自动使用章节序号作为标题"
           />
           <TextField
             fullWidth
             label="章节内容"
-            value={chapterForm.content}
+            value={chapterForm.content ?? ''}
             onChange={(e) => setChapterForm({ ...chapterForm, content: e.target.value })}
             margin="normal"
             multiline
             rows={12}
             required
-            helperText={`当前字数：${chapterForm.content.length}`}
+            helperText={`当前字数：${chapterForm.content?.length ?? 0}`}
           />
         </DialogContent>
         <DialogActions>
@@ -569,9 +621,9 @@ export default function NovelDetailPage() {
           <Button
             onClick={handleSaveChapter}
             variant="contained"
-            disabled={!chapterForm.title || !chapterForm.content}
+            disabled={!chapterForm.content}
           >
-            {editingChapter ? '保存' : '创建'}
+            创建
           </Button>
         </DialogActions>
       </Dialog>

@@ -1,531 +1,810 @@
 'use client';
 
-import { Fragment, Suspense, useEffect, useRef, useState } from 'react';
+import {
+  Fragment,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Box,
-  Drawer,
-  AppBar,
-  Toolbar,
-  Typography,
-  TextField,
-  Button,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemText,
-  ListItemSecondaryAction,
-  Paper,
-  Divider,
-  CircularProgress,
-  Chip,
   Alert,
-  IconButton,
+  AppBar,
+  Box,
+  Button,
   Card,
   CardContent,
-  LinearProgress,
-  Slider,
-  Select,
-  MenuItem,
-  Menu,
-  FormControl,
-  InputLabel,
-  FormControlLabel,
-  Switch,
+  Chip,
+  CircularProgress,
   Dialog,
-  DialogTitle,
-  DialogContent,
   DialogActions,
-  Collapse,
-  InputAdornment,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  Drawer,
+  IconButton,
+  List,
+  ListItem,
+  ListItemSecondaryAction,
+  ListItemText,
+  Menu,
+  MenuItem,
+  TextField,
+  Toolbar,
+  Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material';
-import MenuIcon from '@mui/icons-material/Menu';
-import SaveIcon from '@mui/icons-material/Save';
-import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import MicIcon from '@mui/icons-material/Mic';
-import MicOffIcon from '@mui/icons-material/MicOff';
-import UndoIcon from '@mui/icons-material/Undo';
-import RedoIcon from '@mui/icons-material/Redo';
 import AddIcon from '@mui/icons-material/Add';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
-import EditIcon from '@mui/icons-material/Edit';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import MenuIcon from '@mui/icons-material/Menu';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import RedoIcon from '@mui/icons-material/Redo';
+import SaveIcon from '@mui/icons-material/Save';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import UndoIcon from '@mui/icons-material/Undo';
 import WarningIcon from '@mui/icons-material/Warning';
 import { api } from '@/lib/api';
-import type { Novel, Chapter, StyleSample, AgentWorkflowTrace } from '@/types';
-import type { SSEEvent } from '@/lib/sse';
-
-// 工作台组件
+import { useChapterSave } from '@/hooks/useChapterSave';
+import { useEditHistory } from '@/hooks/useEditHistory';
+import { runAfterSave } from '@/lib/workspaceNavigation';
+import type {
+  AgentWorkflowTrace,
+  Chapter,
+  ChapterSummary,
+  Novel,
+} from '@/types';
+import type { AiWritingAssistantRef } from '@/components/workspace/AiWritingAssistant';
 import AiWritingAssistant from '@/components/workspace/AiWritingAssistant';
-import WorkflowPanel from '@/components/workspace/WorkflowPanel';
-import TextRewriter from '@/components/workspace/TextRewriter';
+import AutoSaver from '@/components/workspace/AutoSaver';
+import CharacterStats from '@/components/workspace/CharacterStats';
 import ConsistencyChecker from '@/components/workspace/ConsistencyChecker';
 import PlotOptionsGenerator from '@/components/workspace/PlotOptionsGenerator';
-import AutoSaver from '@/components/workspace/AutoSaver';
-import StyleManager from '@/components/workspace/StyleManager';
 import ResearchAssistant from '@/components/workspace/ResearchAssistant';
-import CharacterStats from '@/components/workspace/CharacterStats';
-// import ChapterManager from '@/components/workspace/ChapterManager';
+import StyleManager from '@/components/workspace/StyleManager';
+import TextRewriter from '@/components/workspace/TextRewriter';
+import WorkflowPanel from '@/components/workspace/WorkflowPanel';
 
 const DRAWER_WIDTH = 280;
 const AI_PANEL_WIDTH = 400;
-const AUTO_SAVE_DELAY = 5000;
+const CHAPTER_PAGE_SIZE = 50;
 
-/**
- * 写作工作台 - 专业的AI辅助写作环境
- */
+function toChapterSummary(chapter: Chapter): ChapterSummary {
+  return {
+    id: chapter.id,
+    novel_id: chapter.novel_id,
+    chapter_number: chapter.chapter_number,
+    title: chapter.title,
+    word_count: chapter.word_count,
+    version: chapter.version,
+    created_at: chapter.created_at,
+    updated_at: chapter.updated_at,
+  };
+}
+
+function mergeChapterSummaries(
+  current: ChapterSummary[],
+  incoming: ChapterSummary[],
+): ChapterSummary[] {
+  const byId = new Map(current.map((chapter) => [chapter.id, chapter]));
+  for (const chapter of incoming) byId.set(chapter.id, chapter);
+  return Array.from(byId.values()).sort(
+    (left, right) => left.chapter_number - right.chapter_number,
+  );
+}
+
+interface ChapterNavigatorProps {
+  chapters: ChapterSummary[];
+  total: number;
+  currentChapterId: number | null;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onCreate: () => void;
+  onSelect: (chapterId: number) => void;
+  onMenuOpen: (event: React.MouseEvent<HTMLElement>, chapter: ChapterSummary) => void;
+  onLoadMore: () => void;
+}
+
+function ChapterNavigator({
+  chapters,
+  total,
+  currentChapterId,
+  hasMore,
+  loadingMore,
+  onCreate,
+  onSelect,
+  onMenuOpen,
+  onLoadMore,
+}: ChapterNavigatorProps) {
+  return (
+    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <Typography variant="h6" gutterBottom fontWeight="600">
+          章节管理
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {chapters.length}/{total}
+        </Typography>
+      </Box>
+      <Button
+        fullWidth
+        variant="contained"
+        startIcon={<AddIcon />}
+        onClick={onCreate}
+        sx={{ mb: 2 }}
+      >
+        新建下一章
+      </Button>
+      <Divider sx={{ mb: 2 }} />
+
+      {chapters.length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ py: 3, textAlign: 'center' }}>
+          暂无章节
+        </Typography>
+      ) : (
+        <List dense disablePadding>
+          {chapters.map((chapter) => (
+            <ListItem
+              key={chapter.id}
+              onClick={() => onSelect(chapter.id)}
+              sx={{
+                border: '1px solid',
+                borderColor: currentChapterId === chapter.id ? 'primary.main' : 'divider',
+                borderRadius: 1,
+                mb: 1,
+                cursor: 'pointer',
+                contentVisibility: 'auto',
+                containIntrinsicSize: '0 88px',
+                '&:hover': {
+                  borderColor: 'primary.main',
+                  bgcolor: 'action.hover',
+                },
+              }}
+            >
+              <ListItemText
+                disableTypography
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" fontWeight="medium">
+                      第{chapter.chapter_number}章
+                    </Typography>
+                    {currentChapterId === chapter.id && (
+                      <Chip label="当前" size="small" color="primary" />
+                    )}
+                  </Box>
+                }
+                secondary={
+                  <Box sx={{ mt: 0.5, pr: 3 }}>
+                    <Typography variant="body2" noWrap sx={{ fontWeight: 500 }}>
+                      {chapter.title}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {(chapter.word_count || 0).toLocaleString()} 字
+                    </Typography>
+                  </Box>
+                }
+              />
+              <ListItemSecondaryAction>
+                <IconButton
+                  size="small"
+                  aria-label={`管理第${chapter.chapter_number}章`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onMenuOpen(event, chapter);
+                  }}
+                >
+                  <MoreVertIcon />
+                </IconButton>
+              </ListItemSecondaryAction>
+            </ListItem>
+          ))}
+        </List>
+      )}
+
+      {hasMore && (
+        <Button fullWidth onClick={onLoadMore} disabled={loadingMore} sx={{ mt: 1 }}>
+          {loadingMore ? '加载中...' : '加载更多章节'}
+        </Button>
+      )}
+    </Box>
+  );
+}
+
 function WorkspacePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const novelId = Number(searchParams.get('novel'));
-  const chapterId = Number(searchParams.get('chapter'));
+  const novelId = Number(searchParams.get('novel')) || 0;
+  const requestedChapterId = Number(searchParams.get('chapter')) || 0;
+  const theme = useTheme();
+  const desktopAiPanel = useMediaQuery(theme.breakpoints.up('lg'));
 
-  // 数据状态
   const [novel, setNovel] = useState<Novel | null>(null);
-  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [chapters, setChapters] = useState<ChapterSummary[]>([]);
+  const [chapterPage, setChapterPage] = useState(1);
+  const [chapterTotal, setChapterTotal] = useState(0);
+  const [hasMoreChapters, setHasMoreChapters] = useState(false);
   const [currentChapter, setCurrentChapter] = useState<Chapter | null>(null);
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
-  const [autoSaving, setAutoSaving] = useState(false);
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
-  const [lastSavedTitle, setLastSavedTitle] = useState('');
-  const [lastSavedContent, setLastSavedContent] = useState('');
-
-  // UI状态
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
 
-  // 章节管理状态
   const [createChapterDialogOpen, setCreateChapterDialogOpen] = useState(false);
   const [newChapterTitle, setNewChapterTitle] = useState('');
-  const [newChapterNumber, setNewChapterNumber] = useState(1);
   const [creatingChapter, setCreatingChapter] = useState(false);
-
-  // 章节菜单状态
-  const [chapterMenuAnchor, setChapterMenuAnchor] = useState<null | HTMLElement>(null);
-  const [selectedChapterForMenu, setSelectedChapterForMenu] = useState<Chapter | null>(null);
+  const [chapterMenuAnchor, setChapterMenuAnchor] = useState<HTMLElement | null>(null);
+  const [selectedChapterForMenu, setSelectedChapterForMenu] = useState<ChapterSummary | null>(null);
   const [deleteChapterDialogOpen, setDeleteChapterDialogOpen] = useState(false);
   const [editChapterDialogOpen, setEditChapterDialogOpen] = useState(false);
   const [editChapterTitle, setEditChapterTitle] = useState('');
-  const [editChapterNumber, setEditChapterNumber] = useState(1);
   const [deletingChapter, setDeletingChapter] = useState(false);
   const [updatingChapter, setUpdatingChapter] = useState(false);
 
-  // 局部改写状态
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
   const [selectedText, setSelectedText] = useState('');
   const contentInputRef = useRef<HTMLTextAreaElement | null>(null);
-
-  // 文风样本状态
   const [selectedStyleSampleId, setSelectedStyleSampleId] = useState<number | null>(null);
-
-  // 剧情走向提示（由PlotOptionsGenerator提供，供AI续写时参考）
   const [plotDirectionHint, setPlotDirectionHint] = useState<string | null>(null);
-
-  // 撤销/重做状态
-  const [contentHistory, setContentHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const isApplyingHistoryRef = useRef(false);
-  const streamingTimerRef = useRef<number | null>(null);
-  const sseEventIdRef = useRef(0);
-
-  // 多Agent工作流追踪（用于右侧工作流可视化侧栏）
   const [workflowTrace, setWorkflowTrace] = useState<AgentWorkflowTrace | null>(null);
+  const aiWritingAssistantRef = useRef<AiWritingAssistantRef | null>(null);
 
-  // AI续写助手的 ref，用于外部触发续写
-  const aiWritingAssistantRef = useRef<{ triggerContinue: () => void } | null>(null);
+  const novelRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const workspaceRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const loadMoreRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const requestSequenceRef = useRef(0);
+  const skipNextWorkspaceLoadRef = useRef(false);
 
-  const hasUnsavedChanges = title !== lastSavedTitle || content !== lastSavedContent;
+  const {
+    canUndo,
+    canRedo,
+    addToHistory,
+    undo,
+    redo,
+    clearHistory,
+  } = useEditHistory({
+    batchDelay: 400,
+    maxHistorySize: 50,
+    maxCharacterBudget: 5_000_000,
+  });
 
-  const formatTime = (date: Date) => {
-    const hours = date.getHours().toString().padStart(2, '0');
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    return `${hours}:${minutes}`;
-  };
+  const handleSaved = useCallback((
+    snapshot: { chapterId: number; title: string; content: string },
+    savedChapter: Chapter,
+  ) => {
+    setCurrentChapter((previous) => {
+      if (previous?.id !== snapshot.chapterId) return previous;
+      return {
+        ...savedChapter,
+        title: snapshot.title,
+        content: snapshot.content,
+      };
+    });
+    setChapters((previous) =>
+      mergeChapterSummaries(previous, [
+        toChapterSummary({
+          ...savedChapter,
+          title: snapshot.title,
+          content: snapshot.content,
+        }),
+      ]),
+    );
+    setError('');
+  }, []);
 
-  // 加载工作台数据
-  const loadWorkspace = async () => {
+  const {
+    status: saveStatus,
+    isDirty,
+    isSaving,
+    lastSavedAt,
+    saveNow,
+  } = useChapterSave({
+    novelId,
+    chapter: currentChapter,
+    title,
+    content,
+    onSaved: handleSaved,
+    onError: setError,
+  });
+  const dirtyRef = useRef(isDirty);
+  const saveNowRef = useRef(saveNow);
+  const currentChapterRef = useRef(currentChapter);
+  dirtyRef.current = isDirty;
+  saveNowRef.current = saveNow;
+  currentChapterRef.current = currentChapter;
+
+  const runAfterCurrentSave = useCallback(<T,>(action: () => Promise<T> | T) => {
+    return runAfterSave({
+      isDirty,
+      save: () => saveNow('manual'),
+      action,
+    });
+  }, [isDirty, saveNow]);
+
+  useEffect(() => {
+    if (!novelId) {
+      setNovel(null);
+      setError('缺少小说参数');
+      return;
+    }
+
+    const requestId = requestSequenceRef.current + 1;
+    requestSequenceRef.current = requestId;
+    novelRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    novelRequestRef.current = { id: requestId, controller };
+
+    void api
+      .getNovel(novelId, { signal: controller.signal })
+      .then((data) => {
+        if (novelRequestRef.current?.id === requestId) setNovel(data);
+      })
+      .catch((loadError) => {
+        if (loadError instanceof Error && loadError.name === 'AbortError') return;
+        if (novelRequestRef.current?.id === requestId) {
+          setError(loadError instanceof Error ? loadError.message : '加载小说失败');
+        }
+      });
+
+    return () => controller.abort();
+  }, [novelId]);
+
+  const loadWorkspace = useCallback(async () => {
+    if (!novelId) return;
+
+    const activeChapter = currentChapterRef.current;
+    if (
+      skipNextWorkspaceLoadRef.current &&
+      activeChapter?.novel_id === novelId &&
+      activeChapter.id === requestedChapterId
+    ) {
+      skipNextWorkspaceLoadRef.current = false;
+      setLoading(false);
+      return;
+    }
+
+    const isLeavingActiveChapter = Boolean(
+      activeChapter &&
+      (activeChapter.novel_id !== novelId || activeChapter.id !== requestedChapterId),
+    );
+    if (isLeavingActiveChapter && dirtyRef.current) {
+      try {
+        await saveNowRef.current('manual');
+      } catch {
+        if (activeChapter) {
+          skipNextWorkspaceLoadRef.current = true;
+          router.replace(
+            `/workspace?novel=${activeChapter.novel_id}&chapter=${activeChapter.id}`,
+          );
+        }
+        setLoading(false);
+        return;
+      }
+    }
+
+    const requestId = requestSequenceRef.current + 1;
+    requestSequenceRef.current = requestId;
+    workspaceRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    workspaceRequestRef.current = { id: requestId, controller };
+    loadMoreRequestRef.current?.controller.abort();
+    loadMoreRequestRef.current = null;
+    setLoadingMore(false);
+    setLoading(true);
+    setError('');
+
     try {
-      const [novelData, chaptersData] = await Promise.all([
-        api.getNovel(novelId),
-        api.getChapters(novelId),
+      const [summaryPage, chapterDetail] = await Promise.all([
+        api.getChapterSummaries(
+          novelId,
+          { page: 1, pageSize: CHAPTER_PAGE_SIZE },
+          { signal: controller.signal },
+        ),
+        requestedChapterId
+          ? api.getChapter(novelId, requestedChapterId, { signal: controller.signal })
+          : Promise.resolve(null),
       ]);
 
-      setNovel(novelData);
-      setChapters(chaptersData.sort((a, b) => a.chapter_number - b.chapter_number));
+      if (workspaceRequestRef.current?.id !== requestId) return;
 
-      // 加载当前章节
-      if (chapterId) {
-        const chapter = chaptersData.find(c => c.id === chapterId);
-        if (chapter) {
-          setCurrentChapter(chapter);
-          setContent(chapter.content);
-          setTitle(chapter.title);
-          setLastSavedTitle(chapter.title);
-          setLastSavedContent(chapter.content);
-          setLastSavedAt(null);
-          // 初始化撤销/重做历史
-          setContentHistory([chapter.content]);
-          setHistoryIndex(0);
-        }
+      const initialSummaries = chapterDetail
+        ? mergeChapterSummaries(summaryPage.items, [toChapterSummary(chapterDetail)])
+        : summaryPage.items;
+      setChapters(initialSummaries);
+      setChapterPage(summaryPage.page);
+      setChapterTotal(summaryPage.total);
+      setHasMoreChapters(summaryPage.has_more);
+
+      if (chapterDetail) {
+        setCurrentChapter(chapterDetail);
+        setTitle(chapterDetail.title);
+        setContent(chapterDetail.content);
+        clearHistory(chapterDetail.content);
+      } else {
+        setCurrentChapter(null);
+        setTitle('');
+        setContent('');
+        clearHistory('');
       }
-    } catch (err) {
-      setError('加载失败，请返回重试');
+    } catch (loadError) {
+      if (loadError instanceof Error && loadError.name === 'AbortError') return;
+      if (workspaceRequestRef.current?.id === requestId) {
+        setError(loadError instanceof Error ? loadError.message : '加载工作台失败');
+      }
     } finally {
-      setLoading(false);
+      if (workspaceRequestRef.current?.id === requestId) setLoading(false);
     }
-  };
+  }, [clearHistory, novelId, requestedChapterId, router]);
 
-  // 保存章节
-  const handleSave = async () => {
-    if (!currentChapter) return;
+  useEffect(() => {
+    void loadWorkspace();
+    return () => {
+      workspaceRequestRef.current?.controller.abort();
+      loadMoreRequestRef.current?.controller.abort();
+    };
+  }, [loadWorkspace]);
 
-    if (!title || !content) {
-      setError('标题和内容不能为空');
+  const handleLoadMore = useCallback(async () => {
+    if (!novelId || loadingMore || !hasMoreChapters) return;
+    const requestId = requestSequenceRef.current + 1;
+    requestSequenceRef.current = requestId;
+    loadMoreRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    loadMoreRequestRef.current = { id: requestId, controller };
+    const requestNovelId = novelId;
+    setLoadingMore(true);
+    try {
+      const nextPage = chapterPage + 1;
+      const result = await api.getChapterSummaries(
+        novelId,
+        { page: nextPage, pageSize: CHAPTER_PAGE_SIZE },
+        { signal: controller.signal },
+      );
+      if (
+        loadMoreRequestRef.current?.id !== requestId ||
+        requestNovelId !== novelId
+      ) return;
+      setChapters((previous) => mergeChapterSummaries(previous, result.items));
+      setChapterPage(result.page);
+      setChapterTotal(result.total);
+      setHasMoreChapters(result.has_more);
+    } catch (loadError) {
+      if (loadError instanceof Error && loadError.name === 'AbortError') return;
+      if (loadMoreRequestRef.current?.id !== requestId) return;
+      setError(loadError instanceof Error ? loadError.message : '加载更多章节失败');
+    } finally {
+      if (loadMoreRequestRef.current?.id === requestId) {
+        loadMoreRequestRef.current = null;
+        setLoadingMore(false);
+      }
+    }
+  }, [chapterPage, hasMoreChapters, loadingMore, novelId]);
+
+  const handleSave = useCallback(async () => {
+    try {
+      await saveNow('manual');
+    } catch {
+      // 保存 Hook 已提供可操作的错误信息。
+    }
+  }, [saveNow]);
+
+  const handleChapterSelected = useCallback(async (nextChapterId: number) => {
+    if (nextChapterId === currentChapter?.id) {
+      setMobileOpen(false);
       return;
     }
-
-    setSaving(true);
     try {
-      await api.updateChapter(novelId, currentChapter.id, {
-        title,
-        content,
+      await runAfterCurrentSave(() => {
+        setMobileOpen(false);
+        router.push(`/workspace?novel=${novelId}&chapter=${nextChapterId}`);
       });
-      setLastSavedAt(new Date());
-      setLastSavedTitle(title);
-      setLastSavedContent(content);
-      setError('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '保存失败');
-    } finally {
-      setSaving(false);
+    } catch {
+      // 保存或导航失败时保留当前章节和草稿。
     }
-  };
+  }, [currentChapter?.id, novelId, router, runAfterCurrentSave]);
 
-  // 处理AI生成的内容
-  const handleContentGenerated = (newContent: string) => {
-    console.log('[DEBUG] handleContentGenerated 被调用');
-    console.log('[DEBUG] 新内容长度:', newContent.length);
-    console.log('[DEBUG] 新内容前100字:', newContent.substring(0, 100));
+  const handleContentGenerated = useCallback((newContent: string) => {
     setContent(newContent);
-    // 添加到历史记录
-    if (!isApplyingHistoryRef.current) {
-      const newHistory = contentHistory.slice(0, historyIndex + 1);
-      newHistory.push(newContent);
-      setContentHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
-    }
-  };
+    addToHistory(newContent, { immediate: true });
+  }, [addToHistory]);
 
-  // 将AI生成的内容应用到下一章节（自动创建）
-  const handleApplyGeneratedToNextChapter = async (generatedText: string) => {
-    if (!novelId) {
-      setError('未找到当前小说');
-      return;
-    }
-
-    try {
-      // 计算下一章节号：在现有章节号中取最大值再加1
-      const nextNumber = Math.max(...chapters.map(c => c.chapter_number), 0) + 1;
-      const nextTitle = `第${nextNumber}章`;
-
-      const newChapter = await api.createChapter(novelId, {
-        chapter_number: nextNumber,
-        title: nextTitle,
-        content: generatedText,
-      });
-
-      // 跳转到新创建的章节，loadWorkspace 会在 chapterId 变化后自动加载
+  const handleApplyGeneratedToNextChapter = useCallback(async (generatedText: string) => {
+    await runAfterCurrentSave(async () => {
+      const newChapter = await api.createNextChapter(novelId, { content: generatedText });
+      setChapters((previous) => mergeChapterSummaries(previous, [toChapterSummary(newChapter)]));
+      setChapterTotal((total) => total + 1);
       router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '创建下一章节失败');
-    }
-  };
+    });
+  }, [novelId, router, runAfterCurrentSave]);
 
-  // 处理文本改写
-  const handleTextRewritten = (newText: string, start: number, end: number) => {
-    const beforeText = content.slice(0, start);
-    const afterText = content.slice(end);
-    const newContent = beforeText + newText + afterText;
-    
+  const handleTextRewritten = useCallback((newText: string, start: number, end: number) => {
+    const newContent = content.slice(0, start) + newText + content.slice(end);
     setContent(newContent);
+    addToHistory(newContent, { immediate: true });
     setSelectedText('');
     setSelectionStart(null);
     setSelectionEnd(null);
-    
-    // 添加到历史记录
-    if (!isApplyingHistoryRef.current) {
-      const newHistory = contentHistory.slice(0, historyIndex + 1);
-      newHistory.push(newContent);
-      setContentHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
-    }
-  };
+  }, [addToHistory, content]);
 
-  // 处理剧情选项选择
-  const handlePlotSelected = (option: { id: number; title: string; summary: string; impact?: string | null; risk?: string | null }) => {
-    const parts: string[] = [];
-    parts.push(`${option.title}`);
-    parts.push(option.summary);
-    if (option.impact) {
-      parts.push(`影响：${option.impact}`);
-    }
-    if (option.risk) {
-      parts.push(`风险：${option.risk}`);
-    }
-    setPlotDirectionHint(parts.join('；'));
-  };
+  const formatPlotDirection = useCallback((option: {
+    title: string;
+    summary: string;
+    impact?: string | null;
+    risk?: string | null;
+  }) => {
+    return [
+      option.title,
+      option.summary,
+      option.impact ? `影响：${option.impact}` : null,
+      option.risk ? `风险：${option.risk}` : null,
+    ].filter(Boolean).join('；');
+  }, []);
 
-  // 处理剧情选项选择并立即续写
-  const handlePlotSelectedAndContinue = (option: { id: number; title: string; summary: string; impact?: string | null; risk?: string | null }) => {
-    // 先设置剧情走向
-    handlePlotSelected(option);
-    // 稍微延迟以确保状态更新，然后触发 AI 续写
-    setTimeout(() => {
-      if (aiWritingAssistantRef.current) {
-        aiWritingAssistantRef.current.triggerContinue();
-      }
-    }, 100);
-  };
+  const handlePlotSelected = useCallback((option: {
+    id: number;
+    title: string;
+    summary: string;
+    impact?: string | null;
+    risk?: string | null;
+  }) => {
+    setPlotDirectionHint(formatPlotDirection(option));
+  }, [formatPlotDirection]);
 
-  // 打开新建章节对话框
-  const handleCreateChapterOpen = () => {
-    const nextNumber = Math.max(...chapters.map(c => c.chapter_number), 0) + 1;
-    setNewChapterNumber(nextNumber);
-    setNewChapterTitle(`第${nextNumber}章`);
+  const handlePlotSelectedAndContinue = useCallback((option: {
+    id: number;
+    title: string;
+    summary: string;
+    impact?: string | null;
+    risk?: string | null;
+  }) => {
+    const instruction = formatPlotDirection(option);
+    setPlotDirectionHint(instruction);
+    aiWritingAssistantRef.current?.triggerContinue(instruction);
+  }, [formatPlotDirection]);
+
+  const handleCreateChapterOpen = useCallback(() => {
+    setNewChapterTitle('');
     setCreateChapterDialogOpen(true);
-  };
+  }, []);
 
-  // 创建新章节
-  const handleCreateChapter = async () => {
-    if (!newChapterTitle.trim()) {
-      setError('章节标题不能为空');
-      return;
-    }
-
+  const handleCreateChapter = useCallback(async () => {
     setCreatingChapter(true);
     try {
-      const newChapter = await api.createChapter(novelId, {
-        chapter_number: newChapterNumber,
-        title: newChapterTitle.trim(),
-        content: '',
+      await runAfterCurrentSave(async () => {
+        const newChapter = await api.createNextChapter(novelId, {
+          title: newChapterTitle.trim() || undefined,
+          content: '',
+        });
+        setCreateChapterDialogOpen(false);
+        setNewChapterTitle('');
+        setChapters((previous) => mergeChapterSummaries(previous, [toChapterSummary(newChapter)]));
+        setChapterTotal((total) => total + 1);
+        router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
       });
-      
-      setCreateChapterDialogOpen(false);
-      setNewChapterTitle('');
-      await loadWorkspace(); // 重新加载章节列表
-      
-      // 自动跳转到新创建的章节
-      router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '创建章节失败');
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : '创建章节失败');
     } finally {
       setCreatingChapter(false);
     }
-  };
+  }, [newChapterTitle, novelId, router, runAfterCurrentSave]);
 
-  // 打开章节菜单
-  const handleChapterMenuOpen = (event: React.MouseEvent<HTMLElement>, chapter: Chapter) => {
+  const handleBack = useCallback(async () => {
+    try {
+      await runAfterCurrentSave(() => router.back());
+    } catch {
+      // 保存失败时留在当前工作台。
+    }
+  }, [router, runAfterCurrentSave]);
+
+  const handleChapterMenuOpen = useCallback((
+    event: React.MouseEvent<HTMLElement>,
+    chapter: ChapterSummary,
+  ) => {
     event.stopPropagation();
     setChapterMenuAnchor(event.currentTarget);
     setSelectedChapterForMenu(chapter);
-  };
+  }, []);
 
-  // 关闭章节菜单
-  const handleChapterMenuClose = () => {
+  const handleChapterMenuClose = useCallback(() => {
     setChapterMenuAnchor(null);
     setSelectedChapterForMenu(null);
-  };
+  }, []);
 
-  // 打开编辑章节对话框
-  const handleEditChapterOpen = () => {
-    if (selectedChapterForMenu) {
-      setEditChapterTitle(selectedChapterForMenu.title);
-      setEditChapterNumber(selectedChapterForMenu.chapter_number);
-      setEditChapterDialogOpen(true);
-    }
-    handleChapterMenuClose();
-  };
-
-  // 打开删除章节对话框
-  const handleDeleteChapterOpen = () => {
-    // 仅关闭菜单，不要清空selectedChapterForMenu，
-    // 后续删除对话框需要依赖该状态来确定要删除的章节
-    setDeleteChapterDialogOpen(true);
+  const handleEditChapterOpen = useCallback(() => {
+    if (!selectedChapterForMenu) return;
+    setEditChapterTitle(selectedChapterForMenu.title);
+    setEditChapterDialogOpen(true);
     setChapterMenuAnchor(null);
-  };
+  }, [selectedChapterForMenu]);
 
-  // 更新章节
-  const handleUpdateChapter = async () => {
+  const handleUpdateChapter = useCallback(async () => {
     if (!selectedChapterForMenu || !editChapterTitle.trim()) {
       setError('章节标题不能为空');
       return;
     }
-
     setUpdatingChapter(true);
     try {
-      await api.updateChapter(novelId, selectedChapterForMenu.id, {
-        title: editChapterTitle.trim(),
-        chapter_number: editChapterNumber,
-      });
-      
+      if (selectedChapterForMenu.id === currentChapter?.id) {
+        setTitle(editChapterTitle.trim());
+      } else {
+        const updated = await api.updateChapter(
+          novelId,
+          selectedChapterForMenu.id,
+          {
+            title: editChapterTitle.trim(),
+            expected_version: selectedChapterForMenu.version,
+          },
+        );
+        setChapters((previous) =>
+          mergeChapterSummaries(previous, [toChapterSummary(updated)]),
+        );
+      }
       setEditChapterDialogOpen(false);
-      setEditChapterTitle('');
       setSelectedChapterForMenu(null);
-      await loadWorkspace();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '更新章节失败');
+      setEditChapterTitle('');
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : '更新章节失败');
     } finally {
       setUpdatingChapter(false);
     }
-  };
+  }, [currentChapter?.id, editChapterTitle, novelId, selectedChapterForMenu]);
 
-  // 删除章节
-  const handleDeleteChapter = async () => {
+  const handleDeleteChapterOpen = useCallback(() => {
+    setDeleteChapterDialogOpen(true);
+    setChapterMenuAnchor(null);
+  }, []);
+
+  const handleDeleteChapter = useCallback(async () => {
     if (!selectedChapterForMenu) return;
-
+    const deletingId = selectedChapterForMenu.id;
     setDeletingChapter(true);
     try {
-      await api.deleteChapter(novelId, selectedChapterForMenu.id);
-      
+      await api.deleteChapter(novelId, deletingId);
+      const remaining = chapters.filter((chapter) => chapter.id !== deletingId);
+      setChapters(remaining);
+      setChapterTotal((total) => Math.max(0, total - 1));
       setDeleteChapterDialogOpen(false);
       setSelectedChapterForMenu(null);
-      await loadWorkspace();
-      
-      // 如果删除的是当前章节，跳转到第一个章节
-      if (currentChapter?.id === selectedChapterForMenu.id) {
-        const remainingChapters = chapters.filter(c => c.id !== selectedChapterForMenu.id);
-        if (remainingChapters.length > 0) {
-          router.push(`/workspace?novel=${novelId}&chapter=${remainingChapters[0].id}`);
-        } else {
-          router.push(`/workspace?novel=${novelId}`);
-        }
+
+      if (currentChapter?.id === deletingId) {
+        const fallback = remaining[0];
+        setCurrentChapter(null);
+        setTitle('');
+        setContent('');
+        clearHistory('');
+        router.push(
+          fallback
+            ? `/workspace?novel=${novelId}&chapter=${fallback.id}`
+            : `/workspace?novel=${novelId}`,
+        );
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '删除章节失败');
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : '删除章节失败');
     } finally {
       setDeletingChapter(false);
     }
-  };
+  }, [chapters, clearHistory, currentChapter?.id, novelId, router, selectedChapterForMenu]);
 
-  // 加载数据
-  useEffect(() => {
-    if (novelId) {
-      loadWorkspace();
-    }
-  }, [novelId, chapterId]);
+  const handleUndo = useCallback(() => {
+    const previous = undo();
+    if (previous !== null) setContent(previous);
+  }, [undo]);
+
+  const handleRedo = useCallback(() => {
+    const next = redo();
+    if (next !== null) setContent(next);
+  }, [redo]);
+
+  const chapterNavigator = (
+    <ChapterNavigator
+      chapters={chapters}
+      total={chapterTotal}
+      currentChapterId={currentChapter?.id ?? null}
+      hasMore={hasMoreChapters}
+      loadingMore={loadingMore}
+      onCreate={handleCreateChapterOpen}
+      onSelect={(chapterId) => void handleChapterSelected(chapterId)}
+      onMenuOpen={handleChapterMenuOpen}
+      onLoadMore={() => void handleLoadMore()}
+    />
+  );
+
+  const aiPanelContent = (
+    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
+      <WorkflowPanel workflowTrace={workflowTrace} />
+      <AiWritingAssistant
+        ref={aiWritingAssistantRef}
+        novelId={novelId}
+        chapterId={currentChapter?.id ?? null}
+        currentContent={content}
+        onContentGenerated={handleContentGenerated}
+        onError={setError}
+        onWorkflowTraceChange={setWorkflowTrace}
+        plotDirectionHint={plotDirectionHint}
+        onApplyToNextChapter={handleApplyGeneratedToNextChapter}
+      />
+      <TextRewriter
+        novelId={novelId}
+        chapterId={currentChapter?.id ?? null}
+        selectedText={selectedText}
+        selectionStart={selectionStart}
+        selectionEnd={selectionEnd}
+        onTextRewritten={handleTextRewritten}
+        onError={setError}
+      />
+      <PlotOptionsGenerator
+        novelId={novelId}
+        chapterId={currentChapter?.id ?? null}
+        currentContent={content}
+        onPlotSelected={handlePlotSelected}
+        onPlotSelectedAndContinue={handlePlotSelectedAndContinue}
+        onError={setError}
+      />
+      <StyleManager
+        novelId={novelId}
+        selectedStyleSampleId={selectedStyleSampleId}
+        onStyleSampleSelected={setSelectedStyleSampleId}
+        onError={setError}
+      />
+      <ResearchAssistant novelId={novelId} onError={setError} />
+      <CharacterStats novel={novel} currentContent={content} />
+      <ConsistencyChecker
+        novel={novel}
+        currentChapter={currentChapter}
+        content={content}
+        onError={setError}
+      />
+      {novel && (
+        <Card>
+          <CardContent>
+            <Typography variant="subtitle2" gutterBottom>
+              小说信息
+            </Typography>
+            <Divider sx={{ my: 1 }} />
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              类型：{novel.genre || '未设置'}
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 1, fontSize: '0.85rem' }}>
+              简介：{novel.description || '暂无'}
+            </Typography>
+            {novel.worldview && (
+              <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
+                世界观：{novel.worldview.slice(0, 100)}...
+              </Typography>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </Box>
+  );
 
   return (
     <Fragment>
-      {/* 移动端章节列表抽屉 */}
       <Drawer
         variant="temporary"
         anchor="left"
         open={mobileOpen}
         onClose={() => setMobileOpen(false)}
-        ModalProps={{
-          keepMounted: true,
-        }}
         sx={{
-          display: { xs: 'block', sm: 'none' },
-          '& .MuiDrawer-paper': {
-            boxSizing: 'border-box',
-            width: DRAWER_WIDTH,
-          },
+          display: { xs: 'block', md: 'none' },
+          '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
         }}
       >
-        <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
-          <Typography variant="h6" gutterBottom fontWeight="600">
-            章节管理
-          </Typography>
-          
-          {/* 新建章节按钮 */}
-          <Button
-            fullWidth
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={handleCreateChapterOpen}
-            sx={{ mb: 2 }}
-          >
-            新建章节
-          </Button>
-          
-          <Divider sx={{ mb: 2 }} />
-          
-          <List dense>
-            {chapters.map((chapter) => (
-              <ListItem
-                key={chapter.id}
-                sx={{
-                  border: '1px solid',
-                  borderColor: currentChapter?.id === chapter.id ? 'primary.main' : 'divider',
-                  borderRadius: 1,
-                  mb: 1,
-                  cursor: 'pointer',
-                  '&:hover': {
-                    borderColor: 'primary.main',
-                    bgcolor: 'action.hover',
-                  },
-                }}
-                onClick={() => {
-                  router.push(`/workspace?novel=${novelId}&chapter=${chapter.id}`);
-                  setMobileOpen(false);
-                }}
-              >
-                <ListItemText
-                  primary={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography variant="body2" fontWeight="medium">
-                        第{chapter.chapter_number}章
-                      </Typography>
-                      {currentChapter?.id === chapter.id && (
-                        <Chip label="当前" size="small" color="primary" />
-                      )}
-                    </Box>
-                  }
-                  secondary={
-                    <Box sx={{ mt: 0.5 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        {chapter.title}
-                      </Typography>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                        <Chip
-                          label={`${chapter.word_count || 0} 字`}
-                          size="small"
-                          variant="outlined"
-                        />
-                        <Typography variant="caption" color="text.secondary">
-                          {new Date(chapter.updated_at || chapter.created_at).toLocaleDateString()}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  }
-                />
-                <ListItemSecondaryAction>
-                  <IconButton 
-                    size="small"
-                    onClick={(e) => handleChapterMenuOpen(e, chapter)}
-                  >
-                    <MoreVertIcon />
-                  </IconButton>
-                </ListItemSecondaryAction>
-              </ListItem>
-            ))}
-          </List>
-        </Box>
+        {chapterNavigator}
       </Drawer>
 
-
-      <Box sx={{ display: 'flex', height: '100vh', width: '100%' }}>
-        {/* 左侧章节列表（桌面版） */}
+      <Box sx={{ display: 'flex', height: '100dvh', width: '100%' }}>
         <Drawer
           variant="permanent"
           sx={{
-            display: { xs: 'none', sm: 'block' },
+            display: { xs: 'none', md: 'block' },
             width: DRAWER_WIDTH,
             flexShrink: 0,
             '& .MuiDrawer-paper': {
@@ -535,255 +814,103 @@ function WorkspacePageContent() {
             },
           }}
         >
-          <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
-            <Typography variant="h6" gutterBottom fontWeight="600">
-              章节管理
-            </Typography>
-            
-            {/* 新建章节按钮 */}
-            <Button
-              fullWidth
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={handleCreateChapterOpen}
-              sx={{ mb: 2 }}
-            >
-              新建章节
-            </Button>
-            
-            <Divider sx={{ mb: 2 }} />
-            
-            <List dense>
-              {chapters.map((chapter) => (
-                <ListItem
-                  key={chapter.id}
-                  sx={{
-                    border: '1px solid',
-                    borderColor: currentChapter?.id === chapter.id ? 'primary.main' : 'divider',
-                    borderRadius: 1,
-                    mb: 1,
-                    cursor: 'pointer',
-                    '&:hover': {
-                      borderColor: 'primary.main',
-                      bgcolor: 'action.hover',
-                    },
-                  }}
-                  onClick={() => {
-                    router.push(`/workspace?novel=${novelId}&chapter=${chapter.id}`);
-                  }}
-                >
-                  <ListItemText
-                    primary={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Typography variant="body2" fontWeight="medium">
-                          第{chapter.chapter_number}章
-                        </Typography>
-                        {currentChapter?.id === chapter.id && (
-                          <Chip label="当前" size="small" color="primary" />
-                        )}
-                      </Box>
-                    }
-                    secondary={
-                      <Box sx={{ mt: 0.5 }}>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          {chapter.title}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                          <Chip
-                            label={`${chapter.word_count || 0} 字`}
-                            size="small"
-                            variant="outlined"
-                          />
-                          <Typography variant="caption" color="text.secondary">
-                            {new Date(chapter.updated_at || chapter.created_at).toLocaleDateString()}
-                          </Typography>
-                        </Box>
-                      </Box>
-                    }
-                  />
-                  <ListItemSecondaryAction>
-                    <IconButton 
-                      size="small"
-                      onClick={(e) => handleChapterMenuOpen(e, chapter)}
-                    >
-                      <MoreVertIcon />
-                    </IconButton>
-                  </ListItemSecondaryAction>
-                </ListItem>
-              ))}
-            </List>
-          </Box>
+          {chapterNavigator}
         </Drawer>
 
-        {/* 主内容区域 */}
         <Box
           component="main"
-          sx={{
-            flexGrow: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
+          sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         >
-          {/* 顶部工具栏 */}
-          <AppBar
-            position="static"
-            sx={{
-              bgcolor: 'primary.main',
-              boxShadow: 1,
-            }}
-          >
-            <Toolbar>
+          <AppBar position="static" sx={{ bgcolor: 'primary.main', boxShadow: 1 }}>
+            <Toolbar sx={{ gap: 1 }}>
               <IconButton
                 color="inherit"
                 edge="start"
-                onClick={() => setMobileOpen(!mobileOpen)}
-                sx={{ mr: 2, display: { sm: 'none' } }}
+                aria-label="打开章节列表"
+                onClick={() => setMobileOpen(true)}
+                sx={{ display: { md: 'none' } }}
               >
                 <MenuIcon />
               </IconButton>
-              
-              <IconButton
-                color="inherit"
-                onClick={() => router.back()}
-                sx={{ mr: 2 }}
-              >
+              <IconButton color="inherit" aria-label="返回" onClick={() => void handleBack()}>
                 <ArrowBackIcon />
               </IconButton>
 
-              <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', gap: 2 }}>
-                {novel && (
-                  <Typography
-                    variant="h6"
-                    sx={{
-                      color: 'white',
-                      fontWeight: 600,
-                      fontSize: '1.1rem',
-                    }}
-                  >
-                    {novel.title}
-                  </Typography>
-                )}
-                
+              <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="h6" noWrap sx={{ color: 'white', fontWeight: 600, fontSize: '1.1rem' }}>
+                  {novel?.title || '写作工作台'}
+                </Typography>
                 {currentChapter && (
                   <Chip
                     label={`第${currentChapter.chapter_number}章`}
                     size="small"
-                    sx={{
-                      bgcolor: 'rgba(255,255,255,0.2)',
-                      color: 'white',
-                      fontWeight: 500,
-                    }}
+                    sx={{ display: { xs: 'none', sm: 'inline-flex' }, bgcolor: 'rgba(255,255,255,0.2)', color: 'white' }}
                   />
                 )}
               </Box>
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {/* 自动保存组件 */}
-                <AutoSaver
-                  novelId={novelId}
-                  chapterId={chapterId}
-                  title={title}
-                  content={content}
-                  lastSavedTitle={lastSavedTitle}
-                  lastSavedContent={lastSavedContent}
-                  onSaved={setLastSavedAt}
-                  onError={setError}
-                />
-                
-                {hasUnsavedChanges && (
-                  <Chip
-                    label="未保存"
-                    size="small"
-                    color="warning"
-                    sx={{ color: 'white' }}
-                  />
-                )}
-                
-                {lastSavedAt && (
-                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)' }}>
-                    {formatTime(lastSavedAt)} 已保存
-                  </Typography>
-                )}
-
-                <Button
-                  color="inherit"
-                  startIcon={<SaveIcon />}
-                  onClick={handleSave}
-                  disabled={saving || !hasUnsavedChanges}
-                  sx={{ ml: 1 }}
-                >
-                  {saving ? '保存中...' : '保存'}
-                </Button>
-              </Box>
+              <AutoSaver status={saveStatus} lastSavedAt={lastSavedAt} />
+              <Button
+                color="inherit"
+                startIcon={<SaveIcon />}
+                aria-label={isSaving ? '保存中' : '保存章节'}
+                onClick={() => void handleSave()}
+                disabled={isSaving || !isDirty}
+                sx={{ minWidth: { xs: 40, sm: 80 }, px: { xs: 1, sm: 2 } }}
+              >
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                  {isSaving ? '保存中...' : '保存'}
+                </Box>
+              </Button>
+              <IconButton
+                color="inherit"
+                aria-label="打开 AI 助手"
+                onClick={() => setAiPanelOpen(true)}
+                sx={{ display: { lg: 'none' } }}
+              >
+                <SmartToyIcon />
+              </IconButton>
             </Toolbar>
           </AppBar>
 
-          {/* 主编辑区域 */}
-          <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
-            {/* 章节内容编辑区 */}
-            <Box
-              sx={{
-                flexGrow: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                p: { xs: 2, sm: 4, md: 5 },
-                overflow: 'auto',
-                maxWidth: 900,
-                mx: 'auto',
-                width: '100%',
-              }}
-            >
+          <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+            <Box sx={{ width: '100%', maxWidth: 900, minHeight: '100%', mx: 'auto', p: { xs: 2, sm: 4, md: 5 } }}>
+              {error && (
+                <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>
+                  {error}
+                </Alert>
+              )}
+
               {loading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
                   <CircularProgress />
                 </Box>
-              ) : error ? (
-                <Alert severity="error" sx={{ mb: 2 }}>
-                  {error}
-                </Alert>
               ) : currentChapter ? (
                 <>
-                  {/* 章节标题 */}
                   <TextField
                     fullWidth
                     label="章节标题"
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    sx={{
-                      mb: 4,
-                      '& .MuiInputBase-root': {
-                        fontSize: '1.5rem',
-                        fontWeight: 500,
-                      },
-                    }}
-                    variant="outlined"
+                    onChange={(event) => setTitle(event.target.value)}
+                    sx={{ mb: 4, '& .MuiInputBase-root': { fontSize: '1.5rem', fontWeight: 500 } }}
                   />
-
-                  {/* 章节内容 */}
                   <TextField
                     fullWidth
                     multiline
+                    minRows={18}
                     label="章节内容"
                     value={content}
-                    onChange={(e) => {
-                      setContent(e.target.value);
-                      if (!isApplyingHistoryRef.current) {
-                        const newHistory = contentHistory.slice(0, historyIndex + 1);
-                        newHistory.push(e.target.value);
-                        setContentHistory(newHistory);
-                        setHistoryIndex(newHistory.length - 1);
-                      }
+                    onChange={(event) => {
+                      const nextContent = event.target.value;
+                      setContent(nextContent);
+                      addToHistory(nextContent);
                     }}
-                    onSelect={(e) => {
-                      const target = e.target as HTMLTextAreaElement;
-                      const start = target.selectionStart;
-                      const end = target.selectionEnd;
-
-                      if (start !== end) {
-                        setSelectionStart(start);
-                        setSelectionEnd(end);
-                        setSelectedText(content.slice(start, end));
+                    onSelect={(event) => {
+                      const target = event.target as HTMLTextAreaElement;
+                      if (target.selectionStart !== target.selectionEnd) {
+                        setSelectionStart(target.selectionStart);
+                        setSelectionEnd(target.selectionEnd);
+                        setSelectedText(target.value.slice(target.selectionStart, target.selectionEnd));
                       } else {
                         setSelectionStart(null);
                         setSelectionEnd(null);
@@ -791,267 +918,62 @@ function WorkspacePageContent() {
                       }
                     }}
                     inputRef={contentInputRef}
+                    placeholder="开始写作..."
                     sx={{
-                      flexGrow: 1,
-                      '& .MuiInputBase-root': {
-                        height: '100%',
-                        alignItems: 'flex-start',
-                        borderColor: 'divider',
-                      },
                       '& .MuiInputBase-input': {
-                        height: '100% !important',
-                        overflow: 'auto !important',
                         fontSize: '1rem',
                         lineHeight: 1.75,
                         letterSpacing: '0.02em',
                       },
                     }}
-                    variant="outlined"
-                    placeholder="开始写作..."
                   />
 
-                  {/* 底部工具栏 */}
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      mt: 3,
-                      p: 2.5,
-                      bgcolor: 'background.subtle',
-                      borderRadius: 2,
-                      border: '1px solid',
-                      borderColor: 'border.light',
-                      transition: 'all 0.2s ease-in-out',
-                      '&:hover': {
-                        bgcolor: 'action.hover',
-                      },
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <IconButton
-                        size="small"
-                        disabled={historyIndex <= 0}
-                        onClick={() => {
-                          if (historyIndex > 0) {
-                            isApplyingHistoryRef.current = true;
-                            setHistoryIndex(historyIndex - 1);
-                            setContent(contentHistory[historyIndex - 1]);
-                            setTimeout(() => {
-                              isApplyingHistoryRef.current = false;
-                            }, 100);
-                          }
-                        }}
-                        sx={{
-                          transition: 'all 0.2s ease',
-                          '&:not(:disabled):hover': {
-                            bgcolor: 'primary.container',
-                            color: 'primary.dark',
-                          },
-                        }}
-                      >
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3, p: 2, bgcolor: 'background.subtle', borderRadius: 2, border: '1px solid', borderColor: 'border.light' }}>
+                    <Box>
+                      <IconButton size="small" aria-label="撤销" disabled={!canUndo} onClick={handleUndo}>
                         <UndoIcon fontSize="small" />
                       </IconButton>
-
-                      <IconButton
-                        size="small"
-                        disabled={historyIndex >= contentHistory.length - 1}
-                        onClick={() => {
-                          if (historyIndex < contentHistory.length - 1) {
-                            isApplyingHistoryRef.current = true;
-                            setHistoryIndex(historyIndex + 1);
-                            setContent(contentHistory[historyIndex + 1]);
-                            setTimeout(() => {
-                              isApplyingHistoryRef.current = false;
-                            }, 100);
-                          }
-                        }}
-                        sx={{
-                          transition: 'all 0.2s ease',
-                          '&:not(:disabled):hover': {
-                            bgcolor: 'primary.container',
-                            color: 'primary.dark',
-                          },
-                        }}
-                      >
+                      <IconButton size="small" aria-label="重做" disabled={!canRedo} onClick={handleRedo}>
                         <RedoIcon fontSize="small" />
                       </IconButton>
                     </Box>
-
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                      <Chip
-                        label={`${content.length.toLocaleString()} 字`}
-                        size="small"
-                        variant="outlined"
-                        sx={{ fontWeight: 500 }}
-                      />
-                    </Box>
+                    <Chip label={`${content.length.toLocaleString()} 字`} size="small" variant="outlined" />
                   </Box>
                 </>
               ) : (
                 <Box sx={{ textAlign: 'center', mt: 8 }}>
                   <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
-                    请从左侧选择一个章节开始编辑
+                    请从章节列表选择一个章节开始编辑
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    或者创建一个新章节
-                  </Typography>
+                  <Button startIcon={<AddIcon />} onClick={handleCreateChapterOpen}>
+                    新建下一章
+                  </Button>
                 </Box>
               )}
             </Box>
           </Box>
         </Box>
 
-        {/* 右侧AI助手面板 */}
         <Drawer
-          variant="permanent"
+          variant={desktopAiPanel ? 'permanent' : 'temporary'}
           anchor="right"
+          open={desktopAiPanel || aiPanelOpen}
+          onClose={() => setAiPanelOpen(false)}
           sx={{
-            width: AI_PANEL_WIDTH,
+            width: desktopAiPanel ? AI_PANEL_WIDTH : 0,
             flexShrink: 0,
             '& .MuiDrawer-paper': {
-              width: AI_PANEL_WIDTH,
+              width: { xs: 'min(92vw, 400px)', sm: AI_PANEL_WIDTH },
               boxSizing: 'border-box',
-              position: 'relative',
+              position: desktopAiPanel ? 'relative' : 'fixed',
               height: '100%',
             },
           }}
         >
-          <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
-            {/* 多Agent工作流可视化 */}
-            <WorkflowPanel workflowTrace={workflowTrace} />
-
-            {/* AI续写助手 */}
-            <AiWritingAssistant
-              ref={aiWritingAssistantRef}
-              novelId={novelId}
-              chapterId={chapterId}
-              currentContent={content}
-              onContentGenerated={handleContentGenerated}
-              onError={setError}
-              onWorkflowTraceChange={setWorkflowTrace}
-              plotDirectionHint={plotDirectionHint}
-              onApplyToNextChapter={handleApplyGeneratedToNextChapter}
-            />
-
-            {/* 局部改写 */}
-            <TextRewriter
-              novelId={novelId}
-              chapterId={chapterId}
-              selectedText={selectedText}
-              selectionStart={selectionStart}
-              selectionEnd={selectionEnd}
-              onTextRewritten={handleTextRewritten}
-              onError={setError}
-            />
-
-            {/* 剧情走向选项 */}
-            <PlotOptionsGenerator
-              novelId={novelId}
-              chapterId={chapterId}
-              currentContent={content}
-              onPlotSelected={handlePlotSelected}
-              onPlotSelectedAndContinue={handlePlotSelectedAndContinue}
-              onError={setError}
-            />
-
-            {/* 文风样本管理 */}
-            <StyleManager
-              novelId={novelId}
-              selectedStyleSampleId={selectedStyleSampleId}
-              onStyleSampleSelected={setSelectedStyleSampleId}
-              onError={setError}
-            />
-
-            {/* 资料检索 */}
-            <ResearchAssistant
-              novelId={novelId}
-              onError={setError}
-            />
-
-            {/* 角色统计 */}
-            <CharacterStats
-              novel={novel}
-              currentContent={content}
-            />
-
-            {/* 一致性检查 */}
-            <ConsistencyChecker
-              novel={novel}
-              currentChapter={currentChapter}
-              content={content}
-              onError={setError}
-            />
-
-            {/* 小说信息 */}
-            {novel && (
-              <Card>
-                <CardContent>
-                  <Typography variant="subtitle2" gutterBottom>
-                    小说信息
-                  </Typography>
-                  <Divider sx={{ my: 1 }} />
-                  <Typography variant="body2" sx={{ mb: 1 }}>
-                    类型: {novel.genre || '未设置'}
-                  </Typography>
-                  <Typography variant="body2" sx={{ mb: 1, fontSize: '0.85rem' }}>
-                    简介: {novel.description || '暂无'}
-                  </Typography>
-                  {novel.worldview && (
-                    <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
-                      世界观: {novel.worldview.slice(0, 100)}...
-                    </Typography>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-          </Box>
+          {aiPanelContent}
         </Drawer>
       </Box>
 
-      {/* 新建章节对话框 */}
-      <Dialog 
-        open={createChapterDialogOpen} 
-        onClose={() => setCreateChapterDialogOpen(false)} 
-        maxWidth="sm" 
-        fullWidth
-      >
-        <DialogTitle>新建章节</DialogTitle>
-        <DialogContent>
-          <TextField
-            fullWidth
-            label="章节序号"
-            type="number"
-            value={newChapterNumber}
-            onChange={(e) => setNewChapterNumber(Number(e.target.value))}
-            margin="normal"
-            inputProps={{ min: 1 }}
-          />
-          <TextField
-            fullWidth
-            label="章节标题"
-            value={newChapterTitle}
-            onChange={(e) => setNewChapterTitle(e.target.value)}
-            margin="normal"
-            placeholder="例如：初入江湖"
-            autoFocus
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCreateChapterDialogOpen(false)}>
-            取消
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleCreateChapter}
-            disabled={creatingChapter || !newChapterTitle.trim()}
-          >
-            {creatingChapter ? '创建中...' : '创建章节'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 章节操作菜单 */}
       <Menu
         anchorEl={chapterMenuAnchor}
         open={Boolean(chapterMenuAnchor)}
@@ -1059,7 +981,7 @@ function WorkspacePageContent() {
       >
         <MenuItem onClick={handleEditChapterOpen}>
           <EditIcon sx={{ mr: 1 }} fontSize="small" />
-          编辑章节
+          编辑标题
         </MenuItem>
         <MenuItem onClick={handleDeleteChapterOpen} sx={{ color: 'error.main' }}>
           <DeleteIcon sx={{ mr: 1 }} fontSize="small" />
@@ -1067,91 +989,68 @@ function WorkspacePageContent() {
         </MenuItem>
       </Menu>
 
-      {/* 编辑章节对话框 */}
-      <Dialog 
-        open={editChapterDialogOpen} 
-        onClose={() => setEditChapterDialogOpen(false)} 
-        maxWidth="sm" 
-        fullWidth
-      >
-        <DialogTitle>编辑章节</DialogTitle>
+      <Dialog open={createChapterDialogOpen} onClose={() => setCreateChapterDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>新建下一章</DialogTitle>
         <DialogContent>
+          <Alert severity="info" sx={{ mt: 1, mb: 1 }}>
+            章节序号由服务端自动分配，避免多人操作时产生重复编号。
+          </Alert>
           <TextField
             fullWidth
-            label="章节序号"
-            type="number"
-            value={editChapterNumber}
-            onChange={(e) => setEditChapterNumber(Number(e.target.value))}
+            label="章节标题"
+            value={newChapterTitle}
+            onChange={(event) => setNewChapterTitle(event.target.value)}
             margin="normal"
-            inputProps={{ min: 1 }}
+            placeholder="可留空，将按服务端分配的章节号生成标题"
+            autoFocus
           />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreateChapterDialogOpen(false)}>取消</Button>
+          <Button variant="contained" onClick={() => void handleCreateChapter()} disabled={creatingChapter}>
+            {creatingChapter ? '创建中...' : '创建章节'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={editChapterDialogOpen} onClose={() => setEditChapterDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>编辑章节标题</DialogTitle>
+        <DialogContent>
           <TextField
             fullWidth
             label="章节标题"
             value={editChapterTitle}
-            onChange={(e) => setEditChapterTitle(e.target.value)}
+            onChange={(event) => setEditChapterTitle(event.target.value)}
             margin="normal"
             autoFocus
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEditChapterDialogOpen(false)}>
-            取消
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleUpdateChapter}
-            disabled={updatingChapter || !editChapterTitle.trim()}
-          >
+          <Button onClick={() => setEditChapterDialogOpen(false)}>取消</Button>
+          <Button variant="contained" onClick={() => void handleUpdateChapter()} disabled={updatingChapter || !editChapterTitle.trim()}>
             {updatingChapter ? '更新中...' : '更新章节'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* 删除章节对话框 */}
-      <Dialog 
-        open={deleteChapterDialogOpen} 
-        onClose={() => setDeleteChapterDialogOpen(false)} 
-        maxWidth="sm" 
-        fullWidth
-      >
+      <Dialog open={deleteChapterDialogOpen} onClose={() => setDeleteChapterDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <WarningIcon color="error" />
           确认删除章节
         </DialogTitle>
         <DialogContent>
           <Alert severity="error" sx={{ mb: 2 }}>
-            <Typography variant="body2">
-              <strong>警告：此操作不可撤销！</strong>
-            </Typography>
+            此操作不可撤销。
           </Alert>
-          <Typography variant="body1" gutterBottom>
-            您确定要删除以下章节吗？
-          </Typography>
           {selectedChapterForMenu && (
-            <Box sx={{ p: 2, bgcolor: 'grey.50', borderRadius: 1, mt: 2 }}>
-              <Typography variant="body2" fontWeight="medium">
-                第{selectedChapterForMenu.chapter_number}章 - {selectedChapterForMenu.title}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                字数: {selectedChapterForMenu.word_count || 0} 字
-              </Typography>
-            </Box>
+            <Typography>
+              第{selectedChapterForMenu.chapter_number}章 - {selectedChapterForMenu.title}
+            </Typography>
           )}
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-            删除章节将同时清理相关的RAG向量数据和缓存。
-          </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteChapterDialogOpen(false)}>
-            取消
-          </Button>
-          <Button
-            variant="contained"
-            color="error"
-            onClick={handleDeleteChapter}
-            disabled={deletingChapter}
-          >
+          <Button onClick={() => setDeleteChapterDialogOpen(false)}>取消</Button>
+          <Button variant="contained" color="error" onClick={() => void handleDeleteChapter()} disabled={deletingChapter}>
             {deletingChapter ? '删除中...' : '确认删除'}
           </Button>
         </DialogActions>
@@ -1164,14 +1063,7 @@ export default function WorkspacePage() {
   return (
     <Suspense
       fallback={
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            height: '100vh',
-          }}
-        >
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100dvh' }}>
           <CircularProgress />
         </Box>
       }

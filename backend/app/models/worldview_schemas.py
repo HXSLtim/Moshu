@@ -1,11 +1,16 @@
 """
 世界观管理相关的Pydantic Schema
 """
-from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field
+import json
+from typing import Annotated, List, Optional, Dict, Any, Union
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from datetime import datetime
 
 from app.models.workflow_schemas import AgentWorkflowTrace
+
+
+BoundedAnalysisScope = Annotated[str, Field(min_length=1, max_length=50)]
+BoundedOptimizationGoal = Annotated[str, Field(min_length=1, max_length=500)]
 
 
 # ========== 世界观设定Schema ==========
@@ -248,13 +253,33 @@ class StyleGuideResponse(StyleGuideBase):
 
 class UnifiedMCPAction(BaseModel):
     """统一MCP操作"""
-    target_type: str = Field(..., description="目标类型: worldview, plot, timeline, outline, style, character")
-    action: str = Field(..., description="操作类型")
-    target_id: Optional[int] = Field(None, description="目标ID")
-    novel_id: Optional[int] = Field(None, description="小说ID")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="操作参数")
-    context: Optional[str] = Field(None, description="操作上下文")
-    ai_instructions: Optional[str] = Field(None, description="AI指令")
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="目标类型: worldview, plot, timeline, outline, style, character",
+    )
+    action: str = Field(..., min_length=1, max_length=50, description="操作类型")
+    target_id: Optional[int] = Field(None, gt=0, description="目标ID")
+    novel_id: Optional[int] = Field(None, gt=0, description="小说ID")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict,
+        max_length=50,
+        description="操作参数",
+    )
+    context: Optional[str] = Field(None, max_length=4_000, description="操作上下文")
+    ai_instructions: Optional[str] = Field(None, max_length=2_000, description="AI指令")
+
+    @model_validator(mode="after")
+    def validate_parameter_budget(self):
+        """限制嵌套参数的序列化体积，避免字典层级绕过字段长度预算。"""
+        serialized = json.dumps(self.parameters, ensure_ascii=False, default=str)
+        if len(serialized) > 20_000:
+            raise ValueError("MCP 操作参数不能超过 20000 个字符")
+        return self
 
 
 class UnifiedMCPResponse(BaseModel):
@@ -275,9 +300,16 @@ class UnifiedMCPResponse(BaseModel):
 
 class NovelAnalysisRequest(BaseModel):
     """小说分析请求"""
-    novel_id: int = Field(..., description="小说ID")
-    analysis_scope: List[str] = Field(..., description="分析范围")
-    analysis_depth: str = Field(default="comprehensive", description="分析深度")
+    model_config = ConfigDict(extra="forbid")
+
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    analysis_scope: List[BoundedAnalysisScope] = Field(
+        ...,
+        min_length=1,
+        max_length=10,
+        description="分析范围",
+    )
+    analysis_depth: str = Field(default="comprehensive", min_length=1, max_length=50, description="分析深度")
     include_suggestions: bool = Field(default=True, description="是否包含建议")
 
 
@@ -310,11 +342,27 @@ class NovelAnalysisResponse(BaseModel):
 
 class NovelOptimizationRequest(BaseModel):
     """小说优化请求"""
-    novel_id: int = Field(..., description="小说ID")
-    optimization_goals: List[str] = Field(..., description="优化目标")
-    target_areas: List[str] = Field(..., description="目标区域")
-    preserve_elements: Optional[List[str]] = Field(default_factory=list, description="保持元素")
-    optimization_intensity: str = Field(default="moderate", description="优化强度")
+    model_config = ConfigDict(extra="forbid")
+
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    optimization_goals: List[BoundedOptimizationGoal] = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        description="优化目标",
+    )
+    target_areas: List[BoundedAnalysisScope] = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        description="目标区域",
+    )
+    preserve_elements: Optional[List[BoundedOptimizationGoal]] = Field(
+        default_factory=list,
+        max_length=50,
+        description="保持元素",
+    )
+    optimization_intensity: str = Field(default="moderate", min_length=1, max_length=50, description="优化强度")
 
 
 class NovelOptimizationResponse(BaseModel):

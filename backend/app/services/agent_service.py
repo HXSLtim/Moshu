@@ -3,7 +3,7 @@
 实现基于LangGraph的三Agent协作工作流，并在内部构建Agent工作流追踪，
 便于前端可视化展示各个Agent节点的执行过程和数据流。
 """
-from typing import TypedDict, Annotated, Dict, Any, List
+from typing import TypedDict, Dict, Any, List
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
@@ -15,14 +15,117 @@ from app.models.schemas import (
     AgentType,
     ConsistencyCheckResult,
     ConsistencyCheckType,
+    FinalConsistencyStatus,
 )
 from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
 from app.services.rag_service import rag_service
 from app.services.consistency_service import consistency_service
+from app.services.context_budget import (
+    MAX_STORY_CONTEXT_CHARS,
+    MAX_WORLDVIEW_CONTEXT_CHARS,
+    build_prompt_trace_summary,
+    build_rag_query,
+    compact_text,
+    ensure_generation_prompt_budget,
+)
 from loguru import logger
 from datetime import datetime
 import json
-import asyncio
+
+
+MAX_GENERATION_RETRIES = 2
+
+
+def _build_final_consistency_status(
+    consistency_result: Dict[str, Any],
+    retry_count: int,
+) -> FinalConsistencyStatus:
+    """把最终一次检查转成前端可直接判定的状态。"""
+    has_conflict = bool(consistency_result.get("has_conflict", False))
+    checks_skipped = list(
+        dict.fromkeys(str(item) for item in consistency_result.get("checks_skipped", []))
+    )
+    raw_is_complete = consistency_result.get("is_complete")
+    is_complete = (
+        bool(raw_is_complete) and not checks_skipped
+        if raw_is_complete is not None
+        else not checks_skipped
+    )
+    retry_exhausted = has_conflict and retry_count >= MAX_GENERATION_RETRIES
+    if retry_exhausted:
+        final_status = "conflict_after_retries"
+    elif has_conflict:
+        final_status = "conflict"
+    elif not is_complete:
+        final_status = "incomplete"
+    else:
+        final_status = "passed"
+    return FinalConsistencyStatus(
+        status=final_status,
+        has_conflict=has_conflict,
+        retry_exhausted=retry_exhausted,
+        is_complete=is_complete,
+        checks_skipped=checks_skipped,
+        violations=[str(item) for item in consistency_result.get("violations", [])],
+    )
+
+
+def _build_consistency_checks(
+    consistency_result: Dict[str, Any],
+) -> List[ConsistencyCheckResult]:
+    """仅序列化真实执行过的检查层。
+
+    `ConsistencyCheckResult.is_valid` 只能表达布尔值，无法承载“未执行”。
+    跳过的层保留在 workflow trace 和 `checks_skipped` 中，不伪造成通过结果。
+    """
+    layer_results = consistency_result.get("layer_results", {}) or {}
+    checks: List[ConsistencyCheckResult] = []
+
+    rule_layer = layer_results.get("rule_engine") or {}
+    if rule_layer.get("status") == "completed":
+        checks.append(
+            ConsistencyCheckResult(
+                check_type=ConsistencyCheckType.RULE_ENGINE,
+                is_valid=rule_layer.get("is_valid") is True,
+                violations=list(rule_layer.get("violations", [])),
+            )
+        )
+
+    graph_layer = layer_results.get("knowledge_graph") or {}
+    if graph_layer.get("status") == "completed":
+        checks.append(
+            ConsistencyCheckResult(
+                check_type=ConsistencyCheckType.KNOWLEDGE_GRAPH,
+                is_valid=graph_layer.get("is_valid") is True,
+                violations=list(graph_layer.get("violations", [])),
+            )
+        )
+
+    timeline_layer = layer_results.get("timeline") or {}
+    if timeline_layer.get("status") == "completed":
+        timeline_is_valid = timeline_layer.get("is_valid") is True
+        timeline_violations: List[str] = []
+        if not timeline_is_valid and timeline_layer.get("reason"):
+            timeline_violations = [str(timeline_layer["reason"])]
+        checks.append(
+            ConsistencyCheckResult(
+                check_type=ConsistencyCheckType.TIMELINE,
+                is_valid=timeline_is_valid,
+                violations=timeline_violations,
+            )
+        )
+
+    emotion_layer = layer_results.get("emotion_state") or {}
+    if emotion_layer.get("status") == "completed":
+        checks.append(
+            ConsistencyCheckResult(
+                check_type=ConsistencyCheckType.EMOTION,
+                is_valid=emotion_layer.get("is_valid") is True,
+                violations=list(emotion_layer.get("violations", [])),
+            )
+        )
+
+    return checks
 
 
 # ========== 定义LangGraph状态 ==========
@@ -67,13 +170,19 @@ class AgentService:
             model=settings.OPENAI_MODEL_COMPLEX,
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.OPENAI_API_BASE,
-            temperature=0.8
+            temperature=0.8,
+            max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=settings.LLM_MAX_RETRIES,
         )
         self.llm_simple = ChatOpenAI(
             model=settings.OPENAI_MODEL_SIMPLE,
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.OPENAI_API_BASE,
-            temperature=0.7
+            temperature=0.7,
+            max_tokens=min(settings.LLM_MAX_OUTPUT_TOKENS, 1024),
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=settings.LLM_MAX_RETRIES,
         )
 
         # 构建工作流图
@@ -90,6 +199,7 @@ class AgentService:
         workflow.add_node("agent_b_character", self._agent_b_character)
         workflow.add_node("agent_c_plot", self._agent_c_plot)
         workflow.add_node("consistency_check", self._consistency_check)
+        workflow.add_node("increment_retry", self._increment_retry)
 
         # 定义执行顺序
         workflow.set_entry_point("retrieve_context")
@@ -103,10 +213,11 @@ class AgentService:
             "consistency_check",
             self._should_retry,
             {
-                "retry": "agent_c_plot",  # 回退到Agent C重新生成
+                "retry": "increment_retry",
                 "end": END
             }
         )
+        workflow.add_edge("increment_retry", "agent_c_plot")
 
         return workflow.compile()
 
@@ -115,7 +226,12 @@ class AgentService:
         检索上下文节点
         从RAG中检索世界观和角色信息
         """
-        logger.info(f"检索上下文：小说{state['novel_id']}，提示词:'{state['prompt']}'")
+        logger.info(
+            "检索上下文：小说{}，章节{}，提示词长度={}",
+            state["novel_id"],
+            state["chapter"],
+            len(state["prompt"]),
+        )
 
         # 为避免剧透，RAG只检索当前章节及之前的内容
         current_chapter = state.get("chapter", 1)
@@ -125,7 +241,7 @@ class AgentService:
         step_start = datetime.utcnow()
         worldview_context = await rag_service.retrieve_worldview(
             novel_id=state["novel_id"],
-            query=state["prompt"],
+            query=build_rag_query(state["prompt"]),
             max_chapter=max_chapter,
         )
 
@@ -139,7 +255,7 @@ class AgentService:
         step_end = datetime.utcnow()
 
         # 记录工作流步骤
-        steps = state.get("workflow_steps", [])
+        steps = list(state.get("workflow_steps", []))
         retrieve_step = AgentWorkflowStep(
             id="retrieve_context",
             parent_id=None,
@@ -150,7 +266,7 @@ class AgentService:
             input={
                 "novel_id": state["novel_id"],
                 "chapter": state["chapter"],
-                "prompt": state["prompt"],
+                **build_prompt_trace_summary(state["prompt"]),
                 "max_chapter": max_chapter,
             },
             output={
@@ -211,7 +327,7 @@ class AgentService:
         worldview_output = response.content
         logger.info(f"Agent A输出：{worldview_output[:50]}...")
 
-        steps = state.get("workflow_steps", [])
+        steps = list(state.get("workflow_steps", []))
         step = AgentWorkflowStep(
             id="agent_a_worldview",
             parent_id="retrieve_context",
@@ -220,7 +336,7 @@ class AgentService:
             title="世界观描写Agent",
             description="基于检索到的世界观上下文生成环境与氛围描写。",
             input={
-                "prompt": state["prompt"],
+                **build_prompt_trace_summary(state["prompt"]),
                 "target_length_hint": "150-200",
             },
             output={
@@ -284,7 +400,7 @@ class AgentService:
         character_output = response.content
         logger.info(f"Agent B输出：{character_output[:50]}...")
 
-        steps = state.get("workflow_steps", [])
+        steps = list(state.get("workflow_steps", []))
         step = AgentWorkflowStep(
             id="agent_b_character",
             parent_id="agent_a_worldview",
@@ -293,7 +409,7 @@ class AgentService:
             title="角色描写Agent",
             description="基于世界观描写和角色信息生成对话与心理描写。",
             input={
-                "prompt": state["prompt"],
+                **build_prompt_trace_summary(state["prompt"]),
                 "worldview_preview": state.get("worldview_output", "")[:80],
             },
             output={
@@ -384,16 +500,20 @@ class AgentService:
         plot_output = response.content
         logger.info(f"Agent C输出：{plot_output[:50]}...（共{len(plot_output)}字）")
 
-        steps = state.get("workflow_steps", [])
+        steps = list(state.get("workflow_steps", []))
         step = AgentWorkflowStep(
-            id="agent_c_plot",
-            parent_id="agent_b_character",
+            id=f"agent_c_plot_{retry_count}",
+            parent_id=(
+                "agent_b_character"
+                if retry_count == 0
+                else f"consistency_check_{retry_count - 1}"
+            ),
             type="llm",
             agent_name="AgentCPlot",
             title="剧情控制Agent",
             description="整合世界观与角色内容，生成最终剧情输出。",
             input={
-                "prompt": state["prompt"],
+                **build_prompt_trace_summary(state["prompt"]),
                 "target_length": state["target_length"],
             },
             output={
@@ -432,10 +552,11 @@ class AgentService:
         )
         step_end = datetime.utcnow()
 
-        steps = state.get("workflow_steps", [])
+        steps = list(state.get("workflow_steps", []))
+        retry_count = state.get("retry_count", 0)
         consistency_step = AgentWorkflowStep(
-            id="consistency_check",
-            parent_id="agent_c_plot",
+            id=f"consistency_check_{retry_count}",
+            parent_id=f"agent_c_plot_{retry_count}",
             type="consistency",
             agent_name="ConsistencyService",
             title="一致性检查",
@@ -448,6 +569,8 @@ class AgentService:
             output={
                 "has_conflict": result.get("has_conflict", False),
                 "violation_count": len(result.get("violations", [])),
+                "is_complete": result.get("is_complete", False),
+                "checks_skipped": list(result.get("checks_skipped", [])),
             },
             data_sources={
                 "consistency_layer_results": result.get("layer_results", {}),
@@ -476,9 +599,8 @@ class AgentService:
 
         # 如果有冲突且重试次数小于2次，则重试
         # 注意：最多重试2次（总共3次生成），防止无限重试
-        if has_conflict and retry_count < 2:
+        if has_conflict and retry_count < MAX_GENERATION_RETRIES:
             logger.warning(f"检测到一致性冲突，执行第{retry_count + 1}次重试")
-            state["retry_count"] = retry_count + 1
             return "retry"
 
         if has_conflict:
@@ -487,6 +609,12 @@ class AgentService:
             logger.info(f"最后一次生成的内容长度：{len(state.get('plot_output', ''))}字")
 
         return "end"
+
+    def _increment_retry(self, state: NovelGenerationState) -> Dict[str, int]:
+        """通过正式图节点写回重试次数，避免在条件路由中修改临时状态。"""
+
+        retry_count = state.get("retry_count", 0) + 1
+        return {"retry_count": retry_count}
 
     async def generate_content(
         self,
@@ -501,12 +629,18 @@ class AgentService:
         Returns:
             生成响应
         """
-        logger.info(f"开始生成内容：小说{request.novel_id}，章节{request.chapter}")
+        bounded_prompt = ensure_generation_prompt_budget(request.prompt)
+        logger.info(
+            "开始生成内容：小说{}，章节{}，提示词长度={}",
+            request.novel_id,
+            request.chapter,
+            len(bounded_prompt),
+        )
 
         # 准备初始状态
         initial_state: NovelGenerationState = {
             "novel_id": request.novel_id,
-            "prompt": request.prompt,
+            "prompt": bounded_prompt,
             "chapter": request.chapter,
             "current_day": request.current_day,
             "target_length": request.target_length,
@@ -525,53 +659,7 @@ class AgentService:
 
         # 从一致性结果中构建结构化的一致性检查列表
         consistency_result = final_state.get("consistency_result", {}) or {}
-        layer_results = consistency_result.get("layer_results", {}) or {}
-
-        consistency_checks: List[ConsistencyCheckResult] = []
-
-        # 规则引擎
-        rule_layer = layer_results.get("rule_engine") or {}
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.RULE_ENGINE,
-                is_valid=bool(rule_layer.get("is_valid", True)),
-                violations=list(rule_layer.get("violations", [])),
-            )
-        )
-
-        # 知识图谱
-        kg_layer = layer_results.get("knowledge_graph") or {}
-        kg_violations = list(kg_layer.get("violations", []))
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.KNOWLEDGE_GRAPH,
-                is_valid=not bool(kg_violations),
-                violations=kg_violations,
-            )
-        )
-
-        # 时间线
-        timeline_layer = layer_results.get("timeline") or {}
-        timeline_is_valid = bool(timeline_layer.get("is_valid", True))
-        timeline_violations: List[str] = []
-        if not timeline_is_valid and timeline_layer.get("reason"):
-            timeline_violations = [str(timeline_layer.get("reason"))]
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.TIMELINE,
-                is_valid=timeline_is_valid,
-                violations=timeline_violations,
-            )
-        )
-
-        # 情绪状态机（目前为占位）
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.EMOTION,
-                is_valid=True,
-                violations=[],
-            )
-        )
+        consistency_checks = _build_consistency_checks(consistency_result)
 
         # 构建Agent工作流追踪
         steps_data = final_state.get("workflow_steps", []) or []
@@ -615,6 +703,10 @@ class AgentService:
             ],
             consistency_checks=consistency_checks,
             retry_count=final_state["retry_count"],
+            final_consistency=_build_final_consistency_status(
+                consistency_result,
+                final_state["retry_count"],
+            ),
             generated_at=datetime.now(),
             worldview_context=final_state.get("worldview_context", []),
             character_context=final_state.get("character_context", []),
@@ -631,12 +723,18 @@ class AgentService:
         """
         流式生成小说内容，yield事件
         """
-        logger.info(f"开始流式生成内容：小说{request.novel_id}，章节{request.chapter}")
+        bounded_prompt = ensure_generation_prompt_budget(request.prompt)
+        logger.info(
+            "开始流式生成内容：小说{}，章节{}，提示词长度={}",
+            request.novel_id,
+            request.chapter,
+            len(bounded_prompt),
+        )
 
         # 准备初始状态
         initial_state: NovelGenerationState = {
             "novel_id": request.novel_id,
-            "prompt": request.prompt,
+            "prompt": bounded_prompt,
             "chapter": request.chapter,
             "current_day": request.current_day,
             "target_length": request.target_length,
@@ -682,59 +780,36 @@ class AgentService:
                     result = node_data.get("consistency_result", {})
                     has_conflict = result.get("has_conflict", False)
                     if has_conflict:
-                         yield {"type": "agent", "agent": "Consistency", "status": "发现冲突，准备重试", "data": {"violations": result.get("violations", [])}}
+                        retry_count = final_state.get("retry_count", 0)
+                        status = (
+                            "发现冲突，已达重试上限"
+                            if retry_count >= MAX_GENERATION_RETRIES
+                            else "发现冲突，准备重试"
+                        )
+                        yield {
+                            "type": "agent",
+                            "agent": "Consistency",
+                            "status": status,
+                            "data": {"violations": result.get("violations", [])},
+                        }
+                    elif not result.get("is_complete", False):
+                        yield {
+                            "type": "agent",
+                            "agent": "Consistency",
+                            "status": "已完成可用检查，部分检查已跳过",
+                            "data": {"checks_skipped": result.get("checks_skipped", [])},
+                        }
                     else:
-                         yield {"type": "agent", "agent": "Consistency", "status": "检查通过", "data": None}
+                        yield {
+                            "type": "agent",
+                            "agent": "Consistency",
+                            "status": "检查通过",
+                            "data": None,
+                        }
 
         # 从一致性结果中构建结构化的一致性检查列表
         consistency_result = final_state.get("consistency_result", {}) or {}
-        layer_results = consistency_result.get("layer_results", {}) or {}
-
-        consistency_checks: List[ConsistencyCheckResult] = []
-
-        # 规则引擎
-        rule_layer = layer_results.get("rule_engine") or {}
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.RULE_ENGINE,
-                is_valid=bool(rule_layer.get("is_valid", True)),
-                violations=list(rule_layer.get("violations", [])),
-            )
-        )
-
-        # 知识图谱
-        kg_layer = layer_results.get("knowledge_graph") or {}
-        kg_violations = list(kg_layer.get("violations", []))
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.KNOWLEDGE_GRAPH,
-                is_valid=not bool(kg_violations),
-                violations=kg_violations,
-            )
-        )
-
-        # 时间线
-        timeline_layer = layer_results.get("timeline") or {}
-        timeline_is_valid = bool(timeline_layer.get("is_valid", True))
-        timeline_violations: List[str] = []
-        if not timeline_is_valid and timeline_layer.get("reason"):
-            timeline_violations = [str(timeline_layer.get("reason"))]
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.TIMELINE,
-                is_valid=timeline_is_valid,
-                violations=timeline_violations,
-            )
-        )
-
-        # 情绪状态机（目前为占位）
-        consistency_checks.append(
-            ConsistencyCheckResult(
-                check_type=ConsistencyCheckType.EMOTION,
-                is_valid=True,
-                violations=[],
-            )
-        )
+        consistency_checks = _build_consistency_checks(consistency_result)
 
         # 构建Agent工作流追踪
         steps_data = final_state.get("workflow_steps", []) or []
@@ -777,6 +852,10 @@ class AgentService:
             ],
             consistency_checks=consistency_checks,
             retry_count=final_state["retry_count"],
+            final_consistency=_build_final_consistency_status(
+                consistency_result,
+                final_state["retry_count"],
+            ),
             generated_at=datetime.now(),
             worldview_context=final_state.get("worldview_context", []),
             character_context=final_state.get("character_context", []),
@@ -835,11 +914,39 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.8
+                temperature=0.8,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
+            existing_characters = context.get("existing_characters") or []
+            if isinstance(existing_characters, list):
+                existing_characters = "、".join(
+                    str(item) for item in existing_characters[:100]
+                )
+            generation_context = {
+                "novel_title": str(context.get("novel_title") or "未命名小说"),
+                "novel_genre": str(context.get("novel_genre") or "未指定"),
+                "worldview": compact_text(
+                    str(context.get("worldview") or ""),
+                    MAX_WORLDVIEW_CONTEXT_CHARS,
+                    keep="head",
+                ) or "未设定",
+                "character_requirements": compact_text(
+                    str(context.get("character_requirements") or ""),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep="both",
+                ) or "无特别要求",
+                "existing_characters": compact_text(
+                    str(existing_characters),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep="both",
+                ) or "暂无",
+            }
+
             chain = prompt | llm
-            response = await chain.ainvoke(context)
+            response = await chain.ainvoke(generation_context)
             
             # 解析JSON响应
             character_data = json.loads(response.content)
@@ -945,25 +1052,62 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.3
+                temperature=0.3,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             # 格式化关系和出场信息
+            relationships = (context.get('relationships') or [])[:50]
             relationships_str = "\n".join([
                 f"- 与{rel['target']}的{rel['type']}关系（强度：{rel['strength']}/10）"
-                for rel in context.get('relationships', [])
-            ]) if context.get('relationships') else "暂无关系记录"
+                for rel in relationships
+            ]) if relationships else "暂无关系记录"
+            relationships_str = compact_text(
+                relationships_str,
+                MAX_STORY_CONTEXT_CHARS,
+                keep="both",
+            )
             
+            appearances = (context.get('appearances') or [])[-50:]
             appearances_str = "\n".join([
                 f"- 第{app['chapter']}章：{app['type']}出场（重要性：{app['importance']}/10）"
-                for app in context.get('appearances', [])
-            ]) if context.get('appearances') else "暂无出场记录"
+                for app in appearances
+            ]) if appearances else "暂无出场记录"
+            appearances_str = compact_text(
+                appearances_str,
+                MAX_STORY_CONTEXT_CHARS,
+                keep="tail",
+            )
+
+            character_context = context['character']
             
             analysis_context = {
-                **context['character'],
+                'name': str(character_context.get('name') or '未命名角色')[:100],
+                'age': character_context.get('age'),
+                'personality': compact_text(
+                    str(character_context.get('personality') or ''),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'background': compact_text(
+                    str(character_context.get('background') or ''),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'character_arc': compact_text(
+                    str(character_context.get('character_arc') or ''),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
                 'relationships': relationships_str,
                 'appearances': appearances_str,
-                'analysis_type': context['analysis_type']
+                'analysis_type': compact_text(
+                    str(context.get('analysis_type') or 'comprehensive'),
+                    50,
+                    keep='head',
+                ),
             }
             
             chain = prompt | llm
@@ -1063,15 +1207,46 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.5
+                temperature=0.5,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             # 格式化上下文
+            character_context = context['character']
             optimization_context = {
-                **context['character'],
-                'goals': "\n".join([f"- {goal}" for goal in context['goals']]),
-                'preserve': "\n".join([f"- {trait}" for trait in context['preserve']]),
-                'skills': ", ".join(context['character'].get('skills', []))
+                'name': str(character_context.get('name') or '未命名角色')[:100],
+                'personality': compact_text(
+                    str(character_context.get('personality') or ''),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'background': compact_text(
+                    str(character_context.get('background') or ''),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'character_arc': compact_text(
+                    str(character_context.get('character_arc') or ''),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'goals': compact_text(
+                    "\n".join([f"- {goal}" for goal in context['goals']]),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'preserve': compact_text(
+                    "\n".join([f"- {trait}" for trait in context['preserve']]),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
+                'skills': compact_text(
+                    ", ".join(str(item) for item in character_context.get('skills', [])),
+                    MAX_STORY_CONTEXT_CHARS,
+                    keep='both',
+                ),
             }
             
             chain = prompt | llm
@@ -1173,7 +1348,10 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.3
+                temperature=0.3,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
@@ -1272,7 +1450,10 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.5
+                temperature=0.5,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
@@ -1339,7 +1520,10 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.7
+                temperature=0.7,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
@@ -1401,7 +1585,10 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.3
+                temperature=0.3,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
@@ -1450,7 +1637,10 @@ class AgentService:
                 model=settings.OPENAI_MODEL_COMPLEX,
                 api_key=settings.OPENAI_API_KEY,
                 base_url=settings.OPENAI_API_BASE,
-                temperature=0.4
+                temperature=0.4,
+                max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm

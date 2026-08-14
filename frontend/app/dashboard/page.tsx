@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Container,
@@ -28,7 +28,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import SearchIcon from '@mui/icons-material/Search';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import type { Novel, NovelCreate } from '@/types';
 
 export default function DashboardPage() {
@@ -55,6 +55,8 @@ export default function DashboardPage() {
   const [generationStep, setGenerationStep] = useState('');
   const [novelStats, setNovelStats] = useState<Record<number, { chapterCount: number; totalWords: number }>>({});
   const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState('');
+  const loadRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -110,53 +112,60 @@ export default function DashboardPage() {
     }
   }, [openDialog, editingNovel, novelForm]);
 
-  useEffect(() => {
-    loadNovels();
-  }, []);
+  const loadNovels = useCallback(async () => {
+    const requestId = (loadRequestRef.current?.id ?? 0) + 1;
+    loadRequestRef.current?.controller.abort();
+    const controller = new AbortController();
+    loadRequestRef.current = { id: requestId, controller };
 
-  const loadNovels = async () => {
+    setLoading(true);
+    setStatsLoading(true);
+    void api
+      .getNovelStatistics({ signal: controller.signal })
+      .then((statistics) => {
+        if (loadRequestRef.current?.id !== requestId) return;
+        const statsMap: Record<number, { chapterCount: number; totalWords: number }> = {};
+        for (const item of statistics) {
+          statsMap[item.novel_id] = {
+            chapterCount: item.chapter_count,
+            totalWords: item.total_words,
+          };
+        }
+        setNovelStats(statsMap);
+        setStatsError('');
+      })
+      .catch((err) => {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        if (loadRequestRef.current?.id !== requestId) return;
+        setNovelStats({});
+        setStatsError('统计数据暂不可用，小说列表和编辑功能不受影响');
+      })
+      .finally(() => {
+        if (loadRequestRef.current?.id === requestId) setStatsLoading(false);
+      });
+
     try {
       const data = await api.getNovels();
+      if (loadRequestRef.current?.id !== requestId) return;
       setNovels(data);
-      await loadStatsForNovels(data);
+      setError('');
     } catch (err) {
-      setError('获取小说列表失败，请重新登录');
-      // Token可能失效，跳转到登录页
-      setTimeout(() => router.push('/'), 2000);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadStatsForNovels = async (novelsList: Novel[]) => {
-    if (!novelsList || novelsList.length === 0) {
-      setNovelStats({});
-      return;
-    }
-    try {
-      setStatsLoading(true);
-      const entries = await Promise.all(
-        novelsList.map(async (novel) => {
-          try {
-            const chapters = await api.getChapters(novel.id);
-            const chapterCount = chapters.length;
-            const totalWords = chapters.reduce((sum, chapter) => sum + (chapter.word_count || 0), 0);
-            return [novel.id, { chapterCount, totalWords }] as const;
-          } catch {
-            return [novel.id, { chapterCount: 0, totalWords: 0 }] as const;
-          }
-        }),
-      );
-
-      const map: Record<number, { chapterCount: number; totalWords: number }> = {};
-      for (const [id, value] of entries) {
-        map[id] = value;
+      if (loadRequestRef.current?.id !== requestId) return;
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        setError('登录状态已失效，请重新登录');
+        setTimeout(() => router.push('/'), 2000);
+      } else {
+        setError(err instanceof Error ? err.message : '获取小说列表失败');
       }
-      setNovelStats(map);
     } finally {
-      setStatsLoading(false);
+      if (loadRequestRef.current?.id === requestId) setLoading(false);
     }
-  };
+  }, [router]);
+
+  useEffect(() => {
+    void loadNovels();
+    return () => loadRequestRef.current?.controller.abort();
+  }, [loadNovels]);
 
   const handleCreateNovel = () => {
     setNovelForm({ title: '', genre: '', description: '', worldview: '' });
@@ -416,6 +425,12 @@ export default function DashboardPage() {
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
             {error}
+          </Alert>
+        )}
+
+        {statsError && (
+          <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setStatsError('')}>
+            {statsError}
           </Alert>
         )}
 

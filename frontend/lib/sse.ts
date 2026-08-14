@@ -1,8 +1,9 @@
 export type SSEEvent =
   | { type: 'chunk'; content: string }
-  | { type: 'metadata'; data: any }
+  | { type: 'metadata'; data: unknown }
   | { type: 'done' }
-  | { type: string; [key: string]: any };
+  | { type: 'error'; message?: string }
+  | { type: string; [key: string]: unknown };
 
 export interface SSECallbacks {
   /** 收到任意原始事件时的回调 */
@@ -10,23 +11,54 @@ export interface SSECallbacks {
   /** 收到文本块事件时的回调 */
   onChunk?: (content: string) => void;
   /** 收到元数据事件时的回调 */
-  onMetadata?: (metadata: any) => void;
-  /** 收到完成事件或流结束时的回调 */
+  onMetadata?: (metadata: unknown) => void;
+  /** 仅在收到明确的 done 事件后调用 */
   onDone?: () => void;
 }
 
+export interface SSEReadOptions {
+  signal?: AbortSignal;
+}
+
+export class SSEUnexpectedEOFError extends Error {
+  constructor() {
+    super('SSE 流在完成事件到达前中断');
+    this.name = 'SSEUnexpectedEOFError';
+  }
+}
+
+function createAbortError(reason?: unknown): DOMException {
+  const message = reason instanceof Error ? reason.message : '请求已取消';
+  return new DOMException(message, 'AbortError');
+}
+
+function parseEventBlock(block: string): SSEEvent | null {
+  const dataLines = block
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trimStart());
+
+  if (dataLines.length === 0) return null;
+
+  const payload = dataLines.join('\n');
+  try {
+    return JSON.parse(payload) as SSEEvent;
+  } catch (error) {
+    throw new Error(
+      `SSE 数据解析失败：${error instanceof Error ? error.message : '未知错误'}`,
+    );
+  }
+}
+
 /**
- * 通用 SSE 解析工具
+ * 读取由 fetch 返回的 SSE 流。
  *
- * 约定后端以 `data: { json }` 形式推送，每个事件一行，以 `\n\n` 分隔。
- * 事件结构形如：
- * - { "type": "chunk", "content": "..." }
- * - { "type": "metadata", "data": { ... } }
- * - { "type": "done" }
+ * 生成类请求不能把普通 EOF 当成成功，否则网络中断会被界面误报为完成。
  */
 export async function readSSEFromResponse(
   res: Response,
   callbacks: SSECallbacks,
+  options: SSEReadOptions = {},
 ): Promise<void> {
   if (!res.body) {
     throw new Error('SSE 响应没有 body');
@@ -34,66 +66,70 @@ export async function readSSEFromResponse(
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const { signal } = options;
   let buffer = '';
   let receivedDone = false;
 
+  const handleAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+
+  if (signal?.aborted) {
+    await reader.cancel(signal.reason).catch(() => undefined);
+    throw createAbortError(signal.reason);
+  }
+  signal?.addEventListener('abort', handleAbort, { once: true });
+
+  const dispatch = (event: SSEEvent | null): boolean => {
+    if (!event) return false;
+
+    callbacks.onEvent?.(event);
+    if (event.type === 'chunk' && typeof event.content === 'string') {
+      callbacks.onChunk?.(event.content);
+    } else if (event.type === 'metadata') {
+      callbacks.onMetadata?.(event.data);
+    } else if (event.type === 'done') {
+      receivedDone = true;
+      callbacks.onDone?.();
+      return true;
+    } else if (event.type === 'error') {
+      throw new Error(
+        `SSE 后端错误：${typeof event.message === 'string' ? event.message : '未知错误'}`,
+      );
+    }
+    return false;
+  };
+
   try {
-    while (true) {
+    while (!receivedDone) {
+      if (signal?.aborted) throw createAbortError(signal.reason);
+
       const { done, value } = await reader.read();
+      if (signal?.aborted) throw createAbortError(signal.reason);
 
       if (done) {
-        // 如果流正常结束但没有收到 done 事件，说明连接异常中断
-        if (!receivedDone) {
-          console.warn('SSE 流异常中断：未收到完成事件');
+        buffer += decoder.decode();
+        const trailing = buffer.trim();
+        if (trailing && dispatch(parseEventBlock(trailing))) {
+          await reader.cancel().catch(() => undefined);
+          return;
         }
-        callbacks.onDone?.();
-        break;
+        throw new SSEUnexpectedEOFError();
       }
 
-      // 累积当前 chunk
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() ?? '';
 
-      // 保留最后一行（可能是不完整的 JSON）
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6);
-
-        try {
-          const json = JSON.parse(payload) as SSEEvent;
-          callbacks.onEvent?.(json);
-
-          if (json.type === 'chunk' && typeof (json as any).content === 'string') {
-            callbacks.onChunk?.((json as any).content);
-          } else if (json.type === 'metadata') {
-            callbacks.onMetadata?.((json as any).data);
-          } else if (json.type === 'done') {
-            receivedDone = true;
-            callbacks.onDone?.();
-            return;
-          } else if (json.type === 'error') {
-            // 处理后端发送的错误事件
-            const errorMsg = (json as any).message || '未知错误';
-            console.error('SSE 后端错误:', errorMsg);
-            throw new Error(`SSE 后端错误: ${errorMsg}`);
-          }
-        } catch (e) {
-          // 解析失败时仅在控制台打印，不打断整个流
-          // eslint-disable-next-line no-console
-          if (e instanceof Error && e.message.startsWith('SSE 后端错误')) {
-            throw e;
-          }
-          console.error('解析 SSE 数据失败:', e, line);
+      for (const block of blocks) {
+        if (dispatch(parseEventBlock(block))) {
+          await reader.cancel().catch(() => undefined);
+          return;
         }
       }
     }
-  } catch (e) {
-    // 确保调用 onDone，让前端知道流已结束（无论成功还是失败）
-    if (!receivedDone) {
-      callbacks.onDone?.();
-    }
-    throw e;
+  } finally {
+    signal?.removeEventListener('abort', handleAbort);
+    reader.releaseLock();
   }
 }

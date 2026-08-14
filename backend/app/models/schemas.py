@@ -2,12 +2,33 @@
 Pydantic数据模型
 定义API请求和响应的数据结构
 """
-from pydantic import BaseModel, Field, EmailStr
-from typing import Optional, List, Dict, Any
+import json
 from datetime import datetime
 from enum import Enum
+from typing import Annotated, Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from app.models.workflow_schemas import AgentWorkflowTrace
+
+
+# 持久化请求保留比单次模型上下文更宽的容量，但不允许无界输入。
+MAX_STYLE_SAMPLE_CHARS = 100_000
+MAX_NOVEL_DESCRIPTION_CHARS = 8_000
+MAX_NOVEL_WORLDVIEW_CHARS = 50_000
+MAX_CHAPTER_CONTENT_CHARS = 500_000
+MAX_PLOT_OPTIONS_CONTENT_CHARS = 50_000
+MAX_REWRITE_SOURCE_CHARS = 20_000
+MAX_RESEARCH_QUERY_CHARS = 500
+MAX_NESTED_REQUEST_CHARS = 50_000
+
+BoundedOutlineText = Annotated[str, Field(min_length=1, max_length=2_000)]
+
+
+class StrictWriteModel(BaseModel):
+    """写请求基类：拒绝未声明字段，避免客户端误以为更新已生效。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # ========== 用户认证相关模型 ==========
@@ -23,10 +44,10 @@ class UserCreate(UserBase):
     password: str = Field(..., min_length=6, max_length=50, description="密码")
 
 
-class UserLogin(BaseModel):
+class UserLogin(StrictWriteModel):
     """用户登录Schema"""
-    username: str = Field(..., description="用户名")
-    password: str = Field(..., description="密码")
+    username: str = Field(..., min_length=3, max_length=50, description="用户名")
+    password: str = Field(..., min_length=6, max_length=50, description="密码")
 
 
 class UserResponse(UserBase):
@@ -39,11 +60,16 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
-class StyleSampleCreate(BaseModel):
+class StyleSampleCreate(StrictWriteModel):
     """文风样本创建请求"""
-    novel_id: int = Field(..., description="小说ID")
+    novel_id: int = Field(..., gt=0, description="小说ID")
     name: str = Field(..., min_length=1, max_length=100, description="文风名称")
-    sample_text: str = Field(..., min_length=1, description="文风样本文本")
+    sample_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_STYLE_SAMPLE_CHARS,
+        description="文风样本文本",
+    )
 
 
 class StyleSampleResponse(BaseModel):
@@ -85,20 +111,44 @@ class ConsistencyCheckType(str, Enum):
 
 # ========== 小说相关模型 ==========
 
-class NovelCreate(BaseModel):
+
+class NovelCreate(StrictWriteModel):
     """创建小说请求"""
     title: str = Field(..., min_length=1, max_length=200, description="小说标题")
     genre: Optional[str] = Field(None, max_length=50, description="小说类型（如玄幻、科幻等）")
-    description: Optional[str] = Field(None, description="小说简介")
-    worldview: Optional[str] = Field(None, description="世界观设定")
+    description: Optional[str] = Field(
+        None,
+        max_length=MAX_NOVEL_DESCRIPTION_CHARS,
+        description="小说简介",
+    )
+    worldview: Optional[str] = Field(
+        None,
+        max_length=MAX_NOVEL_WORLDVIEW_CHARS,
+        description="世界观设定",
+    )
 
 
-class NovelUpdate(BaseModel):
+class NovelUpdate(StrictWriteModel):
     """更新小说请求"""
     title: Optional[str] = Field(None, min_length=1, max_length=200, description="小说标题")
     genre: Optional[str] = Field(None, max_length=50, description="小说类型")
-    description: Optional[str] = Field(None, description="小说简介")
-    worldview: Optional[str] = Field(None, description="世界观设定")
+    description: Optional[str] = Field(
+        None,
+        max_length=MAX_NOVEL_DESCRIPTION_CHARS,
+        description="小说简介",
+    )
+    worldview: Optional[str] = Field(
+        None,
+        max_length=MAX_NOVEL_WORLDVIEW_CHARS,
+        description="世界观设定",
+    )
+
+    @model_validator(mode="after")
+    def validate_update_fields(self):
+        """拒绝空更新，同时允许显式传 null 清空可选字段。"""
+        if not self.model_fields_set:
+            raise ValueError("至少需要提供一个要更新的小说字段")
+        return self
 
 
 class NovelResponse(BaseModel):
@@ -116,20 +166,62 @@ class NovelResponse(BaseModel):
         from_attributes = True
 
 
+class NovelStatisticsItem(BaseModel):
+    """单部小说的章节与字数统计。"""
+
+    novel_id: int
+    chapter_count: int
+    total_words: int
+
+
+class NovelStatisticsResponse(BaseModel):
+    """当前用户全部小说的聚合统计。"""
+
+    items: List[NovelStatisticsItem]
+
+
 # ========== 章节相关模型 ==========
 
-class ChapterCreate(BaseModel):
+class ChapterCreate(StrictWriteModel):
     """创建章节请求"""
     chapter_number: int = Field(..., gt=0, description="章节号")
     title: str = Field(..., min_length=1, max_length=200, description="章节标题")
     # 新建章节时允许正文为空，用户可以稍后再填写
-    content: str = Field("", description="章节内容")
+    content: str = Field(
+        "",
+        max_length=MAX_CHAPTER_CONTENT_CHARS,
+        description="章节内容",
+    )
 
 
-class ChapterUpdate(BaseModel):
-    """更新章节请求"""
+class ChapterNextCreate(StrictWriteModel):
+    """由服务端分配章节号的创建请求。"""
+
     title: Optional[str] = Field(None, min_length=1, max_length=200, description="章节标题")
-    content: Optional[str] = Field(None, min_length=1, description="章节内容")
+    content: str = Field(
+        "",
+        max_length=MAX_CHAPTER_CONTENT_CHARS,
+        description="章节内容",
+    )
+
+
+class ChapterUpdate(StrictWriteModel):
+    """更新章节请求"""
+    expected_version: int = Field(..., ge=1, description="客户端读取到的章节版本")
+    chapter_number: Optional[int] = Field(None, gt=0, description="新的章节号")
+    title: Optional[str] = Field(None, min_length=1, max_length=200, description="章节标题")
+    content: Optional[str] = Field(
+        None,
+        max_length=MAX_CHAPTER_CONTENT_CHARS,
+        description="章节内容",
+    )
+
+    @model_validator(mode="after")
+    def validate_update_fields(self):
+        """更新请求必须至少修改一个业务字段。"""
+        if self.chapter_number is None and self.title is None and self.content is None:
+            raise ValueError("至少需要提供一个要更新的章节字段")
+        return self
 
 
 class ChapterResponse(BaseModel):
@@ -140,11 +232,37 @@ class ChapterResponse(BaseModel):
     title: str
     content: str
     word_count: int
+    version: int
     created_at: datetime
     updated_at: Optional[datetime]
 
     class Config:
         from_attributes = True
+
+
+class ChapterSummary(BaseModel):
+    """章节列表摘要，不携带正文。"""
+
+    id: int
+    novel_id: int
+    chapter_number: int
+    title: str
+    word_count: int
+    version: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ChapterPageResponse(BaseModel):
+    """章节摘要分页响应。"""
+
+    items: List[ChapterSummary]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
 
 
 class EditorIssue(BaseModel):
@@ -185,19 +303,31 @@ class ChapterWithReviewResponse(ChapterResponse):
 
 # ========== 世界观相关模型 ==========
 
-class WorldviewRule(BaseModel):
+class WorldviewRule(StrictWriteModel):
     """世界观规则"""
-    name: str = Field(..., description="规则名称（如魔法等级上限）")
+    name: str = Field(..., min_length=1, max_length=200, description="规则名称（如魔法等级上限）")
     value: Any = Field(..., description="规则值（如9）")
-    description: Optional[str] = Field(None, description="规则说明")
+    description: Optional[str] = Field(None, max_length=4_000, description="规则说明")
 
 
-class WorldviewCreate(BaseModel):
+class WorldviewCreate(StrictWriteModel):
     """创建世界观请求"""
-    novel_id: int = Field(..., description="小说ID")
-    name: str = Field(..., description="世界观名称（如魔法体系）")
-    content: str = Field(..., description="世界观内容描述")
-    rules: List[WorldviewRule] = Field(default_factory=list, description="硬规则列表")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    name: str = Field(..., min_length=1, max_length=200, description="世界观名称（如魔法体系）")
+    content: str = Field(..., min_length=1, max_length=MAX_NOVEL_WORLDVIEW_CHARS, description="世界观内容描述")
+    rules: List[WorldviewRule] = Field(default_factory=list, max_length=100, description="硬规则列表")
+
+    @model_validator(mode="after")
+    def validate_rule_budget(self):
+        """限制规则中 Any 嵌套值的总体积。"""
+        serialized = json.dumps(
+            [rule.model_dump(mode="json") for rule in self.rules],
+            ensure_ascii=False,
+            default=str,
+        )
+        if len(serialized) > MAX_NESTED_REQUEST_CHARS:
+            raise ValueError("世界观规则不能超过 50000 个字符")
+        return self
 
 
 class WorldviewResponse(BaseModel):
@@ -206,26 +336,34 @@ class WorldviewResponse(BaseModel):
     novel_id: int
     name: str
     content: str
-    rules: List[WorldviewRule]
+    rules: List["WorldviewRuleResponse"]
     created_at: datetime
+
+
+class WorldviewRuleResponse(BaseModel):
+    """世界观规则读取模型，不用新写入预算拒绝历史数据。"""
+
+    name: str
+    value: Any
+    description: Optional[str] = None
 
 
 # ========== 角色相关模型 ==========
 
-class CharacterRelationship(BaseModel):
+class CharacterRelationship(StrictWriteModel):
     """角色关系"""
-    target_character_id: int = Field(..., description="目标角色ID")
-    relationship_type: str = Field(..., description="关系类型（如朋友、敌人）")
+    target_character_id: int = Field(..., gt=0, description="目标角色ID")
+    relationship_type: str = Field(..., min_length=1, max_length=50, description="关系类型（如朋友、敌人）")
 
 
-class CharacterCreate(BaseModel):
+class CharacterCreate(StrictWriteModel):
     """创建角色请求"""
-    novel_id: int = Field(..., description="小说ID")
-    name: str = Field(..., description="角色名称")
-    personality: str = Field(..., description="性格描述")
-    appearance: Optional[str] = Field(None, description="外貌描述")
-    background: Optional[str] = Field(None, description="背景故事")
-    relationships: List[CharacterRelationship] = Field(default_factory=list, description="角色关系")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    name: str = Field(..., min_length=1, max_length=100, description="角色名称")
+    personality: str = Field(..., min_length=1, max_length=4_000, description="性格描述")
+    appearance: Optional[str] = Field(None, max_length=4_000, description="外貌描述")
+    background: Optional[str] = Field(None, max_length=8_000, description="背景故事")
+    relationships: List[CharacterRelationship] = Field(default_factory=list, max_length=50, description="角色关系")
 
 
 class CharacterResponse(BaseModel):
@@ -236,51 +374,67 @@ class CharacterResponse(BaseModel):
     personality: str
     appearance: Optional[str]
     background: Optional[str]
-    relationships: List[CharacterRelationship]
+    relationships: List["CharacterRelationshipResponse"]
     current_emotion: str = "平静"
     created_at: datetime
 
 
+class CharacterRelationshipResponse(BaseModel):
+    """历史角色关系读取模型。"""
+
+    target_character_id: int
+    relationship_type: str
+
+
 # ========== 大纲相关模型 ==========
 
-class OutlineNode(BaseModel):
+class OutlineNode(StrictWriteModel):
     """大纲节点"""
-    chapter: int = Field(..., description="章节号")
-    title: str = Field(..., description="章节标题")
-    plot_points: List[str] = Field(..., description="剧情点列表")
-    foreshadowing: List[str] = Field(default_factory=list, description="伏笔列表")
+    chapter: int = Field(..., gt=0, description="章节号")
+    title: str = Field(..., min_length=1, max_length=200, description="章节标题")
+    plot_points: List[BoundedOutlineText] = Field(..., min_length=1, max_length=50, description="剧情点列表")
+    foreshadowing: List[BoundedOutlineText] = Field(default_factory=list, max_length=50, description="伏笔列表")
 
 
-class OutlineCreate(BaseModel):
+class OutlineCreate(StrictWriteModel):
     """创建大纲请求"""
-    novel_id: int = Field(..., description="小说ID")
-    nodes: List[OutlineNode] = Field(..., description="大纲节点列表")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    nodes: List[OutlineNode] = Field(..., min_length=1, max_length=500, description="大纲节点列表")
 
 
 class OutlineResponse(BaseModel):
     """大纲响应"""
     id: int
     novel_id: int
-    nodes: List[OutlineNode]
+    nodes: List["OutlineNodeResponse"]
     created_at: datetime
+
+
+class OutlineNodeResponse(BaseModel):
+    """大纲节点读取模型，允许返回早期未加预算的持久化内容。"""
+
+    chapter: int
+    title: str
+    plot_points: List[str]
+    foreshadowing: List[str] = Field(default_factory=list)
 
 
 # ========== 内容生成相关模型 ==========
 
-class GenerationRequest(BaseModel):
+class GenerationRequest(StrictWriteModel):
     """内容生成请求"""
-    novel_id: int = Field(..., description="小说ID")
-    prompt: str = Field(..., description="剧情提示词")
-    chapter: int = Field(..., description="当前章节号")
-    current_day: int = Field(1, description="故事当前天数")
-    target_length: int = Field(500, description="目标字数")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    prompt: str = Field(..., min_length=1, max_length=4000, description="剧情提示词")
+    chapter: int = Field(..., gt=0, description="当前章节号")
+    current_day: int = Field(1, gt=0, description="故事当前天数")
+    target_length: int = Field(500, ge=100, le=8000, description="目标字数")
 
 
-class InitNovelRequest(BaseModel):
+class InitNovelRequest(StrictWriteModel):
     """AI初始化小说设定请求"""
-    novel_id: int = Field(..., description="小说ID")
-    target_chapters: int = Field(10, description="规划的章节数量")
-    theme: Optional[str] = Field(None, description="故事主题或补充设定提示")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    target_chapters: int = Field(10, ge=1, le=80, description="规划的章节数量")
+    theme: Optional[str] = Field(None, max_length=1_000, description="故事主题或补充设定提示")
 
 
 class AgentOutput(BaseModel):
@@ -297,6 +451,17 @@ class ConsistencyCheckResult(BaseModel):
     violations: List[str] = Field(default_factory=list)
 
 
+class FinalConsistencyStatus(BaseModel):
+    """最终生成稿在一致性重试结束后的明确状态。"""
+
+    status: Literal["passed", "incomplete", "conflict", "conflict_after_retries"]
+    has_conflict: bool
+    retry_exhausted: bool
+    is_complete: bool
+    checks_skipped: List[str]
+    violations: List[str] = Field(default_factory=list)
+
+
 class GenerationResponse(BaseModel):
     """内容生成响应"""
     novel_id: int
@@ -305,6 +470,7 @@ class GenerationResponse(BaseModel):
     agent_outputs: List[AgentOutput]
     consistency_checks: List[ConsistencyCheckResult]
     retry_count: int = 0
+    final_consistency: FinalConsistencyStatus
     generated_at: datetime
     worldview_context: List[str] = Field(default_factory=list)
     character_context: List[str] = Field(default_factory=list)
@@ -333,11 +499,15 @@ class PlotOption(BaseModel):
     risk: Optional[str] = None
 
 
-class PlotOptionsRequest(BaseModel):
+class PlotOptionsRequest(StrictWriteModel):
     """剧情走向选项请求"""
-    novel_id: int = Field(..., description="小说ID")
-    chapter_id: int = Field(..., description="当前章节ID")
-    current_content: str = Field(..., description="用于判断下一步剧情走向的文本（通常是当前章节或上一章节的结尾")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    chapter_id: int = Field(..., gt=0, description="当前章节ID")
+    current_content: str = Field(
+        ...,
+        max_length=MAX_PLOT_OPTIONS_CONTENT_CHARS,
+        description="用于判断下一步剧情走向的文本（通常是当前章节或上一章节的结尾）",
+    )
     num_options: int = Field(3, ge=1, le=6, description="需要返回的剧情走向数量")
 
 
@@ -348,31 +518,39 @@ class PlotOptionsResponse(BaseModel):
     options: List[PlotOption]
 
 
-class AutoChapterRequest(BaseModel):
+class AutoChapterRequest(StrictWriteModel):
     """AI自动生成章节请求"""
-    novel_id: int = Field(..., description="小说ID")
+    novel_id: int = Field(..., gt=0, description="小说ID")
     base_chapter_id: Optional[int] = Field(
         None,
+        gt=0,
         description="作为生成参考的基础章节ID，不传则使用最后一章",
     )
     target_length: int = Field(500, ge=100, le=3000, description="AI生成章节的目标字数")
     theme: Optional[str] = Field(
         None,
+        max_length=1000,
         description="本章剧情重点或风格提示，如'推进主线冲突'、'日常轻松番外'等",
     )
 
 
-class RewriteRequest(BaseModel):
+class RewriteRequest(StrictWriteModel):
     """局部文本改写请求"""
-    novel_id: int = Field(..., description="小说ID")
-    chapter_id: Optional[int] = Field(None, description="当前章节ID（可选，用于权限校验")
-    original_text: str = Field(..., min_length=1, description="需要改写的原始文本")
-    rewrite_type: str = Field(
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    chapter_id: Optional[int] = Field(None, gt=0, description="当前章节ID（可选，用于权限校验）")
+    original_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_REWRITE_SOURCE_CHARS,
+        description="需要改写的原始文本",
+    )
+    rewrite_type: Literal["polish", "rewrite", "shorten", "extend"] = Field(
         "polish",
         description="改写类型：polish（润色）/rewrite（重写）/shorten（压缩）/extend（扩写）",
     )
     style_hint: Optional[str] = Field(
         None,
+        max_length=1_000,
         description="额外风格提示，例如保持文风不变、偏古风、偏轻松等",
     )
     target_length: Optional[int] = Field(
@@ -388,11 +566,16 @@ class RewriteResponse(BaseModel):
     rewritten_text: str = Field(..., description="改写后的文本")
 
 
-class ResearchRequest(BaseModel):
+class ResearchRequest(StrictWriteModel):
     """资料检索请求"""
-    novel_id: Optional[int] = Field(None, description="小说ID（可选，用于后续扩展上下文绑定）")
-    query: str = Field(..., description="检索问题或关键词")
-    category: Optional[str] = Field(None, description="检索类别，如history/geography/technology")
+    novel_id: Optional[int] = Field(None, gt=0, description="小说ID（可选，用于后续扩展上下文绑定）")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_RESEARCH_QUERY_CHARS,
+        description="检索问题或关键词",
+    )
+    category: Optional[str] = Field(None, max_length=50, description="检索类别，如history/geography/technology")
 
 
 class ResearchResult(BaseModel):
@@ -412,12 +595,12 @@ class ResearchResponse(BaseModel):
 
 # ========== RAG检索相关模型 ==========
 
-class RAGQuery(BaseModel):
+class RAGQuery(StrictWriteModel):
     """RAG检索请求"""
-    novel_id: int = Field(..., description="小说ID")
-    query: str = Field(..., description="检索查询")
-    max_chapter: Optional[int] = Field(None, description="最大章节号（用于过滤）")
-    top_k: int = Field(3, description="返回Top K结果")
+    novel_id: int = Field(..., gt=0, description="小说ID")
+    query: str = Field(..., min_length=1, max_length=2000, description="检索查询")
+    max_chapter: Optional[int] = Field(None, gt=0, description="最大章节号（用于过滤）")
+    top_k: int = Field(3, ge=1, le=20, description="返回Top K结果")
 
 
 class RAGResult(BaseModel):

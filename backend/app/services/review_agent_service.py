@@ -13,11 +13,19 @@
 from typing import TypedDict, Dict, Any, List, Optional
 from datetime import datetime
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
 from app.core.config import settings
 from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
-from app.services.rag_service import rag_service
+from app.services.context_budget import (
+    build_previous_chapter_context,
+    build_review_content,
+)
 from app.services.review_agents import (
+    CharacterConsistencyPayload,
+    ContentSafetyPayload,
+    PaceReviewPayload,
+    PlotCoherencePayload,
+    QualityReviewPayload,
+    StyleReviewPayload,
     review_pace_agent,
     review_quality_agent,
     review_plot_coherence_agent,
@@ -27,7 +35,6 @@ from app.services.review_agents import (
 )
 from loguru import logger
 import asyncio
-import json
 
 
 # ========== 审核结果数据模型 ==========
@@ -94,6 +101,8 @@ class ComprehensiveReviewResult(TypedDict):
     style_review: StyleReviewResult
     content_safety: ContentSafetyResult
     workflow_trace: Dict[str, Any]  # 工作流追踪
+    review_status: str
+    failed_agents: List[str]
 
 
 # ========== 审核 Agent 服务 ==========
@@ -108,10 +117,25 @@ class ReviewAgentService:
             model=settings.OPENAI_MODEL_COMPLEX,
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.OPENAI_API_BASE,
-            temperature=0.3  # 审核需要更稳定的输出
+            temperature=0.3,  # 审核需要更稳定的输出
+            max_tokens=min(settings.LLM_MAX_OUTPUT_TOKENS, 2048),
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+            max_retries=settings.LLM_MAX_RETRIES,
+        )
+        self._semaphore = asyncio.Semaphore(
+            max(1, settings.REVIEW_MAX_CONCURRENCY)
         )
         
         logger.info("审核Agent服务初始化完成")
+
+    async def _run_limited(self, awaitable):
+        """限制审核模型并发，并为单个审核任务设置超时。"""
+
+        async with self._semaphore:
+            return await asyncio.wait_for(
+                awaitable,
+                timeout=settings.LLM_TIMEOUT_SECONDS,
+            )
 
     async def review_chapter_comprehensive(
         self,
@@ -135,18 +159,20 @@ class ReviewAgentService:
             综合审核结果
         """
         logger.info(f"开始全面审核：小说{novel_id}，章节{chapter_number}")
+        content = build_review_content(content)
+        previous_chapters = build_previous_chapter_context(previous_chapters)
         
         # 生成工作流追踪ID
         run_id = f"review-{novel_id}-{chapter_id}-{int(datetime.utcnow().timestamp() * 1000)}"
         workflow_steps: List[Dict[str, Any]] = []
         
         # 并行执行多个审核Agent
-        pace_task = review_pace_agent(self.llm, novel_id, chapter_number, content, workflow_steps)
-        quality_task = review_quality_agent(self.llm, novel_id, chapter_number, content, workflow_steps)
-        plot_task = review_plot_coherence_agent(self.llm, novel_id, chapter_number, content, previous_chapters, workflow_steps)
-        character_task = review_character_consistency_agent(self.llm, novel_id, chapter_number, content, workflow_steps)
-        style_task = review_style_agent(self.llm, novel_id, chapter_number, content, workflow_steps)
-        safety_task = review_content_safety_agent(self.llm, novel_id, chapter_number, content, workflow_steps)
+        pace_task = self._run_limited(review_pace_agent(self.llm, novel_id, chapter_number, content, workflow_steps))
+        quality_task = self._run_limited(review_quality_agent(self.llm, novel_id, chapter_number, content, workflow_steps))
+        plot_task = self._run_limited(review_plot_coherence_agent(self.llm, novel_id, chapter_number, content, previous_chapters, workflow_steps))
+        character_task = self._run_limited(review_character_consistency_agent(self.llm, novel_id, chapter_number, content, workflow_steps))
+        style_task = self._run_limited(review_style_agent(self.llm, novel_id, chapter_number, content, workflow_steps))
+        safety_task = self._run_limited(review_content_safety_agent(self.llm, novel_id, chapter_number, content, workflow_steps))
         
         # 等待所有审核完成
         results = await asyncio.gather(
@@ -159,13 +185,57 @@ class ReviewAgentService:
             return_exceptions=True
         )
         
+        result_models = [
+            PaceReviewPayload,
+            QualityReviewPayload,
+            PlotCoherencePayload,
+            CharacterConsistencyPayload,
+            StyleReviewPayload,
+            ContentSafetyPayload,
+        ]
+        validated_results = []
+        agent_names = ["pace", "quality", "plot", "character", "style", "safety"]
+        for agent_name, result, result_model in zip(agent_names, results, result_models):
+            if isinstance(result, Exception):
+                validated_results.append(result)
+                continue
+            try:
+                validated_results.append(
+                    result_model.model_validate(result).model_dump()
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("审核Agent {} 返回结果校验失败: {}", agent_name, exc)
+                validated_results.append(exc)
+
+        results = validated_results
         pace_review, quality_review, plot_coherence, character_consistency, style_review, content_safety = results
         
-        # 处理异常
+        # 处理异常。审核失败必须关闭发布资格，不能用中性高分掩盖故障。
+        failed_agents: List[str] = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(f"审核Agent {i} 失败: {result}")
-                # 使用默认值
+                agent_name = agent_names[i]
+                failed_agents.append(agent_name)
+                logger.error(f"审核Agent {agent_name} 失败: {result}")
+                failed_at = datetime.utcnow()
+                workflow_steps.append(
+                    AgentWorkflowStep(
+                        id=f"{agent_name}_review_failed",
+                        parent_id=None,
+                        type="agent",
+                        agent_name=f"{agent_name.title()}ReviewAgent",
+                        title=f"{agent_name}审核失败",
+                        description="审核服务调用失败，结果不可用于发布判断。",
+                        input={"novel_id": novel_id, "chapter_number": chapter_number},
+                        output={"error_type": type(result).__name__},
+                        data_sources={},
+                        llm={"model": settings.OPENAI_MODEL_COMPLEX},
+                        status="failed",
+                        started_at=failed_at,
+                        finished_at=failed_at,
+                        duration_ms=0,
+                    ).model_dump()
+                )
                 if i == 0:
                     pace_review = self._default_pace_result()
                 elif i == 1:
@@ -186,17 +256,18 @@ class ReviewAgentService:
             plot_coherence["score"] * 0.2 +
             character_consistency["score"] * 0.15 +
             style_review["score"] * 0.1 +
-            (100 if content_safety["is_safe"] else 0) * 0.1
+            (100 if content_safety["is_safe"] is True else 0) * 0.1
         )
         
         # 判断是否可以发布（所有维度都要达标）
-        is_ready = (
+        is_ready: bool = bool(
+            not failed_agents and
             overall_score >= 70 and
             pace_review["score"] >= 60 and
             quality_review["score"] >= 65 and
             plot_coherence["score"] >= 60 and
             character_consistency["score"] >= 60 and
-            content_safety["is_safe"]
+            content_safety["is_safe"] is True
         )
         
         # 构建工作流追踪
@@ -210,6 +281,14 @@ class ReviewAgentService:
             steps=[AgentWorkflowStep(**step) for step in workflow_steps],
         )
         
+        review_status = (
+            "completed"
+            if not failed_agents
+            else "failed"
+            if len(failed_agents) == len(agent_names)
+            else "partial"
+        )
+
         return ComprehensiveReviewResult(
             overall_score=overall_score,
             is_ready_for_publish=is_ready,
@@ -220,13 +299,15 @@ class ReviewAgentService:
             style_review=style_review,
             content_safety=content_safety,
             workflow_trace=workflow_trace.model_dump(),
+            review_status=review_status,
+            failed_agents=failed_agents,
         )
 
     # 默认结果方法
     def _default_pace_result(self) -> PaceReviewResult:
         return PaceReviewResult(
-            score=70,
-            pace_type="medium",
+            score=0,
+            pace_type="unknown",
             issues=["审核服务暂时不可用"],
             suggestions=["请稍后重试"],
             details={}
@@ -234,17 +315,17 @@ class ReviewAgentService:
     
     def _default_quality_result(self) -> QualityReviewResult:
         return QualityReviewResult(
-            score=70,
-            grammar_score=70,
-            logic_score=70,
-            description_score=70,
+            score=0,
+            grammar_score=0,
+            logic_score=0,
+            description_score=0,
             issues=["审核服务暂时不可用"],
             suggestions=["请稍后重试"]
         )
     
     def _default_plot_result(self) -> PlotCoherenceResult:
         return PlotCoherenceResult(
-            score=70,
+            score=0,
             coherence_issues=["审核服务暂时不可用"],
             plot_holes=[],
             suggestions=["请稍后重试"]
@@ -252,26 +333,26 @@ class ReviewAgentService:
     
     def _default_character_result(self) -> CharacterConsistencyResult:
         return CharacterConsistencyResult(
-            score=70,
+            score=0,
             inconsistencies=[],
             suggestions=["审核服务暂时不可用，请稍后重试"]
         )
     
     def _default_style_result(self) -> StyleReviewResult:
         return StyleReviewResult(
-            score=70,
+            score=0,
             style_type="未知",
-            consistency_score=70,
+            consistency_score=0,
             issues=["审核服务暂时不可用"],
             suggestions=["请稍后重试"]
         )
     
     def _default_safety_result(self) -> ContentSafetyResult:
         return ContentSafetyResult(
-            is_safe=True,
-            risk_level="low",
+            is_safe=False,
+            risk_level="unknown",
             flagged_content=[],
-            suggestions=[]
+            suggestions=["内容安全审核未完成，禁止据此发布"]
         )
 
 

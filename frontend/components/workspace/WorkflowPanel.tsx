@@ -125,6 +125,7 @@ export default function WorkflowPanel({ workflowTrace }: WorkflowPanelProps) {
                   {getStepIcon(step)}
                 </ListItemIcon>
                 <ListItemText
+                  disableTypography
                   primary={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       <Typography variant="body2" fontWeight={500} noWrap>

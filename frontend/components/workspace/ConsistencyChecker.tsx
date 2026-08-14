@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   Card,
   CardContent,
@@ -57,7 +57,7 @@ export default function ConsistencyChecker({
   
   // SSE事件日志
   const [sseEvents, setSseEvents] = useState<{ id: number; type: string; label: string }[]>([]);
-  const sseEventIdRef = useState(0);
+  const sseEventIdRef = useRef(0);
 
   const handleConsistencyCheck = useCallback(async () => {
     if (!novel || !currentChapter) {
@@ -88,7 +88,7 @@ export default function ConsistencyChecker({
         {
           onEvent: (event: SSEEvent) => {
             setSseEvents((prev) => {
-              const id = sseEventIdRef[0]++;
+              const id = sseEventIdRef.current++;
               let label = '';
               if (event.type === 'layer') {
                 const layer = (event as any).layer ?? '';

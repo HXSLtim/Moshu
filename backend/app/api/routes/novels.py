@@ -2,29 +2,80 @@
 小说和章节管理API路由
 """
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.base import get_db
 from app.models.user import User
 from app.models.schemas import (
     NovelCreate,
     NovelUpdate,
     NovelResponse,
+    NovelStatisticsResponse,
     ChapterCreate,
+    ChapterNextCreate,
+    ChapterPageResponse,
     ChapterUpdate,
     ChapterResponse,
-    ChapterWithReviewResponse,
-    ConsistencySummary,
 )
 from app.crud import novel as novel_crud
 from app.api.dependencies import get_current_user
 from app.services.rag_service import rag_service
-from app.services.editor_service import editor_service
-from app.services.consistency_service import consistency_service
 from loguru import logger
 
 router = APIRouter()
+
+
+async def _index_projection(**kwargs) -> None:
+    """执行后台索引并显式记录结果，避免布尔失败被误报为成功。"""
+    indexed = await rag_service.index_content(**kwargs)
+    if indexed:
+        logger.info(
+            "RAG后台索引完成：novel_id={}, chapter={}",
+            kwargs["novel_id"],
+            kwargs["chapter"],
+        )
+    elif not settings.EMBEDDING_ENABLED:
+        logger.info(
+            "RAG后台索引已按配置跳过：novel_id={}, chapter={}",
+            kwargs["novel_id"],
+            kwargs["chapter"],
+        )
+    else:
+        logger.warning(
+            "RAG后台索引失败：novel_id={}, chapter={}",
+            kwargs["novel_id"],
+            kwargs["chapter"],
+        )
+
+
+async def _cleanup_chapter_projection(
+    novel_id: int,
+    chapter_id: int,
+    deletion_token: dict,
+) -> None:
+    """幂等清理章节派生索引。"""
+    cleaned = await rag_service.cleanup_chapter_data(
+        novel_id,
+        chapter_id,
+        deletion_token=deletion_token,
+    )
+    if not cleaned:
+        logger.warning("章节RAG后台清理失败：novel_id={}, chapter_id={}", novel_id, chapter_id)
+
+
+async def _cleanup_novel_projection(novel_id: int, deletion_token: dict) -> None:
+    """幂等清理小说派生索引。"""
+    await rag_service.cleanup_novel_vectors(
+        novel_id,
+        deletion_token=deletion_token,
+    )
+
+
+def _worldview_projection_version(novel) -> int:
+    """返回由数据库原子递增的世界观投影版本。"""
+    return int(novel.rag_revision or 1)
 
 
 # ========== Novel 路由 ==========
@@ -32,6 +83,7 @@ router = APIRouter()
 @router.post("/", response_model=NovelResponse, status_code=status.HTTP_201_CREATED)
 async def create_novel(
     novel: NovelCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -41,6 +93,20 @@ async def create_novel(
     需要认证
     """
     db_novel = novel_crud.create_novel(db, novel, user_id=current_user.id)
+    rag_service.prepare_novel_projection(db_novel.id, db=db)
+    if novel.worldview is not None:
+        projection_token = rag_service.prepare_worldview_projection(db_novel.id, db=db)
+        background_tasks.add_task(
+            _index_projection,
+            novel_id=db_novel.id,
+            chapter=0,
+            content=db_novel.worldview or "",
+            metadata={
+                "source": "worldview",
+                "version": _worldview_projection_version(db_novel),
+                **projection_token,
+            },
+        )
     return db_novel
 
 
@@ -63,6 +129,17 @@ async def list_my_novels(
         limit=limit
     )
     return novels
+
+
+@router.get("/statistics", response_model=NovelStatisticsResponse)
+async def get_my_novel_statistics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """用一次聚合查询返回当前用户全部小说的章节数和总字数。"""
+    return NovelStatisticsResponse(
+        items=novel_crud.get_novel_statistics_by_user(db, current_user.id)
+    )
 
 
 @router.get("/{novel_id}", response_model=NovelResponse)
@@ -97,6 +174,7 @@ async def get_novel(
 async def update_novel(
     novel_id: int,
     novel_update: NovelUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -121,18 +199,23 @@ async def update_novel(
 
     updated_novel = novel_crud.update_novel(db, novel_id, novel_update)
 
-    # 若本次更新包含世界观设定，则将其索引到RAG（忽略失败）
+    # 世界观索引是可重建投影，不阻塞数据库更新响应。
     if novel_update.worldview is not None:
-        try:
-            await rag_service.index_content(
-                novel_id=updated_novel.id,
-                chapter=0,
-                content=updated_novel.worldview or "",
-                metadata={"source": "worldview"},
-            )
-            logger.info(f"已将小说{updated_novel.id}的世界观设定索引到RAG")
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"索引小说{updated_novel.id}世界观到RAG失败: {e}")
+        projection_token = rag_service.prepare_worldview_projection(
+            updated_novel.id,
+            db=db,
+        )
+        background_tasks.add_task(
+            _index_projection,
+            novel_id=updated_novel.id,
+            chapter=0,
+            content=updated_novel.worldview or "",
+            metadata={
+                "source": "worldview",
+                "version": _worldview_projection_version(updated_novel),
+                **projection_token,
+            },
+        )
 
     return updated_novel
 
@@ -140,6 +223,7 @@ async def update_novel(
 @router.delete("/{novel_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_novel(
     novel_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -162,7 +246,14 @@ async def delete_novel(
             detail="无权删除此小说"
         )
 
-    novel_crud.delete_novel(db, novel_id)
+    # 删除提交前捕获持久生命周期；提交后同一整数主键可能已属于另一位作者。
+    deletion_token = rag_service.mark_novel_deleted(novel_id, db=db)
+    if not novel_crud.delete_novel(db, novel_id):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="删除小说失败",
+        )
+    background_tasks.add_task(_cleanup_novel_projection, novel_id, deletion_token)
     return None
 
 
@@ -172,6 +263,7 @@ async def delete_novel(
 async def create_chapter(
     novel_id: int,
     chapter: ChapterCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -202,32 +294,85 @@ async def create_chapter(
     )
     if existing_chapter:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail=f"章节 {chapter.chapter_number} 已存在"
         )
 
-    db_chapter = novel_crud.create_chapter(db, novel_id, chapter)
-
-    # 将章节内容索引到RAG（忽略失败）
     try:
-        await rag_service.index_content(
-            novel_id=novel_id,
-            chapter=db_chapter.chapter_number,
-            content=db_chapter.content,
-            metadata={"source": "chapter", "chapter_id": db_chapter.id},
-        )
-        logger.info(f"已将小说{novel_id}第{db_chapter.chapter_number}章内容索引到RAG")
-    except Exception as e:
-        logger.warning(f"索引章节内容到RAG失败（novel_id={novel_id}, chapter={db_chapter.chapter_number}）: {e}")
+        db_chapter = novel_crud.create_chapter(db, novel_id, chapter)
+    except novel_crud.ChapterNumberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    projection_token = rag_service.prepare_chapter_projection(
+        novel_id,
+        db_chapter.id,
+        db=db,
+    )
+    background_tasks.add_task(
+        _index_projection,
+        novel_id=novel_id,
+        chapter=db_chapter.chapter_number,
+        content=db_chapter.content,
+        metadata={
+            "source": "chapter",
+            "chapter_id": db_chapter.id,
+            "version": db_chapter.version,
+            **projection_token,
+        },
+    )
 
     return db_chapter
 
 
-@router.get("/{novel_id}/chapters", response_model=List[ChapterResponse])
+@router.post(
+    "/{novel_id}/chapters/next",
+    response_model=ChapterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_next_chapter(
+    novel_id: int,
+    chapter: ChapterNextCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """由服务端原子分配当前最大章节号的下一号。"""
+    db_novel = novel_crud.get_novel_by_id(db, novel_id)
+    if not db_novel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="小说不存在")
+    if db_novel.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权为此小说添加章节")
+
+    try:
+        db_chapter = novel_crud.create_next_chapter(db, novel_id, chapter)
+    except novel_crud.ChapterNumberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    projection_token = rag_service.prepare_chapter_projection(
+        novel_id,
+        db_chapter.id,
+        db=db,
+    )
+    background_tasks.add_task(
+        _index_projection,
+        novel_id=novel_id,
+        chapter=db_chapter.chapter_number,
+        content=db_chapter.content,
+        metadata={
+            "source": "chapter",
+            "chapter_id": db_chapter.id,
+            "version": db_chapter.version,
+            **projection_token,
+        },
+    )
+    return db_chapter
+
+
+@router.get("/{novel_id}/chapters", response_model=ChapterPageResponse)
 async def list_chapters(
     novel_id: int,
-    skip: int = 0,
-    limit: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -250,13 +395,21 @@ async def list_chapters(
             detail="无权访问此小说的章节"
         )
 
+    skip = (page - 1) * page_size
     chapters = novel_crud.get_chapters_by_novel(
         db,
         novel_id,
         skip=skip,
-        limit=limit
+        limit=page_size,
     )
-    return chapters
+    total = novel_crud.count_chapters_by_novel(db, novel_id)
+    return ChapterPageResponse(
+        items=chapters,
+        total=total,
+        page=page,
+        page_size=page_size,
+        has_more=skip + len(chapters) < total,
+    )
 
 
 @router.get("/{novel_id}/chapters/{chapter_id}", response_model=ChapterResponse)
@@ -295,11 +448,12 @@ async def get_chapter(
     return db_chapter
 
 
-@router.put("/{novel_id}/chapters/{chapter_id}", response_model=ChapterWithReviewResponse)
+@router.put("/{novel_id}/chapters/{chapter_id}", response_model=ChapterResponse)
 async def update_chapter(
     novel_id: int,
     chapter_id: int,
     chapter_update: ChapterUpdate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -329,66 +483,46 @@ async def update_chapter(
             detail="章节不存在"
         )
 
-    updated_chapter = novel_crud.update_chapter(db, chapter_id, chapter_update)
-
-    # 更新章节后重新索引内容到RAG（忽略失败）
     try:
-        await rag_service.index_content(
+        updated_chapter = novel_crud.update_chapter(db, chapter_id, chapter_update)
+    except novel_crud.ChapterVersionConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"章节已被其他保存更新，当前版本为{exc.current_version}，请刷新后重试",
+        ) from exc
+    except novel_crud.ChapterNumberConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if updated_chapter is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="章节不存在")
+
+    # 只有正文或章节号变化才需要刷新向量投影；保存响应不等待投影完成。
+    if chapter_update.content is not None or chapter_update.chapter_number is not None:
+        projection_token = rag_service.prepare_chapter_projection(
+            novel_id,
+            updated_chapter.id,
+            db=db,
+        )
+        background_tasks.add_task(
+            _index_projection,
             novel_id=novel_id,
             chapter=updated_chapter.chapter_number,
             content=updated_chapter.content,
-            metadata={"source": "chapter", "chapter_id": updated_chapter.id},
+            metadata={
+                "source": "chapter",
+                "chapter_id": updated_chapter.id,
+                "version": updated_chapter.version,
+                **projection_token,
+            },
         )
-        logger.info(f"已重新索引小说{novel_id}第{updated_chapter.chapter_number}章内容到RAG")
-    except Exception as e:
-        logger.warning(
-            f"重新索引章节内容到RAG失败（novel_id={novel_id}, chapter={updated_chapter.chapter_number}）: {e}"
-        )
-
-    # 一致性检查（规则引擎 + 知识图谱 + 时间线），失败不影响保存
-    consistency_summary: ConsistencySummary | None = None
-    try:
-        consistency_result = await consistency_service.check_content(
-            novel_id=novel_id,
-            content=updated_chapter.content or "",
-            chapter=updated_chapter.chapter_number,
-            current_day=1,
-        )
-        consistency_summary = ConsistencySummary(
-            has_conflict=consistency_result.get("has_conflict", False),
-            violations=consistency_result.get("violations", []),
-            checks_performed=consistency_result.get("checks_performed", []),
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning(
-            f"一致性检查失败（novel_id={novel_id}, chapter={updated_chapter.chapter_number}）: {e}"
-        )
-
-    # 手动保存时触发轻量编辑审核（失败不影响保存）
-    editor_review = await editor_service.review_chapter(
-        novel=db_novel,
-        chapter=updated_chapter,
-    )
-
-    # 显式构造响应，避免ORM内部字段干扰
-    return ChapterWithReviewResponse(
-        id=updated_chapter.id,
-        novel_id=updated_chapter.novel_id,
-        chapter_number=updated_chapter.chapter_number,
-        title=updated_chapter.title,
-        content=updated_chapter.content,
-        word_count=updated_chapter.word_count,
-        created_at=updated_chapter.created_at,
-        updated_at=updated_chapter.updated_at,
-        editor_review=editor_review,
-        consistency_summary=consistency_summary,
-    )
+    return updated_chapter
 
 
 @router.delete("/{novel_id}/chapters/{chapter_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chapter(
     novel_id: int,
     chapter_id: int,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -418,10 +552,18 @@ async def delete_chapter(
             detail="章节不存在"
         )
 
-    success = await novel_crud.delete_chapter(db, chapter_id)
+    # 同小说内章节主键也可能复用，必须在删除前冻结来源生命周期。
+    deletion_token = rag_service.mark_chapter_deleted(novel_id, chapter_id, db=db)
+    success = novel_crud.delete_chapter(db, chapter_id)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="删除章节失败"
         )
+    background_tasks.add_task(
+        _cleanup_chapter_projection,
+        novel_id,
+        chapter_id,
+        deletion_token,
+    )
     return None

@@ -18,11 +18,9 @@ import {
 import {
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
-  CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   PlayArrow as PlayArrowIcon,
   AccessTime as AccessTimeIcon,
-  AutoStories as AutoStoriesIcon,
   Person as PersonIcon,
   Create as CreateIcon,
   RateReview as RateReviewIcon,
@@ -106,23 +104,25 @@ const JsonViewer = ({ data, title, color }: { data: any; title: string; color: s
 
 const AgentWorkflowVisualization: React.FC<AgentWorkflowVisualizationProps> = ({
   workflowTrace,
-  isGenerating = false,
 }) => {
   const theme = useTheme();
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(true);
 
+  const latestStepId = workflowTrace?.steps?.length
+    ? workflowTrace.steps[workflowTrace.steps.length - 1].id
+    : null;
+
   // 自动展开最新的步骤
   useEffect(() => {
-    if (workflowTrace?.steps && workflowTrace.steps.length > 0) {
-      const lastStep = workflowTrace.steps[workflowTrace.steps.length - 1];
+    if (latestStepId) {
       setExpandedSteps(prev => {
         const newSet = new Set(prev);
-        newSet.add(lastStep.id);
+        newSet.add(latestStepId);
         return newSet;
       });
     }
-  }, [workflowTrace?.steps?.length]);
+  }, [latestStepId]);
 
   if (!workflowTrace) return null;
 
@@ -218,13 +218,11 @@ const AgentWorkflowVisualization: React.FC<AgentWorkflowVisualizationProps> = ({
                 }}
               />
 
-              {steps.map((step, index) => {
+              {steps.map((step) => {
                 const agentConfig = getAgentConfig(step.agent_name || 'Unknown Agent');
                 const isExpanded = expandedSteps.has(step.id);
                 const isRunning = step.status === 'running';
                 const isFailed = step.status === 'failed';
-                const isCompleted = step.status === 'completed';
-
                 return (
                   <Fade key={step.id} in={true} timeout={500}>
                     <Box sx={{ mb: 3, position: 'relative', zIndex: 1 }}>

@@ -1,128 +1,417 @@
-"""
-RAG服务单元测试
-测试向量检索、内容索引、混合检索等功能
-"""
+"""RAG持久生命周期、跨实例乱序和检索隔离的确定性测试。"""
+
+import asyncio
+import threading
+from unittest.mock import AsyncMock
+
 import pytest
-from app.services.rag_service import RAGService
+from sqlalchemy import create_engine, update
+from sqlalchemy.orm import sessionmaker
+
+import app.models  # noqa: F401  # 注册完整SQLAlchemy模型
+from app.db.base import Base
+from app.models.novel import Chapter, Novel
 from app.models.schemas import RAGQuery
+from app.models.user import User
+from app.services import rag_service as rag_service_module
+from app.services.rag_service import RAGService
 
 
-class TestRAGService:
-    """RAG服务测试类"""
+class FakeCollection:
+    """只实现本组测试需要的Chroma collection行为。"""
 
-    @pytest.fixture
-    async def rag_service(self):
-        """创建RAG服务实例"""
-        # 注意：需要确保Qdrant服务正在运行
-        return RAGService()
+    def __init__(self):
+        self.records = {}
+        self._lock = threading.RLock()
 
-    @pytest.mark.asyncio
-    async def test_index_content(self, rag_service, test_novel_id):
-        """测试内容索引功能"""
-        content = "这是一个测试段落。主角李明在魔法塔中修炼，他的魔法等级已经达到了5级。"
+    @classmethod
+    def _matches(cls, metadata, where):
+        if "$and" in where:
+            return all(cls._matches(metadata, item) for item in where["$and"])
+        for key, expected in where.items():
+            actual = metadata.get(key)
+            if isinstance(expected, dict):
+                if "$lt" in expected and not (actual is not None and actual < expected["$lt"]):
+                    return False
+                if "$lte" in expected and not (actual is not None and actual <= expected["$lte"]):
+                    return False
+                if "$gt" in expected and not (actual is not None and actual > expected["$gt"]):
+                    return False
+                if "$gte" in expected and not (actual is not None and actual >= expected["$gte"]):
+                    return False
+            elif actual != expected:
+                return False
+        return True
 
-        result = await rag_service.index_content(
-            novel_id=test_novel_id,
-            chapter=1,
-            content=content,
-            metadata={"scene": "魔法塔"}
+    def get(self, where, include=None):
+        with self._lock:
+            ids = [
+                record_id
+                for record_id, record in self.records.items()
+                if self._matches(record["metadata"], where)
+            ]
+            response = {"ids": ids}
+            if include and "metadatas" in include:
+                response["metadatas"] = [
+                    self.records[record_id]["metadata"] for record_id in ids
+                ]
+            return response
+
+    def delete(self, ids):
+        with self._lock:
+            for record_id in ids:
+                self.records.pop(record_id, None)
+
+
+class FakeNode:
+    def __init__(self, content, metadata, score=0.9):
+        self._content = content
+        self.metadata = metadata
+        self.score = score
+
+    def get_content(self):
+        return self._content
+
+
+class FakeRetriever:
+    def __init__(self, nodes):
+        self.nodes = nodes
+
+    def retrieve(self, _query):
+        return self.nodes
+
+
+class FakeIndex:
+    def __init__(self, collection, nodes=None):
+        self.collection = collection
+        self.nodes = nodes or []
+        self.retriever_kwargs = None
+
+    def insert(self, document):
+        with self.collection._lock:
+            self.collection.records[document.id_] = {
+                "content": document.get_content(),
+                "metadata": dict(document.metadata),
+            }
+
+    def as_retriever(self, **kwargs):
+        self.retriever_kwargs = kwargs
+        return FakeRetriever(self.nodes)
+
+
+class BlockingOldIndex(FakeIndex):
+    """让旧版任务在数据库前置校验后暂停，模拟真实跨进程竞态。"""
+
+    def __init__(self, collection):
+        super().__init__(collection)
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self._blocked = False
+
+    def insert(self, document):
+        if int(document.metadata["version"]) == 1 and not self._blocked:
+            self._blocked = True
+            self.started.set()
+            assert self.release.wait(timeout=5), "旧索引任务未按预期恢复"
+        super().insert(document)
+
+
+@pytest.mark.asyncio
+async def test_disabled_embedding_skips_network_initialization(monkeypatch):
+    """显式关闭 Embedding 时不得探测模型或产生重试风暴。"""
+    service = RAGService()
+    initialize_sync = AsyncMock()
+    monkeypatch.setattr(rag_service_module.settings, "EMBEDDING_ENABLED", False)
+    monkeypatch.setattr(service, "_initialize_sync", initialize_sync)
+
+    assert await service.initialize() is False
+    assert service.initialization_error == "Embedding 服务已通过配置禁用"
+    initialize_sync.assert_not_called()
+
+
+@pytest.fixture
+def projection_db(tmp_path, monkeypatch):
+    """创建可跨线程访问的文件SQLite，并替换RAG内部会话工厂。"""
+    database_path = tmp_path / "rag-projection.sqlite"
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+    )
+    testing_session = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+        bind=engine,
+    )
+    Base.metadata.create_all(bind=engine)
+
+    import app.db.base as db_base
+
+    monkeypatch.setattr(db_base, "SessionLocal", testing_session)
+    db = testing_session()
+    yield db
+    db.close()
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
+
+
+def _create_novel_with_chapter(
+    db,
+    suffix: str,
+    *,
+    novel_id=None,
+    chapter_id=None,
+    content="旧正文",
+):
+    user = User(
+        username=f"rag-owner-{suffix}",
+        email=f"rag-owner-{suffix}@example.com",
+        hashed_password="not-used",
+    )
+    db.add(user)
+    db.flush()
+    novel = Novel(
+        id=novel_id,
+        title=f"RAG小说{suffix}",
+        worldview=f"世界观{suffix}",
+        user_id=user.id,
+    )
+    db.add(novel)
+    db.flush()
+    chapter = Chapter(
+        id=chapter_id,
+        novel_id=novel.id,
+        chapter_number=1,
+        title="第一章",
+        content=content,
+        word_count=len(content),
+    )
+    db.add(chapter)
+    db.commit()
+    return user, novel, chapter
+
+
+def _ready_service(collection, index=None):
+    service = RAGService()
+    service.collection = collection
+    service.index = index or FakeIndex(collection)
+    service.available = True
+    service.initialize = AsyncMock(return_value=True)
+
+    def cleanup_without_chroma(where_filters):
+        ids = set()
+        for where in where_filters:
+            ids.update(collection.get(where=where).get("ids") or [])
+        collection.delete(ids=list(ids))
+        return len(ids)
+
+    service._cleanup_across_collections_sync = cleanup_without_chroma
+    return service
+
+
+def _metadata(service, db, novel, chapter):
+    return {
+        "source": "chapter",
+        "chapter_id": chapter.id,
+        "version": chapter.version,
+        **service.prepare_chapter_projection(novel.id, chapter.id, db=db),
+    }
+
+
+def test_service_construction_is_lazy():
+    """构造服务不会连接模型、访问磁盘或导入Chroma。"""
+    service = RAGService()
+    assert service.available is False
+    assert service._initialized is False
+    assert service.index is None
+
+
+@pytest.mark.asyncio
+async def test_two_instances_cannot_commit_old_version_after_new_projection(
+    projection_db,
+):
+    """两个服务实例乱序写入时，旧任务在后置栅栏处撤销自己的分块。"""
+    db = projection_db
+    _, novel, chapter = _create_novel_with_chapter(db, "race")
+    collection = FakeCollection()
+    blocking_index = BlockingOldIndex(collection)
+    old_service = _ready_service(collection, blocking_index)
+    new_service = _ready_service(collection)
+    old_metadata = _metadata(old_service, db, novel, chapter)
+
+    old_task = asyncio.create_task(
+        old_service.index_content(
+            novel.id,
+            chapter.chapter_number,
+            chapter.content,
+            old_metadata,
         )
+    )
+    assert await asyncio.to_thread(blocking_index.started.wait, 2)
 
-        if not result:
-            pytest.skip("RAG服务不可用或向量库配置不兼容，跳过索引测试")
+    db.execute(
+        update(Chapter)
+        .where(Chapter.id == chapter.id)
+        .values(content="新正文", word_count=3, version=Chapter.version + 1)
+    )
+    db.commit()
+    db.expire(chapter)
+    new_metadata = _metadata(new_service, db, novel, chapter)
+    assert await new_service.index_content(
+        novel.id,
+        chapter.chapter_number,
+        chapter.content,
+        new_metadata,
+    ) is True
 
-    @pytest.mark.asyncio
-    async def test_hybrid_search(self, rag_service, test_novel_id):
-        """测试混合检索功能"""
-        # 先索引一些内容
-        result = await rag_service.index_content(
-            novel_id=test_novel_id,
-            chapter=1,
-            content="李明是一位5级魔法师，擅长火系魔法。"
-        )
+    blocking_index.release.set()
+    assert await old_task is True
 
-        if not result:
-            pytest.skip("RAG服务不可用或向量库配置不兼容，跳过混合检索测试")
+    assert len(collection.records) == 1
+    only_record = next(iter(collection.records.values()))
+    assert only_record["content"] == "新正文"
+    assert only_record["metadata"]["version"] == 2
+    assert only_record["metadata"]["_source_lifecycle"] == chapter.rag_lifecycle_id
 
-        # 执行检索
-        query = RAGQuery(
-            novel_id=test_novel_id,
-            query="李明的魔法等级",
-            top_k=3
-        )
 
-        response = await rag_service.hybrid_search(query)
+@pytest.mark.asyncio
+async def test_deleted_novel_primary_key_reuse_cannot_cross_tenant_recall(
+    projection_db,
+):
+    """删书后整数主键复用时，旧写入、旧清理和旧向量都不能影响新作者。"""
+    db = projection_db
+    old_user, old_novel, old_chapter = _create_novel_with_chapter(
+        db,
+        "old",
+        novel_id=77,
+        chapter_id=88,
+        content="旧作者正文",
+    )
+    collection = FakeCollection()
+    old_service = _ready_service(collection)
+    new_service = _ready_service(collection)
+    old_metadata = _metadata(old_service, db, old_novel, old_chapter)
+    assert await old_service.index_content(77, 1, "旧作者正文", old_metadata) is True
+    old_record = next(iter(collection.records.values())).copy()
+    old_record["metadata"] = dict(old_record["metadata"])
+    deletion_token = old_service.mark_novel_deleted(77, db=db)
+    old_lifecycle = old_novel.rag_lifecycle_id
 
-        assert response.query == "李明的魔法等级"
-        assert response.retrieval_method == "hybrid"
-        assert len(response.results) > 0
+    db.delete(old_novel)
+    db.commit()
+    db.expunge_all()
+    new_user, new_novel, new_chapter = _create_novel_with_chapter(
+        db,
+        "new",
+        novel_id=77,
+        chapter_id=88,
+        content="新作者正文",
+    )
+    assert new_user.id != old_user.id
+    assert new_novel.rag_lifecycle_id != old_lifecycle
 
-    @pytest.mark.asyncio
-    async def test_metadata_filtering(self, rag_service, test_novel_id):
-        """测试元数据过滤功能"""
-        # 索引多个章节的内容
-        r1 = await rag_service.index_content(test_novel_id, 1, "第一章内容")
-        r2 = await rag_service.index_content(test_novel_id, 2, "第二章内容")
-        r3 = await rag_service.index_content(test_novel_id, 3, "第三章内容")
+    new_metadata = _metadata(new_service, db, new_novel, new_chapter)
+    assert await new_service.index_content(77, 1, "新作者正文", new_metadata) is True
 
-        if not (r1 and r2 and r3):
-            pytest.skip("RAG服务不可用或向量库配置不兼容，跳过元数据过滤测试")
+    # 删除前排队的旧任务在新作品出现后到达，也不能重新写入旧作者内容。
+    assert await old_service.index_content(77, 1, "旧作者正文", old_metadata) is True
+    assert await old_service.cleanup_novel_vectors(
+        77,
+        deletion_token=deletion_token,
+    ) == 1
+    assert len(collection.records) == 1
+    assert next(iter(collection.records.values()))["content"] == "新作者正文"
 
-        # 只检索前两章
-        query = RAGQuery(
-            novel_id=test_novel_id,
-            query="内容",
-            max_chapter=2,
-            top_k=10
-        )
+    # FakeRetriever故意忽略下推过滤，验证数据库后置过滤仍拒绝旧生命周期。
+    current_record = next(iter(collection.records.values()))
+    new_service.index = FakeIndex(
+        collection,
+        nodes=[
+            FakeNode("旧作者正文", old_record["metadata"], score=0.99),
+            FakeNode("新作者正文", current_record["metadata"], score=0.90),
+        ],
+    )
+    response = await new_service.hybrid_search(
+        RAGQuery(novel_id=77, query="正文", top_k=3)
+    )
+    assert [item.content for item in response.results] == ["新作者正文"]
+    filters = new_service.index.retriever_kwargs["filters"].filters
+    assert [(item.key, item.value) for item in filters] == [
+        ("novel_id", 77),
+        ("_owner_id", new_user.id),
+        ("_novel_lifecycle", new_novel.rag_lifecycle_id),
+    ]
 
-        response = await rag_service.hybrid_search(query)
 
-        # 验证结果只包含前两章
-        for result in response.results:
-            assert result.metadata.get("chapter", 999) <= 2
+@pytest.mark.asyncio
+async def test_reindex_removes_stale_tail_chunks(projection_db):
+    """正文缩短后，同一数据库版本只保留当前内容的分块。"""
+    db = projection_db
+    _, novel, chapter = _create_novel_with_chapter(db, "tail", content="旧" * 1200)
+    collection = FakeCollection()
+    service = _ready_service(collection)
+    assert await service.index_content(
+        novel.id,
+        1,
+        chapter.content,
+        _metadata(service, db, novel, chapter),
+    ) is True
+    assert len(collection.records) == 3
 
-    @pytest.mark.asyncio
-    async def test_retrieve_worldview(self, rag_service, test_novel_id):
-        """测试世界观检索"""
-        # 索引世界观内容
-        result = await rag_service.index_content(
-            test_novel_id,
-            1,
-            "这个世界的魔法分为九个等级，9级是最高等级。"
-        )
+    db.execute(
+        update(Chapter)
+        .where(Chapter.id == chapter.id)
+        .values(content="新正文", word_count=3, version=Chapter.version + 1)
+    )
+    db.commit()
+    db.expire(chapter)
+    assert await service.index_content(
+        novel.id,
+        1,
+        chapter.content,
+        _metadata(service, db, novel, chapter),
+    ) is True
+    assert len(collection.records) == 1
+    assert next(iter(collection.records.values()))["content"] == "新正文"
 
-        if not result:
-            pytest.skip("RAG服务不可用或向量库配置不兼容，跳过世界观检索测试")
 
-        results = await rag_service.retrieve_worldview(
-            test_novel_id,
-            "魔法等级系统"
-        )
+@pytest.mark.asyncio
+async def test_search_pushes_owner_lifecycle_and_chapter_filters(projection_db):
+    """租户、作品生命周期和最大章节限制都在召回前下推。"""
+    db = projection_db
+    user, novel, chapter = _create_novel_with_chapter(db, "search", content="目标内容")
+    collection = FakeCollection()
+    service = _ready_service(collection)
+    assert await service.index_content(
+        novel.id,
+        1,
+        chapter.content,
+        _metadata(service, db, novel, chapter),
+    ) is True
+    record = next(iter(collection.records.values()))
+    service.index = FakeIndex(
+        collection,
+        nodes=[FakeNode(record["content"], record["metadata"])],
+    )
 
-        assert len(results) > 0
-        assert "等级" in results[0] or "魔法" in results[0]
+    response = await service.hybrid_search(
+        RAGQuery(novel_id=novel.id, query="角色设定", max_chapter=5, top_k=3)
+    )
 
-    @pytest.mark.asyncio
-    async def test_delete_novel_index(self, rag_service, test_novel_id):
-        """测试删除索引功能"""
-        # 先索引内容
-        result_index = await rag_service.index_content(test_novel_id, 1, "测试内容")
+    assert [item.content for item in response.results] == ["目标内容"]
+    assert "novel_id" not in response.results[0].metadata
+    assert all(not key.startswith("_") for key in response.results[0].metadata)
+    assert service.index.retriever_kwargs["similarity_top_k"] == 12
+    filters = service.index.retriever_kwargs["filters"].filters
+    assert [(item.key, item.value, item.operator.value) for item in filters] == [
+        ("novel_id", novel.id, "=="),
+        ("_owner_id", user.id, "=="),
+        ("_novel_lifecycle", novel.rag_lifecycle_id, "=="),
+        ("chapter", 5, "<="),
+    ]
 
-        if not result_index:
-            pytest.skip("RAG服务不可用或向量库配置不兼容，跳过删除索引测试")
 
-        # 删除索引
-        result = await rag_service.delete_novel_index(test_novel_id)
-
-        assert result is True
-
-    def test_split_text(self, rag_service):
-        """测试文本分割功能"""
-        text = "A" * 1500  # 1500字符
-        chunks = rag_service._split_text(text, chunk_size=500)
-
-        assert len(chunks) == 3
-        assert len(chunks[0]) == 500
-        assert len(chunks[1]) == 500
-        assert len(chunks[2]) == 500
+def test_split_text_respects_limit_and_ignores_blank_chunks():
+    service = RAGService()
+    chunks = service._split_text("A" * 1000 + " " * 500, chunk_size=500)
+    assert chunks == ["A" * 500, "A" * 500]

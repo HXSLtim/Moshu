@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
+from fastapi.encoders import jsonable_encoder
 
 from app.crud.character import (
     create_character, get_character, get_characters_by_novel,
@@ -65,17 +66,19 @@ class CharacterMCPService:
             
             handler = self.supported_actions[action.action]
             result = await handler(db, action, user_id)
+            safe_result = jsonable_encoder(result)
             
             return MCPCharacterResponse(
                 success=True,
                 action=action.action,
-                character_id=result.get("character_id"),
-                result=result,
+                character_id=safe_result.get("character_id"),
+                result=safe_result,
                 message=f"操作 {action.action} 执行成功",
                 timestamp=datetime.utcnow()
             )
             
         except Exception as e:
+            db.rollback()
             logger.error(f"MCP角色操作失败: {action.action} - {str(e)}")
             return MCPCharacterResponse(
                 success=False,
@@ -109,11 +112,18 @@ class CharacterMCPService:
             first_appearance_chapter=params.get("first_appearance_chapter")
         )
         
-        character = create_character(db, character_data)
-        
-        # 如果提供了上下文，进行AI分析
-        if action.context:
-            await self._perform_ai_analysis(db, character.id, action.context)
+        try:
+            # 可选分析与角色写入必须属于同一事务；模型失败时不能留下半成品。
+            character = create_character(db, character_data, commit=False)
+
+            if action.context:
+                await self._perform_ai_analysis(db, character.id, action.context)
+
+            db.commit()
+            db.refresh(character)
+        except Exception:
+            db.rollback()
+            raise
         
         return {
             "character_id": character.id,
@@ -625,7 +635,7 @@ class CharacterMCPService:
             analysis = await self._perform_character_analysis(
                 db, character, "contextual", True, True
             )
-            update_character_ai_analysis(db, character_id, analysis)
+            update_character_ai_analysis(db, character_id, analysis, commit=False)
 
 
 # 创建全局服务实例

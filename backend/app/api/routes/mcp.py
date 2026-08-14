@@ -1,13 +1,15 @@
 """
-统一MCP控制中心API路由
-AI对小说的完全掌控接口
+统一 MCP 控制中心 API 路由。
+
+能力清单以真实处理器为准，不对外承诺占位功能。
 """
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Annotated, List
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status, Request
 from sqlalchemy.orm import Session
 
 from app.db.base import get_db
 from app.models.user import User
+from app.models.novel import Novel
 from app.models.worldview_schemas import (
     UnifiedMCPAction, UnifiedMCPResponse,
     NovelAnalysisRequest, NovelAnalysisResponse,
@@ -18,7 +20,6 @@ from app.api.dependencies import get_current_user
 from app.services.unified_mcp_service import unified_mcp_service
 from app.services.mcp_audit_service import mcp_audit_service
 from loguru import logger
-from datetime import datetime
 
 router = APIRouter()
 
@@ -33,28 +34,8 @@ async def execute_unified_mcp_action(
     """
     执行统一MCP操作
     
-    AI可以通过此接口完全掌控小说的各个方面：
-    - worldview: 世界观设定管理
-    - character: 角色管理
-    - plot: 情节管理
-    - timeline: 时间线管理
-    - outline: 大纲管理
-    - style: 文风管理
-    - novel: 小说级别操作
-    
-    支持的操作类型：
-    - analyze: 分析
-    - optimize: 优化
-    - create: 创建
-    - update: 更新
-    - delete: 删除
-    - generate: 生成
-    - validate: 验证
-    - sync: 同步
-    - batch_update: 批量更新
-    - ai_review: AI审查
-    - auto_fix: 自动修复
-    - smart_suggest: 智能建议
+    实际可用能力以 `/capabilities` 返回的能力矩阵为准；未实现操作会明确
+    返回失败，不会生成占位成功结果。
     """
     try:
         # 获取客户端信息
@@ -69,6 +50,11 @@ async def execute_unified_mcp_action(
         
         return result
         
+    except NotImplementedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(e),
+        ) from e
     except Exception as e:
         logger.error(f"统一MCP操作失败: {action.target_type}.{action.action} - {str(e)}")
         raise HTTPException(
@@ -110,6 +96,11 @@ async def analyze_novel_comprehensive(
         
     except HTTPException:
         raise
+    except NotImplementedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(e),
+        ) from e
     except Exception as e:
         logger.error(f"小说分析失败: {str(e)}")
         raise HTTPException(
@@ -150,6 +141,11 @@ async def optimize_novel_comprehensive(
         
     except HTTPException:
         raise
+    except NotImplementedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(e),
+        ) from e
     except Exception as e:
         logger.error(f"小说优化失败: {str(e)}")
         raise HTTPException(
@@ -160,7 +156,7 @@ async def optimize_novel_comprehensive(
 
 @router.post("/ai-takeover/{novel_id}")
 async def ai_takeover_novel(
-    novel_id: int,
+    novel_id: Annotated[int, Path(gt=0)],
     takeover_scope: List[str],
     ai_instructions: str = "",
     current_user: User = Depends(get_current_user),
@@ -185,53 +181,10 @@ async def ai_takeover_novel(
                 detail="小说不存在或无权访问"
             )
         
-        # 执行AI接管流程
-        takeover_results = []
-        
-        for scope in takeover_scope:
-            # 分析当前状态
-            analysis_action = UnifiedMCPAction(
-                target_type=scope,
-                action="analyze",
-                novel_id=novel_id,
-                parameters={"analysis_depth": "comprehensive"},
-                ai_instructions=ai_instructions
-            )
-            
-            analysis_result = await unified_mcp_service.execute_unified_action(
-                db, analysis_action, current_user.id
-            )
-            
-            # 基于分析结果进行优化
-            if analysis_result.success:
-                optimization_action = UnifiedMCPAction(
-                    target_type=scope,
-                    action="optimize",
-                    novel_id=novel_id,
-                    parameters={"optimization_goals": ["提升质量", "增强一致性"]},
-                    ai_instructions=ai_instructions
-                )
-                
-                optimization_result = await unified_mcp_service.execute_unified_action(
-                    db, optimization_action, current_user.id
-                )
-                
-                takeover_results.append({
-                    "scope": scope,
-                    "analysis": analysis_result.result,
-                    "optimization": optimization_result.result if optimization_result.success else None,
-                    "status": "completed" if optimization_result.success else "failed"
-                })
-        
-        logger.info(f"AI接管完成: 小说ID {novel_id}, 范围: {takeover_scope} - 用户: {current_user.username}")
-        
-        return {
-            "novel_id": novel_id,
-            "takeover_scope": takeover_scope,
-            "results": takeover_results,
-            "message": "AI接管流程完成",
-            "timestamp": datetime.utcnow()
-        }
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="AI接管尚未接入可审计、可回滚的真实执行链路",
+        )
         
     except HTTPException:
         raise
@@ -245,7 +198,7 @@ async def ai_takeover_novel(
 
 @router.post("/ai-autopilot/{novel_id}")
 async def enable_ai_autopilot(
-    novel_id: int,
+    novel_id: Annotated[int, Path(gt=0)],
     autopilot_config: dict,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -268,18 +221,10 @@ async def enable_ai_autopilot(
                 detail="小说不存在或无权访问"
             )
         
-        # TODO: 实现AI自动驾驶配置
-        # 这里可以设置定时任务，让AI定期检查和优化小说
-        
-        logger.info(f"AI自动驾驶启用: 小说ID {novel_id} - 用户: {current_user.username}")
-        
-        return {
-            "novel_id": novel_id,
-            "autopilot_enabled": True,
-            "config": autopilot_config,
-            "message": "AI自动驾驶模式已启用",
-            "next_check": "24小时后"
-        }
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="AI自动驾驶尚未实现任务调度、持久化和回滚能力",
+        )
         
     except HTTPException:
         raise
@@ -298,65 +243,12 @@ async def get_mcp_capabilities():
     
     返回AI可以执行的所有操作和管理的所有目标类型
     """
-    return {
-        "target_types": {
-            "worldview": {
-                "description": "世界观设定管理",
-                "capabilities": ["创建设定", "分析一致性", "优化完整性", "验证逻辑"]
-            },
-            "character": {
-                "description": "角色管理",
-                "capabilities": ["生成角色", "分析性格", "优化发展", "管理关系"]
-            },
-            "plot": {
-                "description": "情节管理", 
-                "capabilities": ["设计情节", "分析结构", "优化节奏", "检测漏洞"]
-            },
-            "timeline": {
-                "description": "时间线管理",
-                "capabilities": ["构建时间线", "检查一致性", "优化逻辑", "同步事件"]
-            },
-            "outline": {
-                "description": "大纲管理",
-                "capabilities": ["生成大纲", "优化结构", "调整节奏", "完善细节"]
-            },
-            "style": {
-                "description": "文风管理",
-                "capabilities": ["分析文风", "保持一致性", "优化表达", "适配场景"]
-            },
-            "novel": {
-                "description": "小说级别管理",
-                "capabilities": ["全面分析", "系统优化", "质量评估", "改进规划"]
-            }
-        },
-        "action_types": {
-            "analyze": "深度分析目标",
-            "optimize": "智能优化目标",
-            "create": "创建新目标",
-            "update": "更新现有目标",
-            "delete": "删除目标",
-            "generate": "AI生成目标",
-            "validate": "验证目标有效性",
-            "sync": "同步相关目标",
-            "batch_update": "批量更新目标",
-            "ai_review": "AI专业审查",
-            "auto_fix": "自动修复问题",
-            "smart_suggest": "智能改进建议"
-        },
-        "ai_features": {
-            "autonomous_management": "自主管理能力",
-            "comprehensive_analysis": "全面分析能力", 
-            "intelligent_optimization": "智能优化能力",
-            "proactive_suggestions": "主动建议能力",
-            "continuous_monitoring": "持续监控能力",
-            "adaptive_learning": "自适应学习能力"
-        }
-    }
+    return unified_mcp_service.get_capabilities()
 
 
 @router.get("/audit/history")
 async def get_operation_history(
-    limit: int = 50,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
     target_type: str = None,
     action: str = None,
     success_only: bool = None,
@@ -408,8 +300,8 @@ async def get_operation_history(
 
 @router.get("/audit/novel/{novel_id}/history")
 async def get_novel_operation_history(
-    novel_id: int,
-    limit: int = 100,
+    novel_id: Annotated[int, Path(gt=0)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -427,6 +319,7 @@ async def get_novel_operation_history(
         
         history = mcp_audit_service.get_novel_operation_history(
             db=db,
+            user_id=current_user.id,
             novel_id=novel_id,
             limit=limit
         )
@@ -464,7 +357,7 @@ async def get_novel_operation_history(
 
 @router.get("/audit/statistics")
 async def get_operation_statistics(
-    days: int = 30,
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -493,8 +386,8 @@ async def get_operation_statistics(
 
 @router.get("/audit/novel/{novel_id}/statistics")
 async def get_novel_operation_statistics(
-    novel_id: int,
-    days: int = 30,
+    novel_id: Annotated[int, Path(gt=0)],
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -512,6 +405,7 @@ async def get_novel_operation_statistics(
         
         stats = mcp_audit_service.get_operation_statistics(
             db=db,
+            user_id=current_user.id,
             novel_id=novel_id,
             days=days
         )
@@ -534,7 +428,7 @@ async def get_novel_operation_statistics(
 
 @router.get("/audit/errors")
 async def get_error_analysis(
-    days: int = 7,
+    days: Annotated[int, Query(ge=1, le=365)] = 7,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -571,9 +465,19 @@ async def get_performance_metrics(
     """
     try:
         # 获取当前并发操作数
+        owned_novel_ids = {
+            novel_id
+            for (novel_id,) in db.query(Novel.id).filter(
+                Novel.user_id == current_user.id
+            ).all()
+        }
         concurrent_ops = {}
-        for novel_id, count in unified_mcp_service._operation_counters.items():
-            if count > 0:
+        for (operation_user_id, novel_id), count in unified_mcp_service._operation_counters.items():
+            if (
+                count > 0
+                and operation_user_id == current_user.id
+                and novel_id in owned_novel_ids
+            ):
                 concurrent_ops[novel_id] = count
         
         # 获取性能配置

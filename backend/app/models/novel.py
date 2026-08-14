@@ -1,10 +1,17 @@
 """
 小说数据模型
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from uuid import uuid4
+
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base import Base
+
+
+def _new_rag_lifecycle_id() -> str:
+    """生成不可由数据库主键复用冒充的RAG生命周期标识。"""
+    return uuid4().hex
 
 
 class Novel(Base):
@@ -16,6 +23,13 @@ class Novel(Base):
     description = Column(Text, nullable=True)
     genre = Column(String(50), nullable=True)  # 题材类型：玄幻、都市、科幻等
     worldview = Column(Text, nullable=True)  # 世界观设定
+    rag_lifecycle_id = Column(
+        String(32),
+        nullable=False,
+        unique=True,
+        default=_new_rag_lifecycle_id,
+    )
+    rag_revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     # 外键关联用户
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -41,6 +55,10 @@ class Novel(Base):
 class Chapter(Base):
     """章节模型"""
     __tablename__ = "chapters"
+    __table_args__ = (
+        UniqueConstraint("novel_id", "chapter_number", name="uq_chapters_novel_number"),
+        CheckConstraint("chapter_number > 0", name="ck_chapters_number_positive"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False, index=True)
@@ -48,6 +66,13 @@ class Chapter(Base):
     title = Column(String(200), nullable=False)
     content = Column(Text, nullable=False)
     word_count = Column(Integer, default=0)  # 字数统计
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    rag_lifecycle_id = Column(
+        String(32),
+        nullable=False,
+        unique=True,
+        default=_new_rag_lifecycle_id,
+    )
 
     # 时间戳
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -15,8 +15,13 @@ from datetime import datetime
 
 # ========== 角色CRUD ==========
 
-def create_character(db: Session, character: CharacterCreate) -> Character:
-    """创建角色"""
+def create_character(
+    db: Session,
+    character: CharacterCreate,
+    *,
+    commit: bool = True,
+) -> Character:
+    """创建角色；组合业务可延迟提交以保证跨步骤原子性。"""
     db_character = Character(
         novel_id=character.novel_id,
         name=character.name,
@@ -33,8 +38,11 @@ def create_character(db: Session, character: CharacterCreate) -> Character:
         first_appearance_chapter=character.first_appearance_chapter,
     )
     db.add(db_character)
-    db.commit()
-    db.refresh(db_character)
+    if commit:
+        db.commit()
+        db.refresh(db_character)
+    else:
+        db.flush()
     return db_character
 
 
@@ -112,17 +120,20 @@ def delete_character(db: Session, character_id: int) -> bool:
 def update_character_ai_analysis(
     db: Session, 
     character_id: int, 
-    analysis: Dict[str, Any]
+    analysis: Dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> Optional[Character]:
-    """更新角色的AI分析结果"""
+    """更新角色的AI分析结果；组合业务可与角色创建一并提交。"""
     db_character = get_character(db, character_id)
     if not db_character:
         return None
     
     db_character.ai_analysis = analysis
     db_character.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_character)
+    if commit:
+        db.commit()
+        db.refresh(db_character)
     return db_character
 
 

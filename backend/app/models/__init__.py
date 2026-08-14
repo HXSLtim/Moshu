@@ -11,6 +11,8 @@ from app.models.worldview import (
     NovelOutline,
     StyleGuide,
 )
+from app.models.mcp_audit import MCPAuditLog
+from app.models.story_bible import StoryFact, StoryEvent
 
 __all__ = [
     "User",
@@ -23,4 +25,7 @@ __all__ = [
     "StoryTimeline",
     "NovelOutline",
     "StyleGuide",
+    "MCPAuditLog",
+    "StoryFact",
+    "StoryEvent",
 ]

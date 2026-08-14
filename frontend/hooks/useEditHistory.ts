@@ -1,9 +1,20 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface UseEditHistoryOptions {
   maxHistorySize?: number;
+  maxCharacterBudget?: number;
+  batchDelay?: number;
+}
+
+interface AddHistoryOptions {
+  immediate?: boolean;
+}
+
+interface HistoryState {
+  entries: string[];
+  index: number;
 }
 
 interface UseEditHistoryReturn {
@@ -11,110 +22,134 @@ interface UseEditHistoryReturn {
   historyIndex: number;
   canUndo: boolean;
   canRedo: boolean;
-  addToHistory: (content: string) => void;
+  addToHistory: (content: string, options?: AddHistoryOptions) => void;
+  flushHistory: () => void;
   undo: () => string | null;
   redo: () => string | null;
   clearHistory: (initialContent: string) => void;
 }
 
+const EMPTY_HISTORY: HistoryState = { entries: [], index: -1 };
+
 /**
- * 编辑历史管理Hook（撤销/重做）
- * @param maxHistorySize - 最大历史记录条数（默认100）
+ * 按编辑批次保存正文快照，并同时限制条数与总字符量。
  */
 export function useEditHistory(
-  options: UseEditHistoryOptions = {}
+  options: UseEditHistoryOptions = {},
 ): UseEditHistoryReturn {
-  const { maxHistorySize = 100 } = options;
+  const {
+    maxHistorySize = 50,
+    maxCharacterBudget = 5_000_000,
+    batchDelay = 400,
+  } = options;
+  const [state, setState] = useState<HistoryState>(EMPTY_HISTORY);
+  const [hasPending, setHasPending] = useState(false);
+  const stateRef = useRef<HistoryState>(EMPTY_HISTORY);
+  const pendingContentRef = useRef<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 编辑历史
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-
-  // 用于标记是否正在应用历史记录（避免循环添加到历史）
-  const isApplyingHistoryRef = useRef(false);
-
-  /**
-   * 添加到历史记录
-   */
-  const addToHistory = useCallback(
-    (content: string) => {
-      if (isApplyingHistoryRef.current) return;
-
-      setHistory((prevHistory) => {
-        const newHistory = prevHistory.slice(0, historyIndex + 1);
-        newHistory.push(content);
-
-        // 限制历史记录数量
-        if (newHistory.length > maxHistorySize) {
-          newHistory.shift();
-        }
-
-        return newHistory;
-      });
-
-      setHistoryIndex((prevIndex) => {
-        const newIndex = Math.min(prevIndex + 1, maxHistorySize - 1);
-        return newIndex;
-      });
-    },
-    [historyIndex, maxHistorySize]
-  );
-
-  /**
-   * 撤销
-   */
-  const undo = useCallback((): string | null => {
-    if (historyIndex <= 0) return null;
-
-    isApplyingHistoryRef.current = true;
-    const newIndex = historyIndex - 1;
-    setHistoryIndex(newIndex);
-
-    // 短暂延迟后重置标记，确保状态更新完成
-    setTimeout(() => {
-      isApplyingHistoryRef.current = false;
-    }, 100);
-
-    return history[newIndex];
-  }, [history, historyIndex]);
-
-  /**
-   * 重做
-   */
-  const redo = useCallback((): string | null => {
-    if (historyIndex >= history.length - 1) return null;
-
-    isApplyingHistoryRef.current = true;
-    const newIndex = historyIndex + 1;
-    setHistoryIndex(newIndex);
-
-    // 短暂延迟后重置标记，确保状态更新完成
-    setTimeout(() => {
-      isApplyingHistoryRef.current = false;
-    }, 100);
-
-    return history[newIndex];
-  }, [history, historyIndex]);
-
-  /**
-   * 清空历史记录
-   */
-  const clearHistory = useCallback((initialContent: string) => {
-    isApplyingHistoryRef.current = false;
-    setHistory([initialContent]);
-    setHistoryIndex(0);
+  const publish = useCallback((next: HistoryState) => {
+    stateRef.current = next;
+    setState(next);
   }, []);
 
-  // 是否可撤销/重做
-  const canUndo = historyIndex > 0;
-  const canRedo = historyIndex < history.length - 1;
+  const commit = useCallback(
+    (content: string) => {
+      const current = stateRef.current;
+      const entries = current.entries.slice(0, current.index + 1);
+      if (entries[entries.length - 1] === content) return;
+
+      entries.push(content);
+      let totalCharacters = entries.reduce((total, item) => total + item.length, 0);
+
+      while (
+        entries.length > 1 &&
+        (entries.length > maxHistorySize || totalCharacters > maxCharacterBudget)
+      ) {
+        totalCharacters -= entries[0].length;
+        entries.shift();
+      }
+
+      publish({ entries, index: entries.length - 1 });
+    },
+    [maxCharacterBudget, maxHistorySize, publish],
+  );
+
+  const clearTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const flushHistory = useCallback(() => {
+    clearTimer();
+    const pending = pendingContentRef.current;
+    pendingContentRef.current = null;
+    setHasPending(false);
+    if (pending !== null) commit(pending);
+  }, [clearTimer, commit]);
+
+  const addToHistory = useCallback(
+    (content: string, addOptions: AddHistoryOptions = {}) => {
+      pendingContentRef.current = content;
+      setHasPending(true);
+      clearTimer();
+
+      if (addOptions.immediate) {
+        flushHistory();
+        return;
+      }
+
+      timerRef.current = setTimeout(flushHistory, batchDelay);
+    },
+    [batchDelay, clearTimer, flushHistory],
+  );
+
+  const undo = useCallback((): string | null => {
+    flushHistory();
+    const current = stateRef.current;
+    if (current.index <= 0) return null;
+
+    const next = { ...current, index: current.index - 1 };
+    publish(next);
+    return next.entries[next.index];
+  }, [flushHistory, publish]);
+
+  const redo = useCallback((): string | null => {
+    flushHistory();
+    const current = stateRef.current;
+    if (current.index >= current.entries.length - 1) return null;
+
+    const next = { ...current, index: current.index + 1 };
+    publish(next);
+    return next.entries[next.index];
+  }, [flushHistory, publish]);
+
+  const clearHistory = useCallback(
+    (initialContent: string) => {
+      clearTimer();
+      pendingContentRef.current = null;
+      setHasPending(false);
+      publish({ entries: [initialContent], index: 0 });
+    },
+    [clearTimer, publish],
+  );
+
+  useEffect(
+    () => () => {
+      clearTimer();
+    },
+    [clearTimer],
+  );
 
   return {
-    history,
-    historyIndex,
-    canUndo,
-    canRedo,
+    history: state.entries,
+    historyIndex: state.index,
+    canUndo: state.index > 0 || hasPending,
+    canRedo: state.index >= 0 && state.index < state.entries.length - 1,
     addToHistory,
+    flushHistory,
     undo,
     redo,
     clearHistory,
@@ -122,10 +157,8 @@ export function useEditHistory(
 }
 
 /**
- * 是否正在应用历史记录的标记Hook
- * 用于避免在应用历史记录时将其添加到历史
+ * 为仍在迁移中的调用方保留的瞬态标记 Hook。
  */
 export function useIsApplyingHistoryRef() {
-  const isApplyingHistoryRef = useRef(false);
-  return isApplyingHistoryRef;
+  return useRef(false);
 }

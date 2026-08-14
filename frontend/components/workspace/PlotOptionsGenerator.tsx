@@ -202,6 +202,7 @@ export default function PlotOptionsGenerator({
                       sx={{ pb: 1 }}
                     >
                       <ListItemText
+                        disableTypography
                         primary={
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                             <LightbulbIcon color="primary" fontSize="small" />
