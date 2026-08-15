@@ -29,6 +29,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import CreateIcon from '@mui/icons-material/Create';
+import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import { countTextUnits } from '@/lib/textStats';
 import { api } from '@/lib/api';
 import type {
   ChapterNextCreate,
@@ -333,13 +335,14 @@ export default function NovelDetailPage() {
     <Container maxWidth="lg">
       <Box sx={{ mt: 4, mb: 4 }}>
         {/* 头部导航 */}
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
           <Button
             startIcon={<ArrowBackIcon />}
             onClick={() => router.push('/dashboard')}
           >
             返回列表
           </Button>
+          <ColorModeToggle />
         </Box>
 
         {error && (
@@ -613,7 +616,7 @@ export default function NovelDetailPage() {
             multiline
             rows={12}
             required
-            helperText={`当前字数：${chapterForm.content?.length ?? 0}`}
+            helperText={`当前字数：${countTextUnits(chapterForm.content || '')}`}
           />
         </DialogContent>
         <DialogActions>

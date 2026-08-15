@@ -22,6 +22,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
+import { countTextUnits } from '@/lib/textStats';
 import type { Novel } from '@/types';
 
 interface CharacterStat {
@@ -242,7 +243,7 @@ export default function CharacterStats({
             />
           </Box>
           <Typography variant="caption" color="text.secondary">
-            当前章节共 {currentContent.length} 字
+            当前章节共 {countTextUnits(currentContent).toLocaleString()} 字
             {deferredContent !== currentContent ? '（统计更新中）' : ''}
           </Typography>
         </Box>

@@ -71,6 +71,21 @@ border.main: '#D6D3C8'   // 主分隔线
 border.dark: '#C7C2B9'   // 强分隔线
 ```
 
+#### 深色「夜墨」模式
+
+浅色是纸，深色是夜墨。深色模式不是纯黑，而是保留宣纸暖意的低亮度色板：
+
+```typescript
+background.default: '#1B1B1B'  // 纯黑上浮 5%
+background.paper: '#242424'    // 卡片背景
+text.primary: '#E2E0DB'        // 米白，保留暖色
+text.secondary: '#9E9E9E'      // 次级灰
+primary.main: '#4EC9A1'        // 降低亮度的松烟绿
+divider: '#494944'             // 弱化分隔
+```
+
+主题切换入口使用 `components/layout/ColorModeToggle.tsx`；应用启动时读取用户保存选择，没有保存选择时跟随 `prefers-color-scheme`。
+
 ### 字体系统
 
 #### 字体栈

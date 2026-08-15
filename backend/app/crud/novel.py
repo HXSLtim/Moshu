@@ -6,6 +6,7 @@ from typing import List, Optional
 from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from app.core.text_stats import count_text_units
 from app.models.novel import Novel, Chapter, StyleSample
 from app.models.schemas import (
     ChapterCreate,
@@ -246,7 +247,7 @@ def create_chapter(
         创建的章节对象
     """
     # 计算字数
-    word_count = len(chapter.content)
+    word_count = count_text_units(chapter.content)
 
     db_chapter = Chapter(
         novel_id=novel_id,
@@ -281,7 +282,7 @@ def create_next_chapter(
             chapter_number=chapter_number,
             title=chapter.title or f"第{chapter_number}章",
             content=chapter.content,
-            word_count=len(chapter.content),
+            word_count=count_text_units(chapter.content),
         )
         db.add(db_chapter)
         try:
@@ -317,7 +318,7 @@ def update_chapter(
         exclude={"expected_version"},
     )
     if "content" in update_data:
-        update_data["word_count"] = len(update_data["content"])
+        update_data["word_count"] = count_text_units(update_data["content"])
 
     statement = (
         update(Chapter)

@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InfoIcon from '@mui/icons-material/Info';
+import ColorModeToggle from '@/components/layout/ColorModeToggle';
 import { api } from '@/lib/api';
 
 export default function LoginPage() {
@@ -111,6 +112,9 @@ export default function LoginPage() {
 
   return (
     <Container maxWidth="sm">
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <ColorModeToggle />
+      </Box>
       <Box
         sx={{
           mt: 8,

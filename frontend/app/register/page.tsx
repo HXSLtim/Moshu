@@ -12,6 +12,7 @@ import {
   CardContent,
   Alert,
 } from '@mui/material';
+import ColorModeToggle from '@/components/layout/ColorModeToggle';
 import { api } from '@/lib/api';
 
 export default function RegisterPage() {
@@ -53,6 +54,9 @@ export default function RegisterPage() {
 
   return (
     <Container maxWidth="sm">
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <ColorModeToggle />
+      </Box>
       <Box
         sx={{
           mt: 8,

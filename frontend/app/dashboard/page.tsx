@@ -28,6 +28,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import SearchIcon from '@mui/icons-material/Search';
+import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import { countTextUnits } from '@/lib/textStats';
 import { api, ApiError } from '@/lib/api';
 import type { Novel, NovelCreate } from '@/types';
 
@@ -403,12 +405,13 @@ export default function DashboardPage() {
 
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
           <Typography variant="h4">我的小说</Typography>
-          <Box>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <ColorModeToggle />
             <Button
               variant="contained"
               startIcon={<AddIcon />}
               onClick={handleCreateNovel}
-              sx={{ mr: 2 }}
+              sx={{ ml: 1, mr: 2 }}
             >
               新建小说
             </Button>
@@ -663,7 +666,7 @@ export default function DashboardPage() {
             <Box>
               <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
                 <Chip label={`第 ${generatedChapter.chapter_number} 章`} color="primary" size="small" />
-                <Chip label={`${generatedChapter.content?.length || 0} 字`} size="small" />
+                <Chip label={`${countTextUnits(generatedChapter.content || '').toLocaleString()} 字`} size="small" />
               </Box>
               <Typography variant="h6" gutterBottom>
                 {generatedChapter.title}

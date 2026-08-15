@@ -45,6 +45,9 @@
 - 更新章节（`PUT .../chapters/{chapter_id}`）**必须**携带 `expected_version`（客户端上次读到的 `version`）。
 - 服务端以 `WHERE id=? AND version=expected_version` 更新，命中 0 行返回 `409`：`{"detail":"章节已被其他保存更新，当前版本为3，请刷新后重试"}`，数字为服务端当前版本号。
 - 章节号冲突同样 `409`：`detail` 为「章节 X 已存在」「目标章节号已存在」或「分配下一章节号时发生并发冲突，请重试」。
+### 字数统计规则
+
+`Chapter.word_count`、`ChapterSummary.word_count` 与小说统计 `total_words` 均按**非空白 Unicode 字符数**计算：忽略组合标记（如拼音声调、重音）和零宽连接符；空白与换行不计入。后端实现在 `app/core/text_stats.py`，前端实现在 `frontend/lib/textStats.ts`，两端语义一致。
 ### 健康检查
 
 | 端点 | 认证 | 响应 |

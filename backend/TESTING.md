@@ -2,7 +2,7 @@
 
 ## 测试基线
 
-- 位置:`backend/tests/`,20 个测试文件,181 个收集项(179 通过、2 个真实模型集成项按标记跳过),当前全绿。
+- 位置:`backend/tests/`,21 个测试文件,187 个收集项(185 通过、2 个真实模型集成项按标记跳过),当前全绿。
 - 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
 - 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
@@ -30,6 +30,7 @@ cd backend
 | AI 路由守卫 | `test_ai_route_guards.py` | AI 端点鉴权、模型不可用时的明确降级而非崩溃 |
 | 生成契约 | `test_generation_consistency_contract.py`、`test_agent_retry.py` | 生成结果结构、一致性状态、重试上限 |
 | 上下文预算 | `test_context_budget.py`、`test_schema_input_budgets.py` | 各类输入截断边界、schema 字段上限 |
+| 字数统计 | `test_text_stats.py` | 非空白 Unicode 计数、组合标记与 ZWJ 忽略、章节 CRUD 写入 |
 | 审核 | `test_review_fail_closed.py` | 任一审核失败时不得报告"可发布" |
 | RAG | `test_rag_service.py` | 投影真源、覆盖更新、按范围过滤、删除清理 |
 | 一致性 | `test_consistency_service.py` | 规则校验、关系抽取、降级行为 |

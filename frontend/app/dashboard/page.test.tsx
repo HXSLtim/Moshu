@@ -2,6 +2,7 @@ import React from 'react';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from '@/lib/api';
+import { ColorModeProvider } from '@/hooks/useColorMode';
 import type { Novel } from '@/types';
 import DashboardPage from './page';
 
@@ -55,7 +56,11 @@ describe('DashboardPage 数据加载降级', () => {
       }),
     );
 
-    render(<DashboardPage />);
+    render(
+      <ColorModeProvider>
+        <DashboardPage />
+      </ColorModeProvider>,
+    );
 
     expect(await screen.findByText(novel.title)).toBeTruthy();
     rejectStatistics(new ApiError('统计接口暂未部署', 404));
@@ -71,7 +76,11 @@ describe('DashboardPage 数据加载降级', () => {
     );
     vi.spyOn(api, 'getNovelStatistics').mockResolvedValue([]);
 
-    render(<DashboardPage />);
+    render(
+      <ColorModeProvider>
+        <DashboardPage />
+      </ColorModeProvider>,
+    );
 
     expect(await screen.findByText('小说服务暂不可用')).toBeTruthy();
     expect(navigation.router.push).not.toHaveBeenCalled();

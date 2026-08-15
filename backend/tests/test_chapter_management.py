@@ -349,6 +349,25 @@ def test_crud_optimistic_update_is_atomic(chapter_api):
     assert exc_info.value.current_version == 2
 
 
+def test_chapter_word_count_uses_unified_text_stats(chapter_api):
+    """章节创建与更新按统一规则排除空白，并忽略组合标记。"""
+    client, _, novel = chapter_api
+
+    created = client.post(
+        f"/api/novels/{novel.id}/chapters",
+        json={"chapter_number": 1, "title": "字数测试", "content": "  你好\n世界  "},
+    )
+    assert created.status_code == 201
+    assert created.json()["word_count"] == 4
+
+    updated = client.put(
+        f"/api/novels/{novel.id}/chapters/{created.json()['id']}",
+        json={"expected_version": 1, "content": "e\u0301"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["word_count"] == 1
+
+
 def test_generation_and_rag_requests_have_hard_bounds():
     """过大的模型上下文和召回数量在进入服务前即被拒绝。"""
     with pytest.raises(ValueError):

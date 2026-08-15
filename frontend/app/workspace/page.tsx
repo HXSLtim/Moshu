@@ -48,9 +48,12 @@ import SaveIcon from '@mui/icons-material/Save';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import UndoIcon from '@mui/icons-material/Undo';
 import WarningIcon from '@mui/icons-material/Warning';
+import ColorModeToggle from '@/components/layout/ColorModeToggle';
 import { api } from '@/lib/api';
 import { useChapterSave } from '@/hooks/useChapterSave';
 import { useEditHistory } from '@/hooks/useEditHistory';
+import { useWorkspaceKeyboardShortcuts } from '@/hooks/useWorkspaceKeyboardShortcuts';
+import { countTextUnits } from '@/lib/textStats';
 import { runAfterSave } from '@/lib/workspaceNavigation';
 import type {
   AgentWorkflowTrace,
@@ -232,6 +235,7 @@ function WorkspacePageContent() {
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [novelTotalWords, setNovelTotalWords] = useState(0);
   const [error, setError] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
@@ -275,10 +279,18 @@ function WorkspacePageContent() {
     maxCharacterBudget: 5_000_000,
   });
 
+  const currentChapterWordCountRef = useRef(currentChapter?.word_count ?? 0);
+  currentChapterWordCountRef.current = currentChapter?.word_count ?? 0;
+
   const handleSaved = useCallback((
     snapshot: { chapterId: number; title: string; content: string },
     savedChapter: Chapter,
   ) => {
+    const previousWordCount = currentChapterWordCountRef.current;
+    currentChapterWordCountRef.current = savedChapter.word_count;
+    setNovelTotalWords((total) =>
+      Math.max(0, total + savedChapter.word_count - previousWordCount),
+    );
     setCurrentChapter((previous) => {
       if (previous?.id !== snapshot.chapterId) return previous;
       return {
@@ -401,7 +413,7 @@ function WorkspacePageContent() {
     setError('');
 
     try {
-      const [summaryPage, chapterDetail] = await Promise.all([
+      const [summaryPage, chapterDetail, novelStatistics] = await Promise.all([
         api.getChapterSummaries(
           novelId,
           { page: 1, pageSize: CHAPTER_PAGE_SIZE },
@@ -410,6 +422,7 @@ function WorkspacePageContent() {
         requestedChapterId
           ? api.getChapter(novelId, requestedChapterId, { signal: controller.signal })
           : Promise.resolve(null),
+        api.getNovelStatistics({ signal: controller.signal }),
       ]);
 
       if (workspaceRequestRef.current?.id !== requestId) return;
@@ -421,6 +434,9 @@ function WorkspacePageContent() {
       setChapterPage(summaryPage.page);
       setChapterTotal(summaryPage.total);
       setHasMoreChapters(summaryPage.has_more);
+      setNovelTotalWords(
+        novelStatistics.find((item) => item.novel_id === novelId)?.total_words ?? 0,
+      );
 
       if (chapterDetail) {
         setCurrentChapter(chapterDetail);
@@ -702,6 +718,44 @@ function WorkspacePageContent() {
     if (next !== null) setContent(next);
   }, [redo]);
 
+  const currentChapterIndex = chapters.findIndex(
+    (chapter) => chapter.id === currentChapter?.id,
+  );
+  const hasPreviousChapter = currentChapterIndex > 0;
+  const hasNextChapter =
+    currentChapterIndex >= 0 && currentChapterIndex < chapters.length - 1;
+
+  const handlePreviousChapter = useCallback(() => {
+    if (!hasPreviousChapter) return;
+    const previousChapter = chapters[currentChapterIndex - 1];
+    void handleChapterSelected(previousChapter.id);
+  }, [chapters, currentChapterIndex, handleChapterSelected, hasPreviousChapter]);
+
+  const handleNextChapter = useCallback(() => {
+    if (!hasNextChapter) return;
+    const nextChapter = chapters[currentChapterIndex + 1];
+    void handleChapterSelected(nextChapter.id);
+  }, [chapters, currentChapterIndex, handleChapterSelected, hasNextChapter]);
+
+  useWorkspaceKeyboardShortcuts({
+    enabled:
+      !loading &&
+      Boolean(currentChapter) &&
+      !createChapterDialogOpen &&
+      !editChapterDialogOpen &&
+      !deleteChapterDialogOpen &&
+      !chapterMenuAnchor,
+    canUndo,
+    canRedo,
+    hasPreviousChapter,
+    hasNextChapter,
+    onSave: () => void handleSave(),
+    onUndo: handleUndo,
+    onRedo: handleRedo,
+    onPreviousChapter: handlePreviousChapter,
+    onNextChapter: handleNextChapter,
+  });
+
   const chapterNavigator = (
     <ChapterNavigator
       chapters={chapters}
@@ -837,14 +891,14 @@ function WorkspacePageContent() {
               </IconButton>
 
               <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="h6" noWrap sx={{ color: 'white', fontWeight: 600, fontSize: '1.1rem' }}>
+                <Typography variant="h6" noWrap sx={{ color: 'primary.contrastText', fontWeight: 600, fontSize: '1.1rem' }}>
                   {novel?.title || '写作工作台'}
                 </Typography>
                 {currentChapter && (
                   <Chip
                     label={`第${currentChapter.chapter_number}章`}
                     size="small"
-                    sx={{ display: { xs: 'none', sm: 'inline-flex' }, bgcolor: 'rgba(255,255,255,0.2)', color: 'white' }}
+                    sx={{ display: { xs: 'none', sm: 'inline-flex' }, bgcolor: 'rgba(255,255,255,0.2)', color: 'primary.contrastText' }}
                   />
                 )}
               </Box>
@@ -862,6 +916,7 @@ function WorkspacePageContent() {
                   {isSaving ? '保存中...' : '保存'}
                 </Box>
               </Button>
+              <ColorModeToggle inheritColor />
               <IconButton
                 color="inherit"
                 aria-label="打开 AI 助手"
@@ -937,7 +992,18 @@ function WorkspacePageContent() {
                         <RedoIcon fontSize="small" />
                       </IconButton>
                     </Box>
-                    <Chip label={`${content.length.toLocaleString()} 字`} size="small" variant="outlined" />
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Chip
+                        label={`本章 ${countTextUnits(content).toLocaleString()} 字`}
+                        size="small"
+                        variant="outlined"
+                      />
+                      <Chip
+                        label={`全书 ${novelTotalWords.toLocaleString()} 字`}
+                        size="small"
+                        variant="outlined"
+                      />
+                    </Box>
                   </Box>
                 </>
               ) : (
