@@ -163,10 +163,6 @@ function parseServerVersion(message: string): number | null {
   return Number.isInteger(version) && version > 0 ? version : null;
 }
 
-function isBrowserOnline(): boolean {
-  return typeof navigator === 'undefined' || navigator.onLine !== false;
-}
-
 /**
  * 统一协调自动与手动保存：同一时刻只发送一个请求，过程中产生的新稿只保留最新版。
  *
@@ -188,7 +184,8 @@ export function useChapterSave({
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ChapterSaveConflict | null>(null);
-  const [isOffline, setIsOffline] = useState(!isBrowserOnline());
+  // 服务端首帧统一按在线渲染，挂载后再同步真实网络状态，避免 hydration 不匹配。
+  const [isOffline, setIsOffline] = useState(false);
   const [hasLocalBackup, setHasLocalBackup] = useState(false);
 
   const mountedRef = useRef(true);
@@ -515,6 +512,7 @@ export function useChapterSave({
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const updateOffline = () => setIsOffline(!navigator.onLine);
+    updateOffline();
 
     const handleOffline = () => {
       updateOffline();
