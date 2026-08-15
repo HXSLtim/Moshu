@@ -226,7 +226,7 @@
 | current_day | int | 否 | >0，默认 1 |
 | target_length | int | 否 | 100–8000，默认 500 |
 
-响应含 `final_content`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`rag_results[]`、`workflow_trace` 等。错误：`404`、`422` 提示词超预算、`500`。
+响应含 `final_content`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的 active facts / 相关 events。错误：`404`、`422` 提示词超预算、`500`。
 ### POST /api/generation/plot-options — 剧情走向选项（200）
 
 | 字段 | 类型 | 必填 | 约束 |
@@ -275,7 +275,7 @@
 | style_sample_id | int | 否 | 可空 |
 | plot_direction_hint | string | 否 | ≤600 |
 
-响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`workflow_trace`、`settings{pace,tone,style_strength}`。错误：`404`、`500`。
+响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 现包含 RAG 世界观/角色块与 Story Bible 上下文。错误：`404`、`500`。
 ### POST /api/generation/continue-stream — 章节续写（SSE 流式）
 请求字段同 `/continue`。响应 `Content-Type: text/event-stream`，`data:` 行为 JSON：
 
@@ -422,7 +422,7 @@
 审计响应：`history` → `{user_id, total_records, operations[]}`，`operation` 含 `id`/`target_type`/`action`/`novel_id`/`target_id`/`success`/`execution_time_ms`/`ai_tokens_used`/`created_at`/`error_message`；`statistics` → `{statistics}`；`errors` → `{error_analysis}`。
 ## 十三、Story Bible（/api/story-bible）
 
-结构化事实账本与剧情事件基础接口。写入模型均拒绝未知字段；所有资源先校验小说归属，越权统一返回 `404`。
+结构化事实账本与剧情事件基础接口。写入模型均拒绝未知字段；所有资源先校验小说归属，越权统一返回 `404`。生成工作流会读取**当前仍为 active**、且确立章节不晚于目标章节的事实，以及故事日/章节不晚于当前进度的事件，经统一预算裁剪后注入 Agent A/B/C。
 
 ### 事实账本（facts）
 

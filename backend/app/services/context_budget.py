@@ -14,6 +14,7 @@ MAX_GENERATION_PROMPT_CHARS = 4_000
 MAX_CURRENT_CONTENT_CHARS = 50_000
 MAX_WORLDVIEW_CONTEXT_CHARS = 1_200
 MAX_STORY_CONTEXT_CHARS = 1_600
+MAX_STORY_BIBLE_CONTEXT_CHARS = 1_400
 MAX_PLOT_HINT_CHARS = 600
 MAX_RAG_QUERY_CHARS = 1_000
 MAX_TRACE_PREVIEW_CHARS = 120
@@ -74,6 +75,56 @@ def build_rag_query(prompt: str) -> str:
     """生成有界 RAG 查询，优先保留最近的创作要求。"""
 
     return compact_text(prompt, MAX_RAG_QUERY_CHARS, keep="tail")
+
+
+def build_story_bible_context(
+    facts: Iterable[object],
+    events: Iterable[object],
+) -> List[str]:
+    """把已确认的事实与事件压缩成可注入模型的有界上下文。"""
+
+    lines: List[str] = []
+
+    for fact in facts:
+        subject = str(getattr(fact, "subject", "")).strip()
+        attribute = str(getattr(fact, "attribute", "")).strip()
+        value = str(getattr(fact, "value", "")).strip()
+        if not subject or not attribute or not value:
+            continue
+        line = f"- {subject}的{attribute}：{value}"
+        description = str(getattr(fact, "description", "") or "").strip()
+        if description:
+            line += f"（{compact_text(description, 120, keep='head')}）"
+        chapter = getattr(fact, "chapter_established", None)
+        if chapter is not None:
+            line += f" [第{chapter}章确立]"
+        lines.append(line)
+
+    for event in reversed(list(events)):
+        title = str(getattr(event, "title", "")).strip()
+        description = str(getattr(event, "description", "")).strip()
+        if not title and not description:
+            continue
+        story_day = getattr(event, "story_day", None)
+        chapter = getattr(event, "chapter", None)
+        position = []
+        if story_day is not None:
+            position.append(f"第{story_day}天")
+        if chapter is not None:
+            position.append(f"第{chapter}章")
+        prefix = f"[{'/'.join(position)}] " if position else ""
+        line = f"- 事件：{title}{prefix}：{description}"
+        foreshadowing = str(getattr(event, "foreshadowing", "") or "").strip()
+        if foreshadowing:
+            line += f"（伏笔：{compact_text(foreshadowing, 120, keep='head')}）"
+        lines.append(line)
+
+    bounded = compact_text(
+        "\n".join(lines),
+        MAX_STORY_BIBLE_CONTEXT_CHARS,
+        keep="both",
+    )
+    return [line for line in bounded.split("\n") if line.strip()]
 
 
 def build_prompt_trace_summary(prompt: str) -> dict[str, object]:

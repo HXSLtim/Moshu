@@ -850,7 +850,7 @@ async def continue_chapter(
             "style_features": style_features,
             "style_sample_id": style_sample_id,
             "rag_style_context": rag_style_context,
-            "rag_story_context": response.worldview_context + response.character_context,
+            "rag_story_context": response.worldview_context + response.character_context + response.story_bible_context,
             "agent_outputs": [output.model_dump() for output in response.agent_outputs],
             "consistency_checks": [
                 check.model_dump() for check in response.consistency_checks
@@ -1039,7 +1039,7 @@ async def continue_chapter_stream(
                             "style_features": style_features,
                             "style_sample_id": style_sample_id,
                             "rag_style_context": rag_style_context,
-                            "rag_story_context": response.worldview_context + response.character_context,
+                            "rag_story_context": response.worldview_context + response.character_context + response.story_bible_context,
                             "agent_outputs": [output.model_dump() for output in response.agent_outputs],
                             "consistency_checks": [
                                 check.model_dump() for check in response.consistency_checks

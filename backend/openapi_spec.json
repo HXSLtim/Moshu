@@ -5869,6 +5869,13 @@
             "type": "array",
             "title": "Character Context"
           },
+          "story_bible_context": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Story Bible Context"
+          },
           "rag_results": {
             "items": {
               "type": "object"

@@ -474,6 +474,7 @@ class GenerationResponse(BaseModel):
     generated_at: datetime
     worldview_context: List[str] = Field(default_factory=list)
     character_context: List[str] = Field(default_factory=list)
+    story_bible_context: List[str] = Field(default_factory=list)
     rag_results: List[Dict[str, Any]] = Field(default_factory=list)
     workflow_trace: Optional[AgentWorkflowTrace] = Field(
         default=None,

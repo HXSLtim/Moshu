@@ -3,11 +3,16 @@
 实现基于LangGraph的三Agent协作工作流，并在内部构建Agent工作流追踪，
 便于前端可视化展示各个Agent节点的执行过程和数据流。
 """
+import asyncio
 from typing import TypedDict, Dict, Any, List
+
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
+
 from app.core.config import settings
+from app.crud import story_bible as story_bible_crud
+from app.db.base import SessionLocal
 from app.models.schemas import (
     GenerationRequest,
     GenerationResponse,
@@ -25,6 +30,7 @@ from app.services.context_budget import (
     MAX_WORLDVIEW_CONTEXT_CHARS,
     build_prompt_trace_summary,
     build_rag_query,
+    build_story_bible_context,
     compact_text,
     ensure_generation_prompt_budget,
 )
@@ -147,6 +153,7 @@ class NovelGenerationState(TypedDict):
     # 检索到的上下文
     worldview_context: List[str]
     character_context: List[str]
+    story_bible_context: List[str]
 
     # 一致性检查结果
     consistency_result: Dict[str, Any]
@@ -221,10 +228,34 @@ class AgentService:
 
         return workflow.compile()
 
+    @staticmethod
+    def _load_story_bible_context_sync(
+        novel_id: int,
+        chapter: int,
+        current_day: int,
+    ):
+        """同步读取 Story Bible 事实与事件，会话用完即关。"""
+        db = SessionLocal()
+        try:
+            facts = story_bible_crud.get_active_facts_for_generation(
+                db,
+                novel_id,
+                max_chapter=chapter,
+            )
+            events = story_bible_crud.get_events_for_generation(
+                db,
+                novel_id,
+                max_chapter=chapter,
+                current_day=current_day,
+            )
+            return facts, events
+        finally:
+            db.close()
+
     async def _retrieve_context(self, state: NovelGenerationState) -> Dict:
         """
         检索上下文节点
-        从RAG中检索世界观和角色信息
+        从RAG中检索世界观、角色信息，并读取已确认的 Story Bible 事实与事件
         """
         logger.info(
             "检索上下文：小说{}，章节{}，提示词长度={}",
@@ -252,6 +283,14 @@ class AgentService:
             character_name="主角",  # 简化处理
             max_chapter=max_chapter,
         )
+
+        story_facts, story_events = await asyncio.to_thread(
+            self._load_story_bible_context_sync,
+            state["novel_id"],
+            current_chapter,
+            state.get("current_day", 1),
+        )
+        story_bible_context = build_story_bible_context(story_facts, story_events)
         step_end = datetime.utcnow()
 
         # 记录工作流步骤
@@ -262,7 +301,7 @@ class AgentService:
             type="rag",
             agent_name="RAGService",
             title="检索上下文",
-            description="从RAG中检索世界观和角色相关上下文，避免剧透。",
+            description="从RAG中检索世界观和角色信息，并读取不晚于当前章节的 Story Bible 事实与事件。",
             input={
                 "novel_id": state["novel_id"],
                 "chapter": state["chapter"],
@@ -272,10 +311,12 @@ class AgentService:
             output={
                 "worldview_chunks": len(worldview_context or []),
                 "character_chunks": len(character_context or []),
+                "story_bible_lines": len(story_bible_context),
             },
             data_sources={
                 "worldview_context": worldview_context[:5],
                 "character_context": character_context[:5],
+                "story_bible_context": story_bible_context[:5],
             },
             llm={},
             status="completed",
@@ -288,6 +329,7 @@ class AgentService:
         return {
             "worldview_context": worldview_context,
             "character_context": character_context,
+            "story_bible_context": story_bible_context,
             "workflow_steps": steps,
         }
 
@@ -311,6 +353,9 @@ class AgentService:
 
 世界观上下文：
 {worldview_context}
+
+已确认的故事事实与事件：
+{story_bible_context}
 """),
             ("user", "剧情提示：{prompt}\n\n请描写场景的世界观和环境氛围。")
         ])
@@ -320,7 +365,8 @@ class AgentService:
         chain = prompt | self.llm_simple
         response = await chain.ainvoke({
             "prompt": state["prompt"],
-            "worldview_context": "\n".join(state.get("worldview_context", ["无相关世界观信息"]))
+            "worldview_context": "\n".join(state.get("worldview_context", ["无相关世界观信息"])),
+            "story_bible_context": "\n".join(state.get("story_bible_context", []) or ["无已确认设定"]),
         })
         step_end = datetime.utcnow()
 
@@ -345,6 +391,7 @@ class AgentService:
             },
             data_sources={
                 "worldview_context": state.get("worldview_context", [])[:5],
+                "story_bible_context": state.get("story_bible_context", [])[:5],
             },
             llm={
                 "model": settings.OPENAI_MODEL_SIMPLE,
@@ -383,6 +430,9 @@ class AgentService:
 
 世界观描写：
 {worldview_output}
+
+已确认的故事事实与事件：
+{story_bible_context}
 """),
             ("user", "剧情提示：{prompt}\n\n请创作角色的对话、心理和动作描写。")
         ])
@@ -393,7 +443,8 @@ class AgentService:
         response = await chain.ainvoke({
             "prompt": state["prompt"],
             "worldview_output": state["worldview_output"],
-            "character_context": "\n".join(state.get("character_context", ["无相关角色信息"]))
+            "character_context": "\n".join(state.get("character_context", ["无相关角色信息"])),
+            "story_bible_context": "\n".join(state.get("story_bible_context", []) or ["无已确认设定"]),
         })
         step_end = datetime.utcnow()
 
@@ -418,6 +469,7 @@ class AgentService:
             },
             data_sources={
                 "character_context": state.get("character_context", [])[:5],
+                "story_bible_context": state.get("story_bible_context", [])[:5],
             },
             llm={
                 "model": settings.OPENAI_MODEL_SIMPLE,
@@ -461,7 +513,10 @@ class AgentService:
 {worldview_output}
 
 角色描写：
-{character_output}"""
+{character_output}
+
+已确认的故事事实与事件：
+{story_bible_context}"""
 
         # 如果是重试，添加一致性违规信息
         if has_conflict and retry_count > 0:
@@ -493,7 +548,8 @@ class AgentService:
             "prompt": state["prompt"],
             "worldview_output": state["worldview_output"],
             "character_output": state["character_output"],
-            "target_length": state["target_length"]
+            "story_bible_context": "\n".join(state.get("story_bible_context", []) or ["无已确认设定"]),
+            "target_length": state["target_length"],
         })
         step_end = datetime.utcnow()
 
@@ -520,7 +576,9 @@ class AgentService:
                 "preview": plot_output[:80],
                 "length": len(plot_output),
             },
-            data_sources={},
+            data_sources={
+                "story_bible_context": state.get("story_bible_context", [])[:5],
+            },
             llm={
                 "model": settings.OPENAI_MODEL_COMPLEX,
                 "temperature": 0.8,
@@ -649,6 +707,7 @@ class AgentService:
             "plot_output": "",
             "worldview_context": [],
             "character_context": [],
+            "story_bible_context": [],
             "consistency_result": {},
             "retry_count": 0,
             "workflow_steps": [],
@@ -710,6 +769,7 @@ class AgentService:
             generated_at=datetime.now(),
             worldview_context=final_state.get("worldview_context", []),
             character_context=final_state.get("character_context", []),
+            story_bible_context=final_state.get("story_bible_context", []),
             workflow_trace=workflow_trace,
         )
 
@@ -743,6 +803,7 @@ class AgentService:
             "plot_output": "",
             "worldview_context": [],
             "character_context": [],
+            "story_bible_context": [],
             "consistency_result": {},
             "retry_count": 0,
             "workflow_steps": [],
@@ -761,7 +822,7 @@ class AgentService:
                 
                 # 根据节点名称发送事件
                 if node_name == "retrieve_context":
-                    yield {"type": "agent", "agent": "RAG", "status": "上下文检索完成", "data": {"worldview_chunks": len(node_data.get("worldview_context", [])), "character_chunks": len(node_data.get("character_context", []))}}
+                    yield {"type": "agent", "agent": "RAG", "status": "上下文检索完成", "data": {"worldview_chunks": len(node_data.get("worldview_context", [])), "character_chunks": len(node_data.get("character_context", [])), "story_bible_lines": len(node_data.get("story_bible_context", []))}}
                     yield {"type": "agent", "agent": "Agent A", "status": "正在构思世界观...", "data": None}
                 
                 elif node_name == "agent_a_worldview":
@@ -859,6 +920,7 @@ class AgentService:
             generated_at=datetime.now(),
             worldview_context=final_state.get("worldview_context", []),
             character_context=final_state.get("character_context", []),
+            story_bible_context=final_state.get("story_bible_context", []),
             workflow_trace=workflow_trace,
         )
 

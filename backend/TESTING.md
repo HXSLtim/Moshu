@@ -2,7 +2,7 @@
 
 ## 测试基线
 
-- 位置:`backend/tests/`,21 个测试文件,187 个收集项(185 通过、2 个真实模型集成项按标记跳过),当前全绿。
+- 位置:`backend/tests/`,22 个测试文件,193 个收集项(191 通过、2 个真实模型集成项按标记跳过),当前全绿。
 - 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
 - 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
@@ -35,7 +35,7 @@ cd backend
 | RAG | `test_rag_service.py` | 投影真源、覆盖更新、按范围过滤、删除清理 |
 | 一致性 | `test_consistency_service.py` | 规则校验、关系抽取、降级行为 |
 | MCP | `test_unified_mcp_service.py`、`test_mcp_audit_service.py`、`test_character_mcp_route.py` | 能力公布与真实实现一致、审计落库、未实现操作返回失败 |
-| Story Bible | `test_story_bible.py` | 事实/事件 CRUD、退役状态流转、写入预算、跨小说 404 隔离 |
+| Story Bible | `test_story_bible.py`、`test_story_bible_generation_context.py` | 事实/事件 CRUD、退役状态流转、写入预算、跨小说 404 隔离、生成上下文过滤与注入 |
 | 基础设施 | `test_sqlite_compat.py`、`test_security_config.py`、`test_run_tests_script.py` | 旧库幂等迁移、SECRET_KEY 安全校验、退出码传播 |
 | 数据库初始化与并发 | `test_init_db.py`、`test_sqlite_pragmas.py` | 空库/旧库/已管理库三条 Alembic 升级路径、SQLite WAL 与写锁等待 |
 

@@ -25,6 +25,7 @@ def _initial_state():
         "plot_output": "",
         "worldview_context": [],
         "character_context": [],
+        "story_bible_context": [],
         "consistency_result": {},
         "retry_count": 0,
         "workflow_steps": [],
@@ -199,6 +200,7 @@ async def test_retry_trace_ids_are_unique_and_prompt_is_summarized():
         {
             "worldview_output": "环境",
             "character_output": "人物",
+            "story_bible_context": ["- 林夏的位置：青州城"],
             "retry_count": 1,
             "consistency_result": {
                 "has_conflict": True,

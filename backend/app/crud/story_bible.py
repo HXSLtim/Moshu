@@ -2,6 +2,7 @@
 
 from typing import List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.story_bible import StoryEvent, StoryFact
@@ -47,6 +48,27 @@ def get_facts_by_novel(
     if status:
         query = query.filter(StoryFact.status == status)
     return query.offset(skip).limit(limit).all()
+
+
+def get_active_facts_for_generation(
+    db: Session,
+    novel_id: int,
+    max_chapter: Optional[int] = None,
+    limit: int = 40,
+) -> List[StoryFact]:
+    """取当前仍有效、且不晚于目标章节确立的事实，供生成上下文使用。"""
+    query = db.query(StoryFact).filter(
+        StoryFact.novel_id == novel_id,
+        StoryFact.status == "active",
+    )
+    if max_chapter is not None:
+        query = query.filter(
+            or_(
+                StoryFact.chapter_established.is_(None),
+                StoryFact.chapter_established <= max_chapter,
+            )
+        )
+    return query.order_by(StoryFact.id).limit(limit).all()
 
 
 def update_fact(db: Session, fact_id: int, update: FactUpdate) -> Optional[StoryFact]:
@@ -122,6 +144,31 @@ def get_events_by_novel(
     if status:
         query = query.filter(StoryEvent.status == status)
     return query.offset(skip).limit(limit).all()
+
+
+def get_events_for_generation(
+    db: Session,
+    novel_id: int,
+    max_chapter: Optional[int] = None,
+    current_day: Optional[int] = None,
+    limit: int = 20,
+) -> List[StoryEvent]:
+    """取不晚于目标章节与当前故事日的事件，按时间倒序供上下文裁剪。"""
+    query = db.query(StoryEvent).filter(StoryEvent.novel_id == novel_id)
+    if max_chapter is not None:
+        query = query.filter(
+            or_(
+                StoryEvent.chapter.is_(None),
+                StoryEvent.chapter <= max_chapter,
+            )
+        )
+    if current_day is not None:
+        query = query.filter(StoryEvent.story_day <= current_day)
+    return (
+        query.order_by(StoryEvent.story_day.desc(), StoryEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 def update_event(db: Session, event_id: int, update: EventUpdate) -> Optional[StoryEvent]:
