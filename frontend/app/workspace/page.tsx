@@ -49,8 +49,15 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import UndoIcon from '@mui/icons-material/Undo';
 import WarningIcon from '@mui/icons-material/Warning';
 import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import ChapterConflictDialog, {
+  type ConflictAction,
+} from '@/components/workspace/ChapterConflictDialog';
 import { api } from '@/lib/api';
-import { useChapterSave } from '@/hooks/useChapterSave';
+import {
+  useChapterSave,
+  type ChapterDraftBackup,
+  type ChapterSaveConflict,
+} from '@/hooks/useChapterSave';
 import { useEditHistory } from '@/hooks/useEditHistory';
 import { useWorkspaceKeyboardShortcuts } from '@/hooks/useWorkspaceKeyboardShortcuts';
 import { countTextUnits } from '@/lib/textStats';
@@ -237,6 +244,10 @@ function WorkspacePageContent() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [novelTotalWords, setNovelTotalWords] = useState(0);
   const [error, setError] = useState('');
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
+  const [conflictServerChapter, setConflictServerChapter] = useState<Chapter | null>(null);
+  const [conflictLoadingServer, setConflictLoadingServer] = useState(false);
+  const [conflictActionLoading, setConflictActionLoading] = useState<ConflictAction | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
 
@@ -263,6 +274,7 @@ function WorkspacePageContent() {
   const novelRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const workspaceRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const loadMoreRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const conflictFetchControllerRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   const skipNextWorkspaceLoadRef = useRef(false);
 
@@ -311,12 +323,48 @@ function WorkspacePageContent() {
     setError('');
   }, []);
 
+  const handleDraftRestored = useCallback((draft: ChapterDraftBackup) => {
+    setTitle(draft.title);
+    setContent(draft.content);
+    clearHistory(draft.content);
+    setError('');
+  }, [clearHistory]);
+
+  const handleSaveConflict = useCallback((nextConflict: ChapterSaveConflict) => {
+    setConflictDialogOpen(true);
+    setConflictServerChapter(null);
+    setConflictLoadingServer(true);
+    setConflictActionLoading(null);
+    conflictFetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    conflictFetchControllerRef.current = controller;
+
+    void api
+      .getChapter(novelId, nextConflict.snapshot.chapterId, {
+        signal: controller.signal,
+      })
+      .then((serverChapter) => {
+        setConflictServerChapter(serverChapter);
+        setConflictLoadingServer(false);
+      })
+      .catch((loadError) => {
+        if (loadError instanceof Error && loadError.name === 'AbortError') return;
+        setConflictLoadingServer(false);
+        setError(loadError instanceof Error ? loadError.message : '加载服务端章节失败');
+      });
+  }, [novelId]);
+
   const {
     status: saveStatus,
     isDirty,
     isSaving,
     lastSavedAt,
+    conflict,
+    isOffline,
+    hasLocalBackup,
     saveNow,
+    overwriteConflict,
+    adoptServerChapter,
   } = useChapterSave({
     novelId,
     chapter: currentChapter,
@@ -324,6 +372,8 @@ function WorkspacePageContent() {
     content,
     onSaved: handleSaved,
     onError: setError,
+    onConflict: handleSaveConflict,
+    onDraftRestored: handleDraftRestored,
   });
   const dirtyRef = useRef(isDirty);
   const saveNowRef = useRef(saveNow);
@@ -335,10 +385,16 @@ function WorkspacePageContent() {
   const runAfterCurrentSave = useCallback(<T,>(action: () => Promise<T> | T) => {
     return runAfterSave({
       isDirty,
-      save: () => saveNow('manual'),
+      save: () => {
+        if (conflict) {
+          setConflictDialogOpen(true);
+          throw new Error(conflict.message || '章节版本冲突，请先处理');
+        }
+        return saveNow('manual');
+      },
       action,
     });
-  }, [isDirty, saveNow]);
+  }, [conflict, isDirty, saveNow]);
 
   useEffect(() => {
     if (!novelId) {
@@ -464,6 +520,7 @@ function WorkspacePageContent() {
     return () => {
       workspaceRequestRef.current?.controller.abort();
       loadMoreRequestRef.current?.controller.abort();
+      conflictFetchControllerRef.current?.abort();
     };
   }, [loadWorkspace]);
 
@@ -504,12 +561,87 @@ function WorkspacePageContent() {
   }, [chapterPage, hasMoreChapters, loadingMore, novelId]);
 
   const handleSave = useCallback(async () => {
+    if (conflict) {
+      setConflictDialogOpen(true);
+      return;
+    }
     try {
       await saveNow('manual');
     } catch {
       // 保存 Hook 已提供可操作的错误信息。
     }
-  }, [saveNow]);
+  }, [conflict, saveNow]);
+
+  const applyServerChapterLocally = useCallback((serverChapter: Chapter) => {
+    const previousWordCount = currentChapterWordCountRef.current;
+    currentChapterWordCountRef.current = serverChapter.word_count;
+    setNovelTotalWords((total) =>
+      Math.max(0, total + serverChapter.word_count - previousWordCount),
+    );
+    setCurrentChapter(serverChapter);
+    setTitle(serverChapter.title);
+    setContent(serverChapter.content);
+    clearHistory(serverChapter.content);
+    setChapters((previous) =>
+      mergeChapterSummaries(previous, [toChapterSummary(serverChapter)]),
+    );
+    setError('');
+  }, [clearHistory]);
+
+  const handleAcceptServerConflict = useCallback(() => {
+    if (!conflictServerChapter) return;
+    setConflictActionLoading('accept');
+    adoptServerChapter(conflictServerChapter);
+    applyServerChapterLocally(conflictServerChapter);
+    setConflictDialogOpen(false);
+    setConflictActionLoading(null);
+  }, [adoptServerChapter, applyServerChapterLocally, conflictServerChapter]);
+
+  const handleOverwriteServerConflict = useCallback(async () => {
+    if (!conflict || !conflictServerChapter) return;
+    setConflictActionLoading('overwrite');
+    try {
+      await overwriteConflict(conflictServerChapter.version);
+      setConflictDialogOpen(false);
+    } catch (overwriteError) {
+      setError(overwriteError instanceof Error ? overwriteError.message : '覆盖服务端版本失败');
+    } finally {
+      setConflictActionLoading(null);
+    }
+  }, [conflict, conflictServerChapter, overwriteConflict]);
+
+  const handleCopyToNewChapter = useCallback(async () => {
+    if (!conflict || !conflictServerChapter) return;
+    setConflictActionLoading('copy');
+    try {
+      const sourceTitle = conflict.snapshot.title.trim() || '未命名章节';
+      const newChapter = await api.createNextChapter(novelId, {
+        title: `${sourceTitle}（冲突副本）`,
+        content: conflict.snapshot.content,
+      });
+      adoptServerChapter(conflictServerChapter);
+      applyServerChapterLocally(conflictServerChapter);
+      // 本地版本已复制到新章，当前章随即采纳服务端版本，离场不再触发旧冲突保存。
+      dirtyRef.current = false;
+      setChapters((previous) =>
+        mergeChapterSummaries(previous, [toChapterSummary(newChapter)]),
+      );
+      setChapterTotal((total) => total + 1);
+      setConflictDialogOpen(false);
+      router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : '另存新章节失败');
+    } finally {
+      setConflictActionLoading(null);
+    }
+  }, [
+    adoptServerChapter,
+    applyServerChapterLocally,
+    conflict,
+    conflictServerChapter,
+    novelId,
+    router,
+  ]);
 
   const handleChapterSelected = useCallback(async (nextChapterId: number) => {
     if (nextChapterId === currentChapter?.id) {
@@ -936,6 +1068,13 @@ function WorkspacePageContent() {
                 </Alert>
               )}
 
+              {isOffline && isDirty && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  当前处于离线状态，{hasLocalBackup ? '草稿已保留在本机' : '正在保存本地草稿'}
+                  ，恢复连接后会自动重试保存。
+                </Alert>
+              )}
+
               {loading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
                   <CircularProgress />
@@ -1054,6 +1193,18 @@ function WorkspacePageContent() {
           删除章节
         </MenuItem>
       </Menu>
+
+      <ChapterConflictDialog
+        open={conflictDialogOpen}
+        conflict={conflict}
+        serverChapter={conflictServerChapter}
+        loadingServer={conflictLoadingServer}
+        actionLoading={conflictActionLoading}
+        onAcceptServer={handleAcceptServerConflict}
+        onOverwriteServer={() => void handleOverwriteServerConflict()}
+        onCopyToNewChapter={() => void handleCopyToNewChapter()}
+        onClose={() => setConflictDialogOpen(false)}
+      />
 
       <Dialog open={createChapterDialogOpen} onClose={() => setCreateChapterDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>新建下一章</DialogTitle>

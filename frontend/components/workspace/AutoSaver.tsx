@@ -45,6 +45,17 @@ export default function AutoSaver({ status, lastSavedAt }: AutoSaverProps) {
     return <Chip label="保存失败" size="small" color="error" aria-live="assertive" />;
   }
 
+  if (status === 'offline') {
+    return (
+      <Chip
+        label="离线 · 草稿已保留本地"
+        size="small"
+        color="warning"
+        aria-live="polite"
+      />
+    );
+  }
+
   if (status === 'dirty') {
     return <Chip label="未保存" size="small" color="warning" aria-live="polite" />;
   }
