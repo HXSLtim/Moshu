@@ -145,10 +145,23 @@ Nai/
 │   ├── components/           UI 组件
 │   ├── hooks/                保存、历史和交互状态
 │   └── lib/                  API 与 SSE 客户端
+├── plugins/
+│   └── dsh-nai/              DeepSeek Harness（Cordis）组合包
 ├── ARCHITECTURE.md           架构原则与演进边界
 ├── REQUIREMENTS_ANALYSIS.md  需求分析与迭代排序
 └── .Codex/                   本次上下文、操作与验证记录
 ```
+
+## DeepSeek Harness 插件
+
+`plugins/dsh-nai` 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（Cordis 插件架构）使用的组合包。它把 Nai 的 Story Bible 事实/事件、章节摘要和候选生成暴露为 Agent 工具。
+
+```bash
+dsh plugin --profile demo add ./plugins/dsh-nai
+dsh --profile demo web
+```
+
+插件通过 `apiBase`、`token`、`timeoutMs` 配置连接本机 Nai 后端；工具列表见 `plugins/dsh-nai/README.md`。生成结果只作为候选返回，不会自动写入章节。
 
 ## 已知边界
 

@@ -1,0 +1,25 @@
+{
+  "name": "dsh-nai",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 插件：把 Nai 小说项目的事实账本、剧情事件与生成能力暴露为 Agent 工具。",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "3.18.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
