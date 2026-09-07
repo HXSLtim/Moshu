@@ -28,12 +28,21 @@ function buildUrl(base, path, params = {}) {
   return `${base}${path}${suffix}`
 }
 
-function createClient(config) {
+export class NaiApiError extends Error {
+  constructor(message, status, payload) {
+    super(message)
+    this.name = 'NaiApiError'
+    this.status = status
+    this.payload = payload
+  }
+}
+
+export function createClient(config) {
   const base = normalizeBase(config?.apiBase)
   const token = String(config?.token || '')
   const timeoutMs = Number(config?.timeoutMs ?? 60_000)
 
-  async function request(path, { method = 'GET', params, body, signal } = {}) {
+  async function request(path, { method = 'GET', params, body, signal, includeResponse = false } = {}) {
     const controller = new AbortController()
     const timer = setTimeout(
       () => controller.abort(new Error(`Nai API 请求超时（${timeoutMs}ms）`)),
@@ -58,15 +67,26 @@ function createClient(config) {
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
 
-      const payload = await response.json().catch(() => null)
-      if (!response.ok) {
-        const detail =
-          typeof payload?.detail === 'string'
-            ? payload.detail
-            : `Nai API 返回 ${response.status}`
-        throw new Error(detail)
+      let payload = null
+      if (response.status !== 204 && method !== 'HEAD') {
+        try {
+          payload = await response.json()
+        } catch {
+          if (response.ok) throw new Error('Nai API 返回了无效 JSON')
+        }
       }
-      return payload
+      if (!response.ok) {
+        let detail = `Nai API 返回 ${response.status}`
+        if (typeof payload?.detail === 'string') {
+          detail = payload.detail
+        } else if (Array.isArray(payload?.detail)) {
+          detail = payload.detail
+            .map((issue) => `${issue.loc?.join('.') || '请求体'}: ${issue.msg}`)
+            .join('; ')
+        }
+        throw new NaiApiError(detail, response.status, payload)
+      }
+      return includeResponse ? { status: response.status, payload } : payload
     } finally {
       clearTimeout(timer)
       signal?.removeEventListener('abort', forwardAbort)
@@ -95,6 +115,95 @@ export function apply(ctx, config = {}) {
     output: JSON_OUTPUT,
     async execute(_args) {
       return request('/health')
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_novels_list',
+    description:
+      '列出当前作者的全部小说，返回小说 ID、标题、类型与简介。先调用它拿到 novel_id，再调用其他按小说操作的 Nai 工具。',
+    parameters: {
+      skip: { type: 'integer', description: '跳过条数，默认 0。' },
+      limit: { type: 'integer', description: '返回条数，默认 100。' },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      return request('/novels', {
+        params: args,
+        signal: exec.signal,
+      })
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_novel_create',
+    description:
+      '创建一部 Nai 小说，返回新小说的 novel_id。创建后仍需由作者确认章节内容，AI 不能把未确认草稿直接写成正式正文。',
+    parameters: {
+      title: {
+        type: 'string',
+        required: true,
+        description: '小说标题，1-200 字符。',
+      },
+      genre: { type: 'string', description: '小说类型，最长 50 字符。' },
+      description: { type: 'string', description: '小说简介，最长 8000 字符。' },
+      worldview: { type: 'string', description: '世界观设定，最长 50000 字符。' },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      return request('/novels', {
+        method: 'POST',
+        body: args,
+        signal: exec.signal,
+      })
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_novel_get',
+    description:
+      '读取一部 Nai 小说的详情，包括标题、类型、简介与世界观设定。',
+    parameters: {
+      novel_id: {
+        type: 'integer',
+        required: true,
+        description: '小说 ID，必须大于 0。',
+      },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      const { novel_id } = args
+      return request(`/novels/${novel_id}`, {
+        signal: exec.signal,
+      })
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_characters_list',
+    description:
+      '列出 Nai 小说的角色档案。角色是 Story Bible 的一部分，可用于生成前的上下文核对。',
+    parameters: {
+      novel_id: {
+        type: 'integer',
+        required: true,
+        description: '小说 ID，必须大于 0。',
+      },
+      skip: { type: 'integer', description: '跳过条数，默认 0。' },
+      limit: { type: 'integer', description: '返回条数，默认 100，最大 100。' },
+      importance_level: {
+        type: 'string',
+        enum: ['main', 'secondary', 'minor'],
+        description: '按角色重要性过滤，可选。',
+      },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      const { novel_id, ...params } = args
+      return request(`/characters/novel/${novel_id}`, {
+        params,
+        signal: exec.signal,
+      })
     },
   }))
 
@@ -304,6 +413,93 @@ export function apply(ctx, config = {}) {
       const { novel_id, page, page_size } = args
       return request(`/novels/${novel_id}/chapters`, {
         params: { page, page_size },
+        signal: exec.signal,
+      })
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_chapter_get',
+    description:
+      '按 chapter_id 读取 Nai 小说的单个章节正文与版本号。正文可能很长，只应在需要逐字阅读或准备保存时按需调用；保存前以返回的 version 作为 expected_version。',
+    parameters: {
+      novel_id: {
+        type: 'integer',
+        required: true,
+        description: '小说 ID，必须大于 0。',
+      },
+      chapter_id: {
+        type: 'integer',
+        required: true,
+        description: '章节 ID，必须大于 0。',
+      },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      const { novel_id, chapter_id } = args
+      return request(`/novels/${novel_id}/chapters/${chapter_id}`, {
+        signal: exec.signal,
+      })
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_chapter_create_next',
+    description:
+      '为 Nai 小说创建下一章，章节号由服务端原子分配。可同时写入标题与正文；正文为空时只建空章，后续用 nai_chapter_update 保存。',
+    parameters: {
+      novel_id: {
+        type: 'integer',
+        required: true,
+        description: '小说 ID，必须大于 0。',
+      },
+      title: { type: 'string', description: '章节标题，1-200 字符。' },
+      content: { type: 'string', description: '章节正文，最长 500000 字符。' },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      const { novel_id, ...body } = args
+      return request(`/novels/${novel_id}/chapters/next`, {
+        method: 'POST',
+        body,
+        signal: exec.signal,
+      })
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'nai_chapter_update',
+    description:
+      '保存 Nai 小说的章节正文或标题，必须携带读取章节时拿到的 expected_version。服务端采用乐观锁，版本冲突会返回 409，此时应重新读取章节、向作者说明冲突并重试。',
+    parameters: {
+      novel_id: {
+        type: 'integer',
+        required: true,
+        description: '小说 ID，必须大于 0。',
+      },
+      chapter_id: {
+        type: 'integer',
+        required: true,
+        description: '章节 ID，必须大于 0。',
+      },
+      expected_version: {
+        type: 'integer',
+        required: true,
+        description: '上次读取到的章节 version，必须大于等于 1。',
+      },
+      chapter_number: {
+        type: 'integer',
+        description: '可选的新章节号，大于 0。',
+      },
+      title: { type: 'string', description: '可选的新标题，1-200 字符。' },
+      content: { type: 'string', description: '可选的新正文，最长 500000 字符。' },
+    },
+    output: JSON_OUTPUT,
+    async execute(args, exec) {
+      const { novel_id, chapter_id, ...body } = args
+      return request(`/novels/${novel_id}/chapters/${chapter_id}`, {
+        method: 'PUT',
+        body,
         signal: exec.signal,
       })
     },

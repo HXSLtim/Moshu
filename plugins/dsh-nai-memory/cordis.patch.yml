@@ -1,0 +1,27 @@
+- insert:
+    - id: tdai-memory
+      name: dsh-tdai-memory
+      config:
+        dataDir: ''
+        captureEnabled: true
+        extraction:
+          enabled: true
+          enableDedup: false
+        llm:
+          baseUrl: http://127.0.0.1:1234/v1
+          apiKey: lm-studio
+          model: google/gemma-4-26b-a4b-qat
+          maxTokens: 4096
+          timeoutMs: 120000
+        embedding:
+          baseUrl: http://127.0.0.1:1234/v1
+          apiKey: lm-studio
+          model: text-embedding-nomic-embed-text-v1.5
+          dimensions: 768
+          sendDimensions: false
+        recall:
+          enabled: true
+          maxResults: 5
+          scoreThreshold: 0.3
+          timeoutMs: 3000
+        toolsEnabled: true

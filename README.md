@@ -127,6 +127,8 @@ npx tsc --noEmit --incremental false
 npm run build
 ```
 
+Node 25/26 若出现原生 `localStorage` 与 jsdom 冲突，可运行 `NODE_OPTIONS=--no-experimental-webstorage npm run test`，让浏览器测试使用 jsdom 的存储实现。
+
 `run_tests.py` 会原样返回 pytest 的退出码，任何依赖、收集或断言失败都会使命令失败。
 
 ## 目录
@@ -146,7 +148,9 @@ Nai/
 │   ├── hooks/                保存、历史和交互状态
 │   └── lib/                  API 与 SSE 客户端
 ├── plugins/
-│   └── dsh-nai/              DeepSeek Harness（Cordis）组合包
+│   ├── dsh-nai/              DeepSeek Harness（Cordis）工具组合包
+│   ├── dsh-nai-ui/           DSH Web 前端与 nai-author preset
+│   └── dsh-nai-memory/       TencentDB Agent Memory 的 L0-L3 四层记忆接入
 ├── ARCHITECTURE.md           架构原则与演进边界
 ├── REQUIREMENTS_ANALYSIS.md  需求分析与迭代排序
 └── .Codex/                   本次上下文、操作与验证记录
@@ -154,14 +158,25 @@ Nai/
 
 ## DeepSeek Harness 插件
 
-`plugins/dsh-nai` 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（Cordis 插件架构）使用的组合包。它把 Nai 的 Story Bible 事实/事件、章节摘要和候选生成暴露为 Agent 工具。
+`plugins/dsh-nai` 是给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（Cordis 插件架构）使用的工具包。它把 Nai 的小说/角色读取、Story Bible 事实/事件、章节按需读写和候选生成暴露为 Agent 工具。
+
+`plugins/dsh-nai-ui` 在其上提供 Web 前端：`nai-author` preset 会话会出现「Nai 写作台」头部面板与独立视图页，工具结果渲染为章节表格和正文预览卡片。
 
 ```bash
-dsh plugin --profile demo add ./plugins/dsh-nai
-dsh --profile demo web
+dsh plugin --profile web add ./plugins/dsh-nai
+dsh plugin --profile web add ./plugins/dsh-nai-ui
+# 在 profile 的 dsh.profile.bundles 中移除 dsh-nai，保留 dsh-nai-ui，
+# 让写作工具只在 nai-author preset 中生效。
+mkdir -p ~/.dsh/.agent-presets
+cp -R plugins/dsh-nai-ui/presets/nai-author ~/.dsh/.agent-presets/nai-author
+# 配置 nai-ui 的 apiBase/token 后，再同步到本地 preset：
+node plugins/dsh-nai-ui/scripts/configure-local-token.mjs
+dsh --profile web
 ```
 
-插件通过 `apiBase`、`token`、`timeoutMs` 配置连接本机 Nai 后端；工具列表见 `plugins/dsh-nai/README.md`。生成结果只作为候选返回，不会自动写入章节。
+插件通过 `apiBase`、`token`、`timeoutMs` 配置连接本机 Nai 后端；工具列表与 preset 使用说明见 `plugins/dsh-nai/README.md` 与 `plugins/dsh-nai-ui/README.md`。生成结果只作为候选返回，不会自动写入章节。
+
+`plugins/dsh-nai-memory` 提供包装层，用于接入 [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) 的 L0-L3 四层记忆：L0 原文对话捕获、L1 结构化记忆提取、L2 场景、L3 画像，并提供 `tdai_memory_search` / `tdai_conversation_search` 工具与自动召回注入。底层能力由社区依赖实现，仍需在本机模型与 DSH profile 中完成验收。
 
 ## 已知边界
 

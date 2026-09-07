@@ -1,0 +1,3 @@
+name: Nai 作者
+description: 面向长篇小说写作的 Agent：接入 Nai 的小说、章节、Story Bible 与候选生成能力，保留标准模式的文件、技能、计划、目标与子代理工具。
+order: 1
