@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user
 from app.core.config import settings
 from app.crud import novel as novel_crud
-from app.db.base import SessionLocal, get_db
+from app.db.base import get_db
 from app.models.user import User
 from app.models.writing_chat import WritingTurn, WritingGenerationJob
 from app.services.writing_jobs import durable_route, stop_job
@@ -146,7 +146,7 @@ async def stream_turn(novel_id: int, data: TurnCreate, http_request: Request,
         final_data: dict | None = None
         manuscript_text: str | None = None
         try:
-            async with execution_scope(max_model_calls=8):
+            async with execution_scope(max_model_calls=8) as meter:
                 async for event in run_agent(
                     writing_service.llm,
                     list(_agent_messages(context_pack, data, novel, history)),
@@ -165,27 +165,23 @@ async def stream_turn(novel_id: int, data: TurnCreate, http_request: Request,
                     else ''.join(accumulated).strip()) or '模型没有返回可显示的回复，请重新发送。'
             if final_data and final_data.get('manuscript') and content_hash(data.current_content) != content_hash(chapter.content):
                 raise ValueError('先保存正文，再让我起草；当前还有未保存的修改。')
-            with SessionLocal() as session:
-                saved = _finish_agent_turn(session, turn, text, final_data, chapter, data)
-                payload = _turn_payload(saved)
+            saved = _finish_agent_turn(db, turn, text, final_data, chapter, data,
+                                       execution=meter.snapshot())
+            payload = _turn_payload(saved)
             yield _sse({'type': 'done', 'data': {'turn': payload}})
         except asyncio.CancelledError:
-            with SessionLocal() as session:
-                _fail_turn(session, turn.id, '生成已中断，可以重新发送。')
+            _fail_turn(db, turn.id, '生成已中断，可以重新发送。')
             raise
         except (ModelOutputError, ExecutionBudgetError, ContextScopeError, ValueError) as exc:
             logger.warning('创作对话流式失败：{}', exc)
-            with SessionLocal() as session:
-                _fail_turn(session, turn.id, str(exc))
+            _fail_turn(db, turn.id, str(exc))
             yield _sse({'type': 'error', 'message': str(exc)[:300]})
         except asyncio.TimeoutError:
-            with SessionLocal() as session:
-                _fail_turn(session, turn.id, '本轮执行超时，请缩小任务后重新发送。')
+            _fail_turn(db, turn.id, '本轮执行超时，请缩小任务后重新发送。')
             yield _sse({'type': 'error', 'message': '本轮执行超时，请缩小任务后重新发送。'})
         except Exception:  # noqa: BLE001
             logger.exception('创作对话流式出现未预期错误')
-            with SessionLocal() as session:
-                _fail_turn(session, turn.id, 'AI 暂时无法回复，请检查模型连接后重新发送。')
+            _fail_turn(db, turn.id, 'AI 暂时无法回复，请检查模型连接后重新发送。')
             yield _sse({'type': 'error', 'message': 'AI 暂时无法回复，请检查模型连接后重新发送。'})
 
     return StreamingResponse(event_stream(), media_type='text/event-stream',
@@ -197,11 +193,18 @@ def _sse(payload: dict) -> str:
 
 
 def _turn_payload(turn) -> dict:
+    """SSE 与 REST 共用同一份轮次载荷。
+
+    流式路径生成完即用本函数回推终态，字段必须与 TurnResponse 对齐：
+    否则作者要刷新页面走 GET /turns 才能看到本轮来源与真实用量。
+    """
     return {'id': turn.id, 'request_id': turn.request_id, 'status': turn.status,
             'mode': turn.mode, 'assistant_text': turn.assistant_text,
             'result': turn.result, 'error': turn.error,
             'chapter_id': turn.chapter_id, 'chapter_title': turn.chapter_title,
-            'user_text': turn.user_text, 'created_at': turn.created_at}
+            'user_text': turn.user_text, 'created_at': turn.created_at,
+            'context_manifest': turn.context_manifest, 'execution': turn.execution,
+            'proposal_id': turn.proposal_id}
 
 
 def _agent_messages(context_pack, data, novel, history):

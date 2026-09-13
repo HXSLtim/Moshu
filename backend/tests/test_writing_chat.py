@@ -1,4 +1,5 @@
 """持久对话、历史上下文、权限与候选隔离。"""
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import AsyncMock
@@ -231,3 +232,31 @@ def test_cancelled_turn_ignores_late_truncated_result(chat_api):
     assert result['status'] == 'cancelled'
     assert result['error'] == '已停止生成'
     assert result['assistant_text'] == ''
+
+
+def test_stream_done_event_carries_usage_without_page_refresh(chat_api):
+    """流式生成完即回推本轮来源与真实用量，不必刷新页面再走 GET /turns。"""
+    client, db, model = chat_api
+    with client.stream('POST', '/api/writing-chat/1/turns/stream', json=payload()) as response:
+        assert response.status_code == 200
+        body = ''.join(response.iter_text())
+
+    events = [json.loads(line[len('data: '):]) for line in body.splitlines() if line.startswith('data: ')]
+    done = [event for event in events if event['type'] == 'done']
+    assert len(done) == 1
+    turn = done[0]['data']['turn']
+    assert turn['status'] == 'completed'
+    # 字段必须与 TurnResponse 对齐，否则作者要刷新才看得到来源与用量。
+    assert set(turn) >= {'status', 'assistant_text', 'context_manifest', 'execution', 'proposal_id'}
+    assert turn['context_manifest'] is not None
+
+    # 用量必须来自提供方真实返回；测试替身不带 usage_metadata，因此这里是 null，
+    # 但不能因为缺失就省略字段——前端要区分"没有记录"与"提供方未返回"。
+    assert 'execution' in turn
+    saved = db.query(WritingTurn).filter_by(novel_id=1).first()
+    assert saved is not None and saved.execution is not None
+    assert saved.execution['status'] == 'completed'
+    assert saved.execution['model_calls'] >= 1
+    assert saved.execution['usage'] is None
+    # 流式轮次的 execution 必须落库，而不是只在响应里出现。
+    assert turn['execution']['execution_id'] == saved.execution['execution_id']
