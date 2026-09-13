@@ -2,10 +2,15 @@
 网文编辑Agent服务
 提供对单章内容的轻量编辑审核（节奏、爽点、信息量、重复度等），不做违规/敏感内容审核。
 """
+import json
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
-from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.services.model_provider import create_chat_model
+from app.services.model_result import parse_model_result
+from app.services.context_budget import MAX_CHAT_OUTPUT_CHARS, compact_text
 from langchain.prompts import ChatPromptTemplate
 from loguru import logger
 
@@ -14,15 +19,38 @@ from app.models.schemas import EditorReview
 from app.models.novel import Novel, Chapter
 
 
+EditorText = Annotated[str, Field(min_length=1)]
+
+
+class EditorIssuePayload(BaseModel):
+    """编辑问题必须有明确类型、级别和描述，不能丢弃损坏条目。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    type: EditorText
+    level: Literal["info", "warn"]
+    message: EditorText
+    suggestion: EditorText | None = None
+
+
+class EditorReviewPayload(BaseModel):
+    """模型必须提供完整评价，缺失内容不能由固定好评补齐。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    score: int = Field(ge=0, le=100)
+    summary: EditorText
+    issues: list[EditorIssuePayload]
+    suggested_tags: list[EditorText]
+
+
 class EditorService:
     """网文编辑Agent服务类"""
 
     def __init__(self) -> None:
         # 复用相对便宜的简单模型，用于轻量点评
-        self.llm = ChatOpenAI(
+        self.llm = create_chat_model(
             model=settings.OPENAI_MODEL_SIMPLE,
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_API_BASE,
             temperature=0.5,
         )
 
@@ -54,6 +82,8 @@ class EditorService:
   "suggested_tags": ["爽文", "学院流" ]
 }}
 
+score 必须是 0 到 100 的整数，summary 不得为空；issues 和 suggested_tags 必须是数组，没有条目时返回空数组。
+每条问题的 type 和 message 不得为空，level 仅允许 info 或 warn；suggestion 可以是非空建议或 null。
 不要输出任何解释文字或前后缀，只输出 JSON。""",
                 ),
                 (
@@ -76,72 +106,30 @@ class EditorService:
         若模型返回格式异常或调用失败，返回 None，不影响业务流程。
         """
         # 章节内容过长时做截断，防止提示过大
-        content = chapter.content or ""
-        if len(content) > 6000:
-            content = content[-6000:]
-
-        worldview = novel.worldview or ""
-        if len(worldview) > 800:
-            worldview = worldview[:800] + "..."
+        content = compact_text(chapter.content, 6000, keep="tail")
+        worldview = compact_text(novel.worldview, 800, keep="head")
 
         chain = self.prompt | self.llm
 
         try:
             result = await chain.ainvoke(
                 {
-                    "title": novel.title,
-                    "genre": novel.genre or "未指定",
+                    "title": compact_text(novel.title, 200),
+                    "genre": compact_text(novel.genre, 50) or "未指定",
                     "worldview": worldview or "未设定",
                     "chapter_number": chapter.chapter_number,
-                    "chapter_title": chapter.title,
+                    "chapter_title": compact_text(chapter.title, 200),
                     "chapter_content": content or "(本章暂无内容)",
                 }
             )
 
-            raw = (result.content or "").strip()
-            if not raw:
-                return None
+            raw = parse_model_result(result, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text
 
-            # 允许模型在外层多输出一些内容，尽量提取最外层 JSON
-            import json
-
-            try:
-                start = raw.find("{")
-                end = raw.rfind("}") + 1
-                json_str = raw[start:end] if start != -1 and end != 0 else raw
-                data = json.loads(json_str)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"解析编辑Agent JSON失败: {e}")
-                return None
-
-            score = int(data.get("score") or 0)
-            summary = str(data.get("summary") or "").strip()
-            issues_data = data.get("issues") or []
-            suggested_tags = data.get("suggested_tags") or []
-
-            # 规范化 issues
-            issues = []
-            for item in issues_data:
-                try:
-                    issues.append(
-                        {
-                            "type": str(item.get("type") or "其它"),
-                            "level": str(item.get("level") or "info"),
-                            "message": str(item.get("message") or "").strip(),
-                            "suggestion": (str(item.get("suggestion")) or "").strip() or None,
-                        }
-                    )
-                except Exception:
-                    continue
-
-            review = EditorReview(
-                score=score,
-                summary=summary or "本章整体可读性良好，建议根据编辑意见做轻量调整。",
-                issues=issues,
-                suggested_tags=[str(t) for t in suggested_tags if str(t).strip()],
+            payload = EditorReviewPayload.model_validate(json.loads(raw))
+            return EditorReview(
+                **payload.model_dump(),
                 created_at=datetime.utcnow(),
             )
-            return review
 
         except Exception as e:  # noqa: BLE001
             logger.warning(f"编辑Agent调用失败（novel_id={novel.id}, chapter_id={chapter.id}）: {e}")

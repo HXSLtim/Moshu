@@ -337,7 +337,7 @@ class TimelineManager:
     def validate_new_event(
         self,
         novel_id: int,
-        day: int,
+        day: Optional[int],
         event: str
     ) -> Dict[str, Any]:
         """
@@ -351,8 +351,10 @@ class TimelineManager:
         Returns:
             验证结果
         """
+        if day is None:
+            return {"status": "skipped", "is_valid": None, "reason": "未提供故事当前天数，无法验证按日时间顺序"}
         if novel_id not in self.timelines or not self.timelines[novel_id]:
-            return {"is_valid": True}
+            return {"status": "skipped", "is_valid": None, "reason": "没有加载已确认的剧情时间线"}
 
         last_day, last_event = self.timelines[novel_id][-1]
 
@@ -459,7 +461,8 @@ class ConsistencyService:
         novel_id: int,
         content: str,
         chapter: int,
-        current_day: int
+        current_day: Optional[int],
+        reference: dict | None = None,
     ) -> Dict[str, Any]:
         """
         执行完整的一致性检查
@@ -473,6 +476,14 @@ class ConsistencyService:
         Returns:
             检查结果
         """
+        rule_engine = self.rule_engine
+        timeline_manager = self.timeline_manager
+        if reference is not None:
+            rule_engine = RuleEngine()
+            rule_engine.set_rules(novel_id, reference["rules"])
+            timeline_manager = TimelineManager()
+            for day, description in reference["timeline"]:
+                timeline_manager.add_event(novel_id, day, description)
         violations: List[str] = []
         checks_performed: List[str] = []
         checks_skipped: List[str] = []
@@ -483,11 +494,17 @@ class ConsistencyService:
 
         # 第1层：规则引擎检查
         rule_start = datetime.utcnow()
-        rule_result = self.rule_engine.validate(content, novel_id=novel_id)
-        rule_result["status"] = "completed"
+        supported_rules = {"魔法等级上限", "飞行速度上限"}
+        if supported_rules.intersection(rule_engine.rules_by_novel.get(novel_id, {})):
+            rule_result = rule_engine.validate(content, novel_id=novel_id)
+            rule_result["status"] = "completed"
+            checks_performed.append("rule_engine")
+        else:
+            rule_result = {"status": "skipped", "is_valid": None, "violations": [],
+                           "reason": "没有加载可执行的已确认世界观规则"}
+            checks_skipped.append("rule_engine")
         rule_end = datetime.utcnow()
-        checks_performed.append("rule_engine")
-        if not rule_result["is_valid"]:
+        if rule_result["is_valid"] is False:
             violations.extend(rule_result["violations"])
             logger.warning(f"规则引擎检测到{len(rule_result['violations'])}个违规")
 
@@ -507,10 +524,11 @@ class ConsistencyService:
                 output={
                     "is_valid": rule_result["is_valid"],
                     "violation_count": len(rule_result["violations"]),
+                    "reason": rule_result.get("reason"),
                 },
                 data_sources={},
                 llm={},
-                status="completed",
+                status=rule_result["status"],
                 started_at=rule_start,
                 finished_at=rule_end,
                 duration_ms=int((rule_end - rule_start).total_seconds() * 1000),
@@ -519,7 +537,11 @@ class ConsistencyService:
 
         # 第2层：知识图谱检查（角色关系）
         kg_start = datetime.utcnow()
-        kg_result = self.knowledge_graph.analyze_content(novel_id, content)
+        if reference is None:
+            kg_result = self.knowledge_graph.analyze_content(novel_id, content)
+        else:
+            kg_result = {"status": "skipped", "is_valid": None, "violations": [], "extracted": [],
+                         "reason": "关系图谱尚未绑定本轮作者账本来源，未执行关系判定"}
         kg_end = datetime.utcnow()
         kg_status = str(kg_result.get("status", "failed"))
         if kg_status == "completed":
@@ -562,13 +584,14 @@ class ConsistencyService:
 
         # 第3层：时间线检查
         timeline_start = datetime.utcnow()
-        timeline_result = self.timeline_manager.validate_new_event(
-            novel_id, current_day, content
-        )
-        timeline_result["status"] = "completed"
+        timeline_result = timeline_manager.validate_new_event(novel_id, current_day, content)
+        if timeline_result.get("status") == "skipped":
+            checks_skipped.append("timeline")
+        else:
+            timeline_result["status"] = "completed"
+            checks_performed.append("timeline")
         timeline_end = datetime.utcnow()
-        checks_performed.append("timeline")
-        if not timeline_result["is_valid"]:
+        if timeline_result["is_valid"] is False:
             violations.append(timeline_result["reason"])
             logger.warning(f"时间线检测到违规：{timeline_result['reason']}")
 
@@ -590,7 +613,7 @@ class ConsistencyService:
                 },
                 data_sources={},
                 llm={},
-                status="completed",
+                status=timeline_result["status"],
                 started_at=timeline_start,
                 finished_at=timeline_end,
                 duration_ms=int((timeline_end - timeline_start).total_seconds() * 1000),
@@ -636,6 +659,7 @@ class ConsistencyService:
         )
 
         return {
+            "reference": reference,
             "has_conflict": len(violations) > 0,
             "violations": violations,
             "checks_performed": checks_performed,
@@ -658,7 +682,8 @@ class ConsistencyService:
         novel_id: int,
         content: str,
         chapter: int,
-        current_day: int,
+        current_day: Optional[int],
+        reference: dict | None = None,
     ):
         """以流式形式执行一致性检查，按步骤产出事件。
 
@@ -675,6 +700,7 @@ class ConsistencyService:
             content=content,
             chapter=chapter,
             current_day=current_day,
+            **({"reference": reference} if reference is not None else {}),
         )
 
         layer_results = result.get("layer_results", {})
@@ -684,7 +710,9 @@ class ConsistencyService:
         yield {
             "type": "layer",
             "layer": "rule_engine",
-            "status": "ok" if rule_result.get("is_valid", True) else "violation",
+            "status": ("skipped" if rule_result.get("status") == "skipped"
+                       else "ok" if rule_result.get("is_valid") else "violation"),
+            "reason": rule_result.get("reason"),
             "violations": rule_result.get("violations", []),
         }
 
@@ -710,8 +738,10 @@ class ConsistencyService:
         yield {
             "type": "layer",
             "layer": "timeline",
-            "status": "ok" if timeline_is_valid else "violation",
-            "violations": ([] if timeline_is_valid else [timeline_result.get("reason")]),
+            "status": ("skipped" if timeline_result.get("status") == "skipped"
+                       else "ok" if timeline_is_valid else "violation"),
+            "reason": timeline_result.get("reason"),
+            "violations": ([timeline_result.get("reason")] if timeline_is_valid is False else []),
         }
 
         # 第4层：情绪状态机（当前未执行）

@@ -8,7 +8,7 @@ interface UseTextSelectionReturn {
   selectionEnd: number | null;
   selectedText: string;
   // 操作方法
-  handleTextSelection: (event: React.SyntheticEvent<HTMLTextAreaElement>) => void;
+  handleTextSelection: (event: React.SyntheticEvent) => void;
   clearSelection: () => void;
   // 输入框ref
   contentInputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -33,8 +33,9 @@ export function useTextSelection(): UseTextSelectionReturn {
    * 处理文本选择
    */
   const handleTextSelection = useCallback(
-    (event: React.SyntheticEvent<HTMLTextAreaElement>) => {
-      const target = event.target as HTMLTextAreaElement;
+    (event: React.SyntheticEvent) => {
+      if (!(event.target instanceof HTMLTextAreaElement)) return;
+      const target = event.target;
       const start = target.selectionStart;
       const end = target.selectionEnd;
 

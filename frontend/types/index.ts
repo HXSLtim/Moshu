@@ -14,6 +14,7 @@ export interface User {
  */
 export interface Novel {
   id: number;
+  rag_lifecycle_id?: string;
   title: string;
   genre?: string;
   description?: string;
@@ -37,6 +38,7 @@ export interface StyleSample {
  */
 export interface Chapter {
   id: number;
+  rag_lifecycle_id?: string;
   novel_id: number;
   chapter_number: number;
   title: string;
@@ -137,6 +139,19 @@ export interface NovelCreate {
   worldview?: string;
 }
 
+export interface IdeaParseResult {
+  title: string;
+  genre: string;
+  description: string;
+  worldview: string;
+  planned_chapters: number;
+  arcs: Array<{ name: string; chapter_start: number; chapter_end: number; summary: string }>;
+  characters: Array<{ name: string; role: string; personality: string; goal: string }>;
+  opening_outline: Array<{ chapter_number: number; title: string; summary: string; conflict: string; outcome: string }>;
+  plot_hooks: string[];
+  uncertainties: string[];
+}
+
 /**
  * 章节创建请求
  */
@@ -150,6 +165,8 @@ export interface ChapterCreate {
  * 工作台更新章节时携带读取到的版本，防止旧请求覆盖新稿。
  */
 export interface ChapterUpdate {
+  expected_novel_lifecycle_id?: string;
+  expected_chapter_lifecycle_id?: string;
   title?: string;
   content?: string;
   chapter_number?: number;

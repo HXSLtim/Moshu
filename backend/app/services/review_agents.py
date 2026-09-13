@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.core.config import settings
 from app.models.workflow_schemas import AgentWorkflowStep
 from app.services.rag_service import rag_service
+from app.services.model_result import parse_model_result
 from app.services.context_budget import (
+    MAX_CHAT_OUTPUT_CHARS,
     build_previous_chapter_context,
     build_review_content,
 )
@@ -159,13 +161,13 @@ async def review_pace_agent(
         "rhythm": "描述"
     }}
 }}"""),
-        ("user", f"章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核节奏。")
+        ("user", "章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核节奏。")
     ])
     
     try:
         chain = prompt | llm
-        response = await chain.ainvoke({})
-        result = parse_json_response(response.content, PaceReviewPayload)
+        response = await chain.ainvoke({"chapter_number": chapter_number, "content": content})
+        result = parse_json_response(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text, PaceReviewPayload)
         
     except Exception as e:
         logger.error(f"节奏审核失败: {e}")
@@ -243,13 +245,13 @@ async def review_quality_agent(
     "issues": ["具体问题"],
     "suggestions": ["改进建议"]
 }}"""),
-        ("user", f"章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核质量。")
+        ("user", "章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核质量。")
     ])
     
     try:
         chain = prompt | llm
-        response = await chain.ainvoke({})
-        result = parse_json_response(response.content, QualityReviewPayload)
+        response = await chain.ainvoke({"chapter_number": chapter_number, "content": content})
+        result = parse_json_response(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text, QualityReviewPayload)
         
     except Exception as e:
         logger.error(f"质量审核失败: {e}")
@@ -326,13 +328,13 @@ async def review_plot_coherence_agent(
     "plot_holes": ["情节漏洞"],
     "suggestions": ["改进建议"]
 }}"""),
-        ("user", f"前面章节摘要：\n{context}\n\n当前章节（第{chapter_number}章）：\n{content}\n\n请审核连贯性。")
+        ("user", "前面章节摘要：\n{previous_context}\n\n当前章节（第{chapter_number}章）：\n{content}\n\n请审核连贯性。")
     ])
     
     try:
         chain = prompt | llm
-        response = await chain.ainvoke({})
-        result = parse_json_response(response.content, PlotCoherencePayload)
+        response = await chain.ainvoke({"chapter_number": chapter_number, "content": content, "previous_context": context})
+        result = parse_json_response(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text, PlotCoherencePayload)
         
     except Exception as e:
         logger.error(f"连贯性审核失败: {e}")
@@ -389,11 +391,12 @@ async def review_character_consistency_agent(
     step_start = datetime.utcnow()
     
     # 从RAG检索角色信息
-    character_context = await rag_service.retrieve_character_info(
-        novel_id=novel_id,
-        character_name="主角",
-        max_chapter=chapter_number - 1 if chapter_number > 1 else None,
-    )
+    # 首章没有前文章节，None 会移除过滤并把后续剧情带入审核。
+    character_context = []
+    if chapter_number > 1:
+        character_context = await rag_service.retrieve_character_info(
+            novel_id=novel_id, character_name="主角", max_chapter=chapter_number - 1,
+        )
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", """你是一位专业的角色一致性审核专家。请检查角色在本章节中的表现是否与之前一致：
@@ -414,15 +417,17 @@ async def review_character_consistency_agent(
     ],
     "suggestions": ["改进建议"]
 }}"""),
-        ("user", f"章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核角色一致性。")
+        ("user", "章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核角色一致性。")
     ])
     
     try:
         chain = prompt | llm
         response = await chain.ainvoke({
+            "chapter_number": chapter_number,
+            "content": content,
             "character_context": "\n".join(character_context or ["无历史信息"])
         })
-        result = parse_json_response(response.content, CharacterConsistencyPayload)
+        result = parse_json_response(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text, CharacterConsistencyPayload)
         
     except Exception as e:
         logger.error(f"角色一致性审核失败: {e}")
@@ -495,13 +500,13 @@ async def review_style_agent(
     "issues": ["风格问题"],
     "suggestions": ["改进建议"]
 }}"""),
-        ("user", f"章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核语言风格。")
+        ("user", "章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请审核语言风格。")
     ])
     
     try:
         chain = prompt | llm
-        response = await chain.ainvoke({})
-        result = parse_json_response(response.content, StyleReviewPayload)
+        response = await chain.ainvoke({"chapter_number": chapter_number, "content": content})
+        result = parse_json_response(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text, StyleReviewPayload)
         
     except Exception as e:
         logger.error(f"风格审核失败: {e}")
@@ -574,13 +579,13 @@ async def review_content_safety_agent(
     ],
     "suggestions": ["处理建议"]
 }}"""),
-        ("user", f"章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请进行内容安全检测。")
+        ("user", "章节号：{chapter_number}\n\n章节内容：\n{content}\n\n请进行内容安全检测。")
     ])
     
     try:
         chain = prompt | llm
-        response = await chain.ainvoke({})
-        result = parse_json_response(response.content, ContentSafetyPayload)
+        response = await chain.ainvoke({"chapter_number": chapter_number, "content": content})
+        result = parse_json_response(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text, ContentSafetyPayload)
         
     except Exception as e:
         logger.error(f"内容安全审核失败: {e}")

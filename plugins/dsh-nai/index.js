@@ -470,7 +470,7 @@ export function apply(ctx, config = {}) {
   ctx.tools.register(defineTool({
     name: 'nai_chapter_update',
     description:
-      '保存 Nai 小说的章节正文或标题，必须携带读取章节时拿到的 expected_version。服务端采用乐观锁，版本冲突会返回 409，此时应重新读取章节、向作者说明冲突并重试。',
+      '保存 Nai 小说的章节正文或标题，必须携带章节 version、章节 rag_lifecycle_id 与所属小说 rag_lifecycle_id。版本或生命周期冲突返回 409，须重新读取并由作者核对，不能把已删除作品的旧稿写入同 ID 新作品。',
     parameters: {
       novel_id: {
         type: 'integer',
@@ -486,6 +486,14 @@ export function apply(ctx, config = {}) {
         type: 'integer',
         required: true,
         description: '上次读取到的章节 version，必须大于等于 1。',
+      },
+      expected_novel_lifecycle_id: {
+        type: 'string', required: true,
+        description: 'nai_novel_get 返回的 rag_lifecycle_id，32 字符。',
+      },
+      expected_chapter_lifecycle_id: {
+        type: 'string', required: true,
+        description: 'nai_chapter_get 返回的 rag_lifecycle_id，32 字符。',
       },
       chapter_number: {
         type: 'integer',

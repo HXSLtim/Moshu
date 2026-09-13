@@ -1,5 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '@/lib/api';
 import type { Chapter } from '@/types';
 import { useChapterSave } from './useChapterSave';
@@ -7,6 +7,7 @@ import { useChapterSave } from './useChapterSave';
 function chapter(content: string, version: number): Chapter {
   return {
     id: 10,
+    rag_lifecycle_id: "chapter-life",
     novel_id: 1,
     chapter_number: 1,
     title: '第一章',
@@ -16,6 +17,8 @@ function chapter(content: string, version: number): Chapter {
     created_at: '2026-07-10T00:00:00Z',
   };
 }
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); });
 
 describe('useChapterSave', () => {
   it('保存中继续输入时串行提交最新快照，并递增 expected_version', async () => {
@@ -31,7 +34,7 @@ describe('useChapterSave', () => {
     const { result, rerender } = renderHook(
       ({ content }) =>
         useChapterSave({
-          novelId: 1,
+          novelId: 1, userId: 7, novelLifecycleId: "novel-life",
           chapter: initialChapter,
           title: '第一章',
           content,

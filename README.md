@@ -2,15 +2,27 @@
 
 Nai 是一个作者主导的本地小说创作工具，提供章节管理、版本化保存、Story Bible 事实与事件账本、AI 续写、RAG 上下文检索、一致性检查和多维审核。
 
-项目的核心原则是：**作者数据是唯一真源，AI 只提供候选内容；RAG、图谱和统计都是可重建的派生数据。** 详细设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+项目的核心原则是：**作者数据是唯一真源，AI 内容经作者审阅；RAG、图谱和统计都是可重建的派生数据。** 对话续写与局部改写已经返回候选，旧 `auto-chapter` 接口仍会直接创建章节，属于待统一的历史流程。 详细设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 当前可用能力
 
 - 用户注册、登录和小说所有权隔离。
+- 创建小说只需要一个名称，其他信息全部可选。进工作台后可以直接和 AI 交流：你用自己的话讲设定，AI 判断哪些需要落库（类型、简介、世界观、人物、设定事实、卷/章计划），给出结构化提案，你确认后才写入。长篇按两层规划：全书用卷/阶段覆盖（预计篇幅可填 1–3000 章），只有开头若干章给逐章大纲。
+- VS Code 式创作工作区：活动栏、章节目录、正文/设定标签、常驻对话和底部保存状态；窄屏使用上下分区。
+- 小说级持久对话：讨论与续写共用历史，跨章、刷新后可恢复；输入框固定在底部，较早记录可分页加载。
+- 对话回复只作为候选，续写采纳校验章节与正文快照；失败问题保留，可重新编辑发送。
+- 对话与高级续写共用有效前章简介，按来源版本、章节范围和预算筛选；对话可展开“本次参考简介”并查看来源原文。
+- 创作对话 Agent 可主动查阅设定账本、角色卡、前章简介、全书大纲与前文正文，交稿前可用一致性检查自查草稿；检索按作者归属、作品生命周期与章节边界受权，查阅动作在生成状态中可见。
+- 高级多阶段续写、文风参数、局部改写与一致性检查集中在右侧「工具」页。
 - 小说、章节和角色基础管理。
-- Story Bible 事实账本与剧情事件 CRUD，生成工作流注入当前仍有效且不晚于目标章节的事实/事件。
+- Story Bible 事实账本与剧情事件 CRUD，生成上下文按目标章读取当时有效的事实及已发生事件，计划事件不作为正式剧情注入。
+- 设定账本页面：编辑世界观，维护人物事实、剧情事件和伏笔，支持章节关联与状态变更。
+- 选区改写：原文与可编辑候选对照，确认后精确替换；支持取消请求，正文变动时阻止旧候选覆盖新稿。
+- 整本 TXT 导出：按章节顺序导出全部已保存正文，支持中文文件名。
 - 章节摘要分页、正文按需加载、服务端分配下一章编号。
 - 章节乐观版本控制，避免迟到的自动保存覆盖新稿。
+- 保存同事务保留原文版本与简介任务；改稿使旧简介过期，旧提取结果不能发布为当前记忆。
+- 工具区「章节记忆」可查看简介、出处与原文历史；后台提取支持租约恢复和有限重试，默认需显式启用。
 - 409 冲突对比弹窗：我的版本 vs 服务端版本，可覆盖、采纳或另存新章。
 - 离线草稿保护：断网时草稿留在本机，恢复连接后自动重放保存。
 - 有界撤销历史、串行 latest-only 自动保存和可取消的 SSE 请求。
@@ -19,7 +31,8 @@ Nai 是一个作者主导的本地小说创作工具，提供章节管理、版�
 - 统一字数统计：前后端按非空白 Unicode 字符计算章节与全书字数。
 - LangGraph 三阶段生成工作流，带统一上下文预算和有限重试。
 - Chroma 持久 RAG，按小说和章节范围过滤，支持覆盖更新和清理。
-- 六维章节审核，限制并发；任一审核失败时不会误报“可发布”。
+- 模型客户端与输出校验共用入口，截断回复不会成为完整候选；未知故事日不再按第 1 天过滤剧情。
+- 六维章节审核，限制并发；任一审核失败时不会误报“可发布”，轻量编辑也按严格结构校验。
 - Unified MCP 只公布真实实现的能力；未实现操作明确返回失败。
 
 ## 当前技术基线
@@ -40,74 +53,25 @@ Nai 是一个作者主导的本地小说创作工具，提供章节管理、版�
 
 PostgreSQL、Qdrant、Redis 和 Neo4j 仍属于可选演进方向。Docker Compose 中存在相关服务定义，不代表当前主链路已经依赖它们。
 
-## 本机快速启动
+## 启动与文档导航
 
-### 1. 启动 LM Studio
+首次安装、模型配置、升级及数据库备份统一见 [QUICKSTART.md](QUICKSTART.md)，避免多处维护启动命令。
 
-本项目默认使用：
-
-- 聊天模型：`google/gemma-4-26b-a4b-qat`
-- Embedding：`text-embedding-nomic-embed-text-v1.5`
-
-```bash
-~/.lmstudio/bin/lms server start --port 1234 --bind 127.0.0.1
-~/.lmstudio/bin/lms load google/gemma-4-26b-a4b-qat \
-  --identifier google/gemma-4-26b-a4b-qat \
-  --context-length 32768 --parallel 2 -y
-~/.lmstudio/bin/lms load text-embedding-nomic-embed-text-v1.5 \
-  --identifier text-embedding-nomic-embed-text-v1.5 -y
-```
-
-可用以下命令检查模型：
-
-```bash
-curl http://127.0.0.1:1234/v1/models
-```
-
-### 2. 启动后端
-
-```bash
-uv venv --python 3.12 backend/.venv
-uv pip install --python backend/.venv/bin/python -r backend/requirements.txt
-
-cp .env.example .env
-python3 -c 'import secrets; print("SECRET_KEY=" + secrets.token_urlsafe(48))' >> .env
-
-cd backend
-.venv/bin/python init_db.py
-.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-后端不会提供 JWT 默认密钥；`SECRET_KEY` 缺失、少于 32 个字符或仍为示例占位值时会安全失败。测试进程使用独立的显式测试密钥。
-
-不启动 LM Studio 时，小说和章节 CRUD 仍可使用；AI 与 RAG 会明确返回不可用或降级结果，而不是阻止应用启动。
-
-也可以只把生成链路切换到 DeepSeek。项目已按 OpenAI 兼容协议验证 `deepseek-v4-pro`；真实密钥仅写入本机 `.env` 或进程环境，不能提交到仓库：
-
-```dotenv
-OPENAI_API_KEY=请填写本机密钥
-OPENAI_API_BASE=https://api.deepseek.com/v1
-OPENAI_MODEL_COMPLEX=deepseek-v4-pro
-OPENAI_MODEL_SIMPLE=deepseek-v4-pro
-```
-
-这不会自动替换 Embedding 服务。LM Studio 关闭时，AI 生成仍可走 DeepSeek；建议同时设置 `EMBEDDING_ENABLED=false`，让 RAG 立即进入明确降级状态，不再探测已关闭的本地端口。
-
-### 3. 启动前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-访问地址：
-
-- 前端：http://127.0.0.1:3000
-- API 文档：http://127.0.0.1:8000/docs
-- 健康检查：http://127.0.0.1:8000/api/health
-
-环境变量模板见 [.env.example](.env.example)。默认配置已经指向本机 LM Studio、SQLite 和 Chroma；如需覆盖，复制为项目根目录 `.env`。
+| 需要了解什么 | 文档 |
+|---|---|
+| 如何写作、连续交流、处理冲突与导出 | [使用指南](使用指南.md) |
+| 当前架构和数据边界 | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| AI 编排、Prompt、记忆、工具与效果评测 | [AI 应用架构评审](AI应用架构评审.md) |
+| 底层问题与分阶段改造 | [底层架构评审](底层架构评审.md)、[架构实施蓝图](架构实施蓝图.md) |
+| 原文、简介、大纲、核心设定四层 | [记忆分层设计](记忆分层设计.md)（L0-L3 当前范围已接通，受有界扫描与预算约束） |
+| 记忆实时性与真实性 | [记忆实时性与真实性改进方案](记忆实时性与真实性改进方案.md)（快照栅栏、来源和后续演进） |
+| 实施状态、验收与待办监督 | [实施监督](实施监督.md) |
+| 当前状态与下一步优先级 | [REQUIREMENTS_ANALYSIS.md](REQUIREMENTS_ANALYSIS.md) |
+| API 字段、状态及错误 | [API 对接文档](API对接文档.md) |
+| 前端模块与交互规范 | [前端开发指南](前端开发指南.md)、[工作区设计规范](frontend/UI_DESIGN_GUIDELINES.md) |
+| 对话与高级工具的传输差异 | [AI 请求指南](frontend/AI_STREAMING_GUIDE.md) |
+| 测试范围与运行方式 | [backend/TESTING.md](backend/TESTING.md) |
+| 固定质量样例与真实效果验收方法 | [evaluations/README.md](evaluations/README.md)（12 例已准备，真实评测未执行） |
 
 ## 本地验证
 
@@ -123,7 +87,8 @@ cd backend
 ```bash
 cd frontend
 npm run lint
-npx tsc --noEmit --incremental false
+npm run typecheck
+npm test
 npm run build
 ```
 
@@ -180,9 +145,16 @@ dsh --profile web
 
 ## 已知边界
 
-- 结构化 Story Bible 已落地事实与事件账本，并已注入生成上下文；仍需继续把 `Novel.worldview` 中的扁平文本迁移到地点、大纲等模型。角色已有独立管理，地点、大纲等模型尚未纳入当前能力。
+- 持久对话从本版本开始记录，旧版只存在内存且已清空的交流无法恢复。当前每本小说一条连续对话，尚未支持多个对话分支。
+- 创作对话是带受权只读工具的原生 function calling Agent，逐 token 流式展示；基础上下文按预算注入最近历史、当前正文、已确认事实/事件及有效前章简介，更多资料由模型通过工具按关键词与章节主动查阅。原有 LangGraph/RAG 多阶段续写保留在「工具 → 高级续写」中，该工具仍采用单轮候选界面。
+- 已送达对话保存在数据库中；未能送达的问题会在当前页面标记，需恢复连接后重新发送。模型只接收有界的最近上下文（历史最多 8000 字符、最近 20 轮）；尚未实现跨全书对话的长期摘要记忆。
+- 停止回复会将记录标记为已取消并忽略迟到结果，不保证上游模型服务同时停止计算。
+
+- 改写支持整段候选审阅与采纳，尚未实现逐句差异高亮和逐句采纳；导出当前仅支持 TXT，EPUB 待实现。
+- 结构化 Story Bible 已落地事实与事件账本，并已注入生成上下文；L2 大纲和 L3 人物/物品状态已接入独立模型、来源核验和作者审阅。地点模型与更广的全书语义召回仍未纳入当前核心能力。
 - 离线草稿恢复依赖工作台已成功加载章节；无网络冷启动时的章节缓存与自动恢复尚未支持。
-- 当前响应后的 RAG 投影不是可恢复任务；生产部署应升级为数据库 outbox。
+- 四层记忆中 L0 原文版本、L1 简介任务、L2 计划/实际大纲、L3 人物/物品状态及有界共享召回已接入网页端；状态变化仍需作者审阅，扫描和上下文预算省略会在 manifest 中说明。DSH 记忆插件是额外适配层。
+- 简介提取和 RAG 投影均使用数据库持久任务、租约恢复、版本栅栏和查询/重试入口。
 - 真正的模型 token 流仍受多 Agent 编排边界限制；客户端取消已经贯通，但最终正文主要在生成阶段完成后输出。
 - `init_db.py` 已统一空库/旧库/已管理库三种路径，Alembic 是结构演进唯一入口；旧库一次性过渡时会补建缺失表并 `stamp head`，其列级差异（如旧 chapters 缺检查约束）由兼容补齐覆盖，PostgreSQL 上线前需验证迁移在该方言上的回滚与数据量压测。
 

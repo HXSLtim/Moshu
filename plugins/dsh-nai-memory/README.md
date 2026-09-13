@@ -1,5 +1,7 @@
 # dsh-nai-memory
 
+本文描述独立 DSH 插件；Nai 网页端未接入此记忆运行时。网页端拟采用的小说四层方案见 [记忆分层设计](../../记忆分层设计.md)。
+
 把 [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) 的四层记忆系统接入 DeepSeek Harness。
 
 底层实现为社区移植包 [dsh-tdai-memory](https://www.npmjs.com/package/dsh-tdai-memory)，本包提供 DSH bundle 包装与 Nai 默认配置：

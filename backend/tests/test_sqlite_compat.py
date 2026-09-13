@@ -171,7 +171,7 @@ def test_init_db_runs_compatibility_check_before_migration(monkeypatch):
     import init_db
 
     calls = []
-    fake_engine = object()
+    fake_engine = MagicMock()
 
     def fake_migrate(received_engine):
         calls.append(("migrate", received_engine))
@@ -184,6 +184,8 @@ def test_init_db_runs_compatibility_check_before_migration(monkeypatch):
         calls.append(("create_all", bind))
 
     monkeypatch.setattr(init_db, "default_engine", fake_engine)
+    monkeypatch.setattr(init_db, "verify_existing_references", lambda connection: calls.append(("preflight", connection)))
+    monkeypatch.setattr(init_db, "preflight_story_bible", lambda connection: calls.append(("ledger_preflight", connection)))
     monkeypatch.setattr(init_db, "ensure_sqlite_compatibility", fake_migrate)
     # 空库：既无版本表也无应用表，应走 upgrade 建表而非 create_all。
     monkeypatch.setattr(init_db, "_table_exists", lambda engine, name: False)
@@ -193,6 +195,8 @@ def test_init_db_runs_compatibility_check_before_migration(monkeypatch):
     init_db.initialize_database()
 
     assert calls == [
+        ("preflight", fake_engine.connect.return_value.__enter__.return_value),
+        ("ledger_preflight", fake_engine.connect.return_value.__enter__.return_value),
         ("migrate", fake_engine),
         ("upgrade", "head"),
     ]

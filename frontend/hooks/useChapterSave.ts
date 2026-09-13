@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import type { Chapter } from '@/types';
+import { archiveChapterDraft, chapterDraftKey, listRecoveryDrafts, readChapterDraft, removeChapterDraft, writeChapterDraft, type ChapterDraftBackup, type DraftIdentity, type RecoverableDraft } from '@/lib/chapterDrafts';
+export type { ChapterDraftBackup } from '@/lib/chapterDrafts';
 
 export type ChapterSaveStatus =
   | 'idle'
@@ -20,15 +22,6 @@ export interface ChapterSaveSnapshot {
   expectedVersion: number;
 }
 
-export interface ChapterDraftBackup {
-  novelId: number;
-  chapterId: number;
-  title: string;
-  content: string;
-  version: number;
-  savedAt: string;
-}
-
 export interface ChapterSaveConflict {
   snapshot: ChapterSaveSnapshot;
   serverVersion: number;
@@ -44,6 +37,8 @@ interface SavedBaseline {
 
 interface UseChapterSaveOptions {
   novelId: number;
+  userId?: number | null;
+  novelLifecycleId?: string;
   chapter: Chapter | null;
   title: string;
   content: string;
@@ -67,76 +62,17 @@ interface UseChapterSaveReturn {
   conflict: ChapterSaveConflict | null;
   isOffline: boolean;
   hasLocalBackup: boolean;
+  recoveryDrafts: RecoverableDraft[];
+  identityReady: boolean;
   saveNow: (reason?: ChapterSaveReason) => Promise<void>;
   clearConflict: () => void;
   overwriteConflict: (serverVersion?: number) => Promise<void>;
   adoptServerChapter: (serverChapter: Chapter) => void;
 }
 
-const DRAFT_KEY_PREFIX = 'nai_chapter_draft_';
 const BACKUP_DELAY = 600;
-
-function draftKey(novelId: number, chapterId: number): string {
-  return `${DRAFT_KEY_PREFIX}${novelId}_${chapterId}`;
-}
-
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
-}
-
-function readDraft(novelId: number, chapterId: number): ChapterDraftBackup | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(draftKey(novelId, chapterId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ChapterDraftBackup>;
-    if (
-      parsed.novelId !== novelId ||
-      parsed.chapterId !== chapterId ||
-      typeof parsed.title !== 'string' ||
-      typeof parsed.content !== 'string' ||
-      typeof parsed.version !== 'number' ||
-      typeof parsed.savedAt !== 'string'
-    ) {
-      return null;
-    }
-    return parsed as ChapterDraftBackup;
-  } catch {
-    return null;
-  }
-}
-
-function writeDraft(
-  novelId: number,
-  snapshot: ChapterSaveSnapshot,
-  version: number,
-): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const draft: ChapterDraftBackup = {
-      novelId,
-      chapterId: snapshot.chapterId,
-      title: snapshot.title,
-      content: snapshot.content,
-      version,
-      savedAt: new Date().toISOString(),
-    };
-    window.localStorage.setItem(
-      draftKey(novelId, snapshot.chapterId),
-      JSON.stringify(draft),
-    );
-  } catch {
-    // 隐私模式或容量不足时放弃备份，不阻断正文编辑。
-  }
-}
-
-function removeDraft(novelId: number, chapterId: number): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.removeItem(draftKey(novelId, chapterId));
-  } catch {
-    // 忽略清理失败。
-  }
 }
 
 function isDraftNewerThanServer(
@@ -170,6 +106,8 @@ function parseServerVersion(message: string): number | null {
  */
 export function useChapterSave({
   novelId,
+  userId,
+  novelLifecycleId,
   chapter,
   title,
   content,
@@ -187,7 +125,15 @@ export function useChapterSave({
   // 服务端首帧统一按在线渲染，挂载后再同步真实网络状态，避免 hydration 不匹配。
   const [isOffline, setIsOffline] = useState(false);
   const [hasLocalBackup, setHasLocalBackup] = useState(false);
+  const [recoveryDrafts, setRecoveryDrafts] = useState<RecoverableDraft[]>([]);
+  const identity = useMemo<DraftIdentity | null>(() => userId && novelLifecycleId && chapter?.novel_id === novelId && chapter?.rag_lifecycle_id
+    ? { userId, novelLifecycleId, chapterLifecycleId: chapter.rag_lifecycle_id } : null,
+  [userId, novelLifecycleId, chapter?.rag_lifecycle_id, chapter?.novel_id, novelId]);
+  const scopeKey = identity && chapter ? chapterDraftKey(novelId, chapter.id, identity) : null;
+  const scopeRef = useRef(scopeKey);
+  scopeRef.current = scopeKey;
 
+  const backupBlockedRef = useRef(false);
   const mountedRef = useRef(true);
   const generationRef = useRef(0);
   const versionRef = useRef(0);
@@ -206,12 +152,20 @@ export function useChapterSave({
   const onErrorRef = useRef(onError);
   const onConflictRef = useRef(onConflict);
   const onDraftRestoredRef = useRef(onDraftRestored);
+  const preserveUnmountDraftRef = useRef(() => {});
 
   latestRef.current = { chapterId: chapter?.id ?? null, title, content };
   onSavedRef.current = onSaved;
   onErrorRef.current = onError;
   onConflictRef.current = onConflict;
   onDraftRestoredRef.current = onDraftRestored;
+  preserveUnmountDraftRef.current = () => {
+    const latest = latestRef.current;
+    const saved = baselineRef.current;
+    if (!identity || !saved || latest.chapterId !== saved.chapterId || backupBlockedRef.current
+      || (latest.title === saved.title && latest.content === saved.content)) return;
+    writeChapterDraft(novelId, { ...latest, chapterId: saved.chapterId }, versionRef.current, identity);
+  };
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
@@ -236,6 +190,7 @@ export function useChapterSave({
   useEffect(() => {
     mountedRef.current = true;
     return () => {
+      preserveUnmountDraftRef.current();
       mountedRef.current = false;
       clearTimer();
       clearBackupTimer();
@@ -257,25 +212,38 @@ export function useChapterSave({
     conflictRef.current = null;
     setIsSaving(false);
     setLastSavedAt(null);
+    backupBlockedRef.current = false;
 
     if (!chapter) {
+      setRecoveryDrafts([]);
+      setHasLocalBackup(false);
       baselineRef.current = null;
       versionRef.current = 0;
       setBaseline(null);
       return;
     }
 
-    const draft = readDraft(novelId, chapter.id);
+    setHasLocalBackup(false);
+    const recovery = listRecoveryDrafts(novelId, chapter.id, identity);
+    const draft = readChapterDraft(novelId, chapter.id, identity);
     if (
       draft &&
       (draft.title !== chapter.title || draft.content !== chapter.content) &&
+      draft.version === chapter.version &&
       isDraftNewerThanServer(draft, chapter)
     ) {
       onDraftRestoredRef.current?.(draft);
-    } else if (draft) {
-      removeDraft(novelId, chapter.id);
-      setHasLocalBackup(false);
+      setHasLocalBackup(true);
+    } else if (draft && draft.title === chapter.title && draft.content === chapter.content) {
+      removeChapterDraft(novelId, chapter.id, identity);
+    } else if (draft && identity) {
+      try { recovery.push(archiveChapterDraft(novelId, chapter.id, identity, draft)); } catch {
+        recovery.push({ storageKey: chapterDraftKey(novelId, chapter.id, identity), draft, reason: 'older' });
+        backupBlockedRef.current = true;
+        setSaveError('无法归档旧草稿，请先导出本机备份并释放存储空间。');
+      }
     }
+    setRecoveryDrafts(recovery);
 
     const initialBaseline: SavedBaseline = {
       chapterId: chapter.id,
@@ -288,7 +256,7 @@ export function useChapterSave({
     setBaseline(initialBaseline);
     // 只在章节身份切换时建立基线；同章保存返回的新对象不能重置正在编辑的草稿。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chapter?.id, clearBackupTimer, clearTimer, novelId]);
+  }, [chapter?.id, clearBackupTimer, clearTimer, novelId, scopeKey]);
 
   const isDirty = useMemo(() => {
     if (!chapter || !baseline || baseline.chapterId !== chapter.id) return false;
@@ -302,6 +270,7 @@ export function useChapterSave({
       const currentChapterId = latestRef.current.chapterId;
 
       if (!currentChapterId) return Promise.resolve();
+      if (!identity || scopeRef.current !== scopeKey) return Promise.reject(new Error('作者或章节身份尚未核验，暂不能保存；请重新打开作品。'));
       if (conflictRef.current) {
         return Promise.reject(
           new Error(conflictRef.current.message || '章节版本冲突，请先处理'),
@@ -358,11 +327,15 @@ export function useChapterSave({
                 title: snapshot.title,
                 content: snapshot.content,
                 expected_version: snapshot.expectedVersion,
+                expected_novel_lifecycle_id: identity.novelLifecycleId,
+                expected_chapter_lifecycle_id: identity.chapterLifecycleId,
               },
               { signal: controller.signal },
             );
 
-            if (generationRef.current !== generation) return;
+            if (generationRef.current !== generation || scopeRef.current !== scopeKey) return;
+
+            if (savedChapter.id !== snapshot.chapterId || savedChapter.novel_id !== novelId || savedChapter.rag_lifecycle_id !== identity.chapterLifecycleId) throw new Error('保存回包的章节身份不一致，请重新打开作品核对。');
 
             const savedAt = new Date();
             const nextVersion = savedChapter.version ?? expectedVersion + 1;
@@ -374,24 +347,34 @@ export function useChapterSave({
             };
             versionRef.current = nextVersion;
             baselineRef.current = nextBaseline;
-            removeDraft(novelId, snapshot.chapterId);
+            const newest = latestRef.current;
+            const hasNewerDraft = newest.chapterId === snapshot.chapterId &&
+              (newest.title !== snapshot.title || newest.content !== snapshot.content);
+            // 保存回包只确认该快照；后续新稿尚未落库，必须持续保留本机备份。
+            let newestBackedUp = false;
+            if (hasNewerDraft) {
+              if (!backupBlockedRef.current) newestBackedUp = writeChapterDraft(novelId, {
+                chapterId: snapshot.chapterId,
+                title: newest.title,
+                content: newest.content,
+                expectedVersion: nextVersion,
+              }, nextVersion, identity);
+            } else {
+              if (!backupBlockedRef.current) removeChapterDraft(novelId, snapshot.chapterId, identity);
+            }
 
             if (mountedRef.current) {
               setBaseline(nextBaseline);
               setLastSavedAt(savedAt);
-              setHasLocalBackup(false);
+              setHasLocalBackup(hasNewerDraft && newestBackedUp);
               onSavedRef.current?.(snapshot, savedChapter, savedAt);
             }
 
-            const newest = latestRef.current;
-            if (
-              newest.chapterId === snapshot.chapterId &&
-              (newest.title !== snapshot.title || newest.content !== snapshot.content)
-            ) {
+            if (hasNewerDraft) {
               pendingRef.current = true;
             }
           } catch (error) {
-            if (generationRef.current !== generation || isAbortError(error)) return;
+            if (generationRef.current !== generation || scopeRef.current !== scopeKey || isAbortError(error)) return;
             pendingRef.current = false;
             const status = getErrorStatus(error);
 
@@ -430,14 +413,14 @@ export function useChapterSave({
         if (active?.generation === generation && active.promise === promise) {
           inFlightRef.current = null;
         }
-        if (mountedRef.current && generationRef.current === generation) {
+        if (mountedRef.current && generationRef.current === generation && scopeRef.current === scopeKey) {
           setIsSaving(false);
         }
       });
       inFlightRef.current = { generation, promise };
       return promise;
     },
-    [clearTimer, novelId],
+    [clearTimer, novelId, identity, scopeKey],
   );
 
   const overwriteConflict = useCallback(
@@ -459,7 +442,7 @@ export function useChapterSave({
   const adoptServerChapter = useCallback(
     (serverChapter: Chapter) => {
       const currentChapterId = latestRef.current.chapterId;
-      if (!serverChapter || serverChapter.id !== currentChapterId) return;
+      if (!serverChapter || serverChapter.id !== currentChapterId || serverChapter.rag_lifecycle_id !== identity?.chapterLifecycleId) return;
 
       const nextBaseline: SavedBaseline = {
         chapterId: serverChapter.id,
@@ -475,13 +458,14 @@ export function useChapterSave({
         setLastSavedAt(null);
       }
     },
-    [clearConflictState],
+    [clearConflictState, identity],
   );
 
   useEffect(() => {
     clearTimer();
     if (
       !chapter ||
+      !identity ||
       !isDirty ||
       !title.trim() ||
       isSaving ||
@@ -497,6 +481,7 @@ export function useChapterSave({
     return clearTimer;
   }, [
     autoSaveDelay,
+    identity,
     chapter,
     clearTimer,
     conflict,
@@ -542,8 +527,8 @@ export function useChapterSave({
 
     backupTimerRef.current = setTimeout(() => {
       const latest = latestRef.current;
-      if (!latest.chapterId) return;
-      writeDraft(
+      if (!latest.chapterId || backupBlockedRef.current) return;
+      const backedUp = writeChapterDraft(
         novelId,
         {
           chapterId: latest.chapterId,
@@ -552,19 +537,26 @@ export function useChapterSave({
           expectedVersion: versionRef.current,
         },
         versionRef.current,
+        identity,
       );
-      if (mountedRef.current) setHasLocalBackup(true);
+      if (mountedRef.current) {
+        setHasLocalBackup(backedUp);
+        if (!backedUp && identity) {
+          setSaveError('本机草稿备份失败，请保存到服务器或导出正文后检查存储空间。');
+          onErrorRef.current?.('本机草稿备份失败，请保存到服务器或导出正文后检查存储空间。');
+        }
+      }
     }, BACKUP_DELAY);
     return clearBackupTimer;
-  }, [chapter, clearBackupTimer, content, isDirty, novelId, title]);
+  }, [chapter, clearBackupTimer, content, isDirty, novelId, title, identity]);
 
   useEffect(() => {
     if (!isDirty) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       const latest = latestRef.current;
-      if (latest.chapterId) {
-        writeDraft(
+      if (latest.chapterId && !backupBlockedRef.current) {
+        writeChapterDraft(
           novelId,
           {
             chapterId: latest.chapterId,
@@ -573,6 +565,7 @@ export function useChapterSave({
             expectedVersion: versionRef.current,
           },
           versionRef.current,
+          identity,
         );
       }
       event.preventDefault();
@@ -590,7 +583,7 @@ export function useChapterSave({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isDirty, novelId, saveNow]);
+  }, [isDirty, novelId, saveNow, identity]);
 
   const status: ChapterSaveStatus = isSaving
     ? 'saving'
@@ -615,6 +608,8 @@ export function useChapterSave({
     conflict,
     isOffline,
     hasLocalBackup,
+    recoveryDrafts,
+    identityReady: Boolean(identity),
     saveNow,
     clearConflict: clearConflictState,
     overwriteConflict,

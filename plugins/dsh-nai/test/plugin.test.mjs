@@ -202,7 +202,10 @@ test('更新章节时携带 expected_version，路径参数不进入请求体', 
     await tools
       .find((tool) => tool.name === 'nai_chapter_update')
       .execute(
-        { novel_id: 7, chapter_id: 9, expected_version: 3, title: '第三章', content: '新正文' },
+        { novel_id: 7, chapter_id: 9, expected_version: 3,
+          expected_novel_lifecycle_id: 'a'.repeat(32),
+          expected_chapter_lifecycle_id: 'b'.repeat(32),
+          title: '第三章', content: '新正文' },
         { signal: undefined },
       )
   } finally {
@@ -213,6 +216,8 @@ test('更新章节时携带 expected_version，路径参数不进入请求体', 
   assert.equal(captured.init.method, 'PUT')
   assert.deepEqual(JSON.parse(captured.init.body), {
     expected_version: 3,
+    expected_novel_lifecycle_id: 'a'.repeat(32),
+    expected_chapter_lifecycle_id: 'b'.repeat(32),
     title: '第三章',
     content: '新正文',
   })
@@ -288,7 +293,9 @@ test('422 校验错误会展开 detail 数组中的字段信息', async () => {
     const update = tools.find((tool) => tool.name === 'nai_chapter_update')
     await assert.rejects(
       update.execute(
-        { novel_id: 7, chapter_id: 9, expected_version: 3 },
+        { novel_id: 7, chapter_id: 9, expected_version: 3,
+          expected_novel_lifecycle_id: 'a'.repeat(32),
+          expected_chapter_lifecycle_id: 'b'.repeat(32) },
         { signal: undefined },
       ),
       /body\.expected_version: Field required/,

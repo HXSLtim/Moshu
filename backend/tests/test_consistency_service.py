@@ -216,8 +216,8 @@ class TestConsistencyService:
 
         result = await consistency_service.check_content(1, "普通候选正文", 1, 1)
 
-        assert result["checks_performed"] == ["rule_engine", "timeline"]
-        assert result["checks_skipped"] == ["knowledge_graph", "emotion_state"]
+        assert result["checks_performed"] == ["rule_engine"]
+        assert result["checks_skipped"] == ["knowledge_graph", "timeline", "emotion_state"]
         assert result["is_complete"] is False
 
         steps = {
@@ -227,7 +227,7 @@ class TestConsistencyService:
         assert steps["knowledge_graph"]["status"] == "skipped"
         assert steps["knowledge_graph"]["output"]["is_valid"] is None
         assert steps["knowledge_graph"]["output"]["reason"] == "Neo4j 未启用"
-        assert steps["timeline"]["status"] == "completed"
+        assert steps["timeline"]["status"] == "skipped"
         assert steps["emotion_state"]["status"] == "skipped"
         assert steps["emotion_state"]["output"]["is_valid"] is None
 
@@ -245,9 +245,8 @@ class TestConsistencyService:
         assert result["checks_performed"] == [
             "rule_engine",
             "knowledge_graph",
-            "timeline",
         ]
-        assert result["checks_skipped"] == ["emotion_state"]
+        assert result["checks_skipped"] == ["timeline", "emotion_state"]
         assert result["layer_results"]["knowledge_graph"]["is_valid"] is True
 
     @pytest.mark.asyncio
@@ -276,12 +275,12 @@ class TestConsistencyService:
         }
         assert layers["knowledge_graph"]["status"] == "skipped"
         assert layers["knowledge_graph"]["reason"] == "Neo4j 未启用"
-        assert layers["timeline"]["status"] == "ok"
+        assert layers["timeline"]["status"] == "skipped"
         assert layers["emotion_state"]["status"] == "skipped"
 
         summary = events[-1]
-        assert summary["checks_performed"] == ["rule_engine", "timeline"]
-        assert summary["checks_skipped"] == ["knowledge_graph", "emotion_state"]
+        assert summary["checks_performed"] == ["rule_engine"]
+        assert summary["checks_skipped"] == ["knowledge_graph", "timeline", "emotion_state"]
         assert summary["is_complete"] is False
 
     @pytest.mark.asyncio
@@ -353,3 +352,47 @@ class TestConsistencyService:
 
         assert result["knowledge_graph_extracted"]
         assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_empty_consistency_reference_is_not_reported_as_passed():
+    """空库或未加载参考数据时，规则与时间线不得伪装检查通过。"""
+    service = ConsistencyService()
+    service.knowledge_graph.driver = None
+    service.init_worldview_rules(1, {"尚不支持的规则": "作者设定"})
+    result = await service.check_content(1, "候选正文", 1, 1)
+    for layer in ("rule_engine", "timeline"):
+        assert result["layer_results"][layer]["status"] == "skipped"
+        assert result["layer_results"][layer]["is_valid"] is None
+        assert layer not in result["checks_performed"]
+    assert result["is_complete"] is False
+    events = [event async for event in service.check_content_stream(1, "候选正文", 1, 1)]
+    layers = {event["layer"]: event for event in events if event["type"] == "layer"}
+    assert layers["rule_engine"]["status"] == "skipped"
+    assert layers["timeline"]["status"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_unknown_story_day_skips_loaded_timeline_in_http_trace_and_stream():
+    """即使参考时间线已加载，故事日未知也不得比较日期或报告检查通过。"""
+    service = ConsistencyService()
+    service.knowledge_graph.driver = None
+    service.timeline_manager.add_event(1, 5, "第五天已确认的剧情")
+
+    result = await service.check_content(1, "候选正文", 3, None)
+    timeline = result["layer_results"]["timeline"]
+    assert timeline["status"] == "skipped"
+    assert timeline["is_valid"] is None
+    assert "未提供故事当前天数" in timeline["reason"]
+    assert "timeline" not in result["checks_performed"]
+    assert "timeline" in result["checks_skipped"]
+    assert result["is_complete"] is False
+    step = next(step for step in result["workflow_trace"]["steps"] if step["id"] == "timeline")
+    assert step["input"]["current_day"] is None
+    assert step["status"] == "skipped"
+    assert step["output"]["is_valid"] is None
+    events = [event async for event in service.check_content_stream(1, "候选正文", 3, None)]
+    timeline_event = next(event for event in events if event.get("layer") == "timeline")
+    assert timeline_event["status"] == "skipped"
+    assert timeline_event["reason"] == timeline["reason"]
+    assert service.timeline_manager.get_timeline(1) == [(5, "第五天已确认的剧情")]

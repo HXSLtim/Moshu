@@ -100,18 +100,7 @@ def delete_character(db: Session, character_id: int) -> bool:
     if not db_character:
         return False
     
-    # 删除相关的关系和出场记录
-    db.query(CharacterRelationship).filter(
-        or_(
-            CharacterRelationship.character_a_id == character_id,
-            CharacterRelationship.character_b_id == character_id
-        )
-    ).delete()
-    
-    db.query(CharacterAppearance).filter(
-        CharacterAppearance.character_id == character_id
-    ).delete()
-    
+    # 聚合关系统一负责级联，避免直接删角色和删除整本小说采用不同清理规则。
     db.delete(db_character)
     db.commit()
     return True

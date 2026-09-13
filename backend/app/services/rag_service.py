@@ -712,10 +712,10 @@ class RAGService:
         finally:
             db.close()
 
-    async def hybrid_search(self, query: RAGQuery) -> RAGResponse:
+    async def hybrid_search(self, query: RAGQuery, *, actor_id: int | None = None, novel_lifecycle_id: str | None = None) -> RAGResponse:
         """按作者、作品生命周期和章节范围检索，并回查数据库当前版本。"""
         if not await self.initialize():
-            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata")
+            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata", status="unavailable", reason="检索服务或来源暂不可用")
 
         try:
             novel_truth = await asyncio.to_thread(
@@ -724,9 +724,13 @@ class RAGService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("读取RAG小说生命周期失败：novel_id={}, error={}", query.novel_id, exc)
-            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata")
+            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata", status="unavailable", reason="检索服务或来源暂不可用")
         if novel_truth is None:
-            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata")
+            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata", status="unavailable", reason="检索服务或来源暂不可用")
+
+        if ((actor_id is not None and novel_truth.owner_id != actor_id)
+                or (novel_lifecycle_id is not None and novel_truth.lifecycle_id != novel_lifecycle_id)):
+            raise ValueError("检索作品作用域已改变")
 
         from llama_index.core.vector_stores import (
             FilterCondition,
@@ -775,7 +779,7 @@ class RAGService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("RAG检索失败：{}", exc)
-            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata")
+            return RAGResponse(query=query.query, results=[], retrieval_method="vector_metadata", status="unavailable", reason="检索服务或来源暂不可用")
 
         results = []
         for node in nodes[: query.top_k]:
@@ -796,6 +800,8 @@ class RAGService:
             query=query.query,
             results=results,
             retrieval_method="vector_metadata",
+            status="ready" if results else "empty",
+            reason=None if results else "当前范围没有有效的索引结果",
         )
 
     async def retrieve_worldview(
@@ -803,6 +809,7 @@ class RAGService:
         novel_id: int,
         query: str,
         max_chapter: Optional[int] = None,
+        *, actor_id: int | None = None, novel_lifecycle_id: str | None = None,
     ) -> List[str]:
         """检索与世界观相关的上下文。"""
         response = await self.hybrid_search(
@@ -811,7 +818,7 @@ class RAGService:
                 query=query,
                 top_k=3,
                 max_chapter=max_chapter,
-            )
+            ), actor_id=actor_id, novel_lifecycle_id=novel_lifecycle_id,
         )
         return [result.content for result in response.results]
 
@@ -820,6 +827,7 @@ class RAGService:
         novel_id: int,
         character_name: str,
         max_chapter: Optional[int] = None,
+        *, actor_id: int | None = None, novel_lifecycle_id: str | None = None,
     ) -> List[str]:
         """检索角色设定与历史信息。"""
         response = await self.hybrid_search(
@@ -828,7 +836,7 @@ class RAGService:
                 query=f"{character_name}的性格、外貌、背景",
                 top_k=3,
                 max_chapter=max_chapter,
-            )
+            ), actor_id=actor_id, novel_lifecycle_id=novel_lifecycle_id,
         )
         return [result.content for result in response.results]
 
@@ -883,6 +891,19 @@ class RAGService:
         except Exception as exc:  # noqa: BLE001
             logger.error("清理小说向量失败：novel_id={}, error={}", novel_id, exc)
             return 0
+
+    async def cleanup_projection_strict(self, kind: str, token: dict) -> int:
+        """持久worker专用：失败必须重试，清理只按捕获的作者及生命周期。"""
+        if not token.get("_novel_lifecycle") or token.get("_owner_id") is None:
+            raise ValueError("缺少投影清理身份")
+        filters = [{"_novel_lifecycle": token["_novel_lifecycle"]}, {"_owner_id": int(token["_owner_id"])}]
+        if kind == "delete_chapter":
+            if not token.get("_source_lifecycle") or not token.get("source_key"):
+                raise ValueError("缺少章节清理身份")
+            filters.extend([{"_source_lifecycle": token["_source_lifecycle"]}, {"source_key": token["source_key"]}])
+        elif kind != "delete_novel":
+            raise ValueError("未知投影清理操作")
+        return await asyncio.to_thread(self._cleanup_across_collections_sync, [{"$and": filters}])
 
     async def cleanup_novel_graph(self, novel_id: int) -> int:
         """图谱清理由一致性投影负责；当前没有可清理实现。"""

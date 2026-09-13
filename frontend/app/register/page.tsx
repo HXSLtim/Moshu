@@ -3,16 +3,13 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Container,
-  Box,
   TextField,
   Button,
-  Typography,
   Card,
   CardContent,
   Alert,
 } from '@mui/material';
-import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import AuthFrame from '@/components/layout/AuthFrame';
 import { api } from '@/lib/api';
 
 export default function RegisterPage() {
@@ -53,21 +50,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <Container maxWidth="sm">
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <ColorModeToggle />
-      </Box>
-      <Box
-        sx={{
-          mt: 8,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-        }}
-      >
-        <Typography variant="h4" component="h1" gutterBottom>
-          注册新账号
-        </Typography>
+    <AuthFrame title="创建你的写作空间" description="注册后只要起一个名字，就能开始一本新小说。">
         <Card sx={{ mt: 3, width: '100%' }}>
           <CardContent>
             <form onSubmit={handleRegister}>
@@ -79,6 +62,7 @@ export default function RegisterPage() {
               <TextField
                 fullWidth
                 label="用户名"
+                placeholder="3-50 个字符"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 margin="normal"
@@ -89,6 +73,7 @@ export default function RegisterPage() {
               <TextField
                 fullWidth
                 label="邮箱"
+                placeholder="用于找回账号"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -98,6 +83,7 @@ export default function RegisterPage() {
               <TextField
                 fullWidth
                 label="密码"
+                placeholder="至少 6 个字符"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -121,7 +107,7 @@ export default function RegisterPage() {
                 sx={{ mt: 2 }}
                 disabled={loading}
               >
-                {loading ? '注册中...' : '注册'}
+                {loading ? '正在创建…' : '创建账号并开始'}
               </Button>
               <Button
                 fullWidth
@@ -129,12 +115,11 @@ export default function RegisterPage() {
                 onClick={() => router.push('/')}
                 sx={{ mt: 1 }}
               >
-                返回登录
+                已有账号，去登录
               </Button>
             </form>
           </CardContent>
         </Card>
-      </Box>
-    </Container>
+    </AuthFrame>
   );
 }

@@ -14,6 +14,8 @@
 | 角色管理 | `/api/characters` |
 | Story Bible | `/api/story-bible`（facts/events） |
 | 统一 MCP | `/api/mcp`（capabilities/execute/audit） |
+| 创作对话 | `/api/writing-chat`（持久历史、完整回复与停止） |
+| 章节记忆 | `/api/novels/{id}/chapters/{chapter_id}/digest`、`revisions` 与 `/api/memory-jobs` |
 | 内容生成 | `/api/generation`（含 SSE） |
 | 文风样本 | `/api/style` |
 | 资料检索 | `/api/research` |
@@ -91,10 +93,14 @@
 响应：`{"items":[{novel_id, chapter_count, total_words}]}`。
 ### GET /api/novels/{novel_id} — 详情（200 → NovelResponse）
 错误：`404` 小说不存在；`403` 无权访问此小说。
+### GET /api/novels/{novel_id}/export.txt — 整本 TXT 导出（200）
+需要认证。返回 `text/plain; charset=utf-8`，正文带 UTF-8 BOM，包含书名、简介及按章号排序的全部已保存章节（不受章节列表分页上限影响）。`Content-Disposition` 提供附件文件名与 UTF-8 中文文件名，`Cache-Control: no-store`。小说不存在或不属于当前作者均返回 `404`。
+
+前端以 Blob 下载文件。仅导出服务端已保存正文，不包含未保存的本地草稿、世界观或事实账本。当前一次读取全书，超大体量作品仍需后续流式导出优化。
 ### PUT /api/novels/{novel_id} — 更新（200 → NovelResponse）
 字段（全可选，至少一项否则 422）：`title`(1–200)、`genre`(≤50)、`description`(≤8000)、`worldview`(≤50000)，均可传 null 清空。错误：`404`、`403` 无权修改此小说、`422` 空更新。
 ### DELETE /api/novels/{novel_id} — 删除（204）
-级联删除章节，RAG 派生索引后台清理。错误：`404`、`403`、`500`。
+经 ORM 级联删除章节、对话、事实、事件、角色关系与出场等附属数据，RAG 派生索引后台清理。错误：`404`、`403`、`500`。
 ## 四、章节（/api/novels/{novel_id}）
 ### POST /api/novels/{novel_id}/chapters — 创建（客户端指定章号，201 → ChapterResponse）
 
@@ -223,10 +229,10 @@
 | novel_id | int | 是 | >0 |
 | prompt | string | 是 | 1–4000 |
 | chapter | int | 是 | >0 |
-| current_day | int | 否 | >0，默认 1 |
+| current_day | int/null | 否 | >0，默认 null（未知）；未知时跳过按日检查 |
 | target_length | int | 否 | 100–8000，默认 500 |
 
-响应含 `final_content`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的 active facts / 相关 events。错误：`404`、`422` 提示词超预算、`500`。
+响应含 `final_content`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`context_manifest`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的目标章有效事实 / 已发生事件。`context_manifest` 为共享上下文清单对象（schema 默认 `{}`），字段与边界见下文「共享上下文清单」；工作流检索步骤和 A/B/C 的 `data_sources.context_manifest` 保留相同清单。错误：`404`、`422` 提示词超预算、`500`。
 ### POST /api/generation/plot-options — 剧情走向选项（200）
 
 | 字段 | 类型 | 必填 | 约束 |
@@ -260,6 +266,8 @@
 | target_length | int | 否 | 10–5000 |
 
 响应：`{rewritten_text}`。错误：`404`、`400` 原文不能为空、`500`。
+
+工作台保存生成时的章节、全文与选区快照，展示只读原文和可编辑候选；采纳时正文必须与快照一致，且仅替换原选区。正文变化时禁用采纳，候选仍可复制。切换章节会取消请求并清理候选。客户端支持 `AbortSignal`，停止后不会采纳迟到响应；这不保证上游模型计算同时终止。
 ### POST /api/generation/continue — 章节续写（非流式，200）
 
 | 字段 | 类型 | 必填 | 约束 |
@@ -268,6 +276,7 @@
 | chapter_id | int | 是 | >0 |
 | current_content | string | 是 | ≤50000 |
 | target_length | int | 否 | 100–3000，默认 500 |
+| current_day | int/null | 否 | >0，默认 null；未知时只按章节定位事件 |
 | style_strength | float | 否 | 0–1，默认 0.7 |
 | pace | string | 否 | `slow`/`medium`/`fast`，默认 `medium` |
 | tone | string | 否 | `neutral`/`tense`/`relaxed`/`sad`/`joyful`，默认 `neutral` |
@@ -275,25 +284,27 @@
 | style_sample_id | int | 否 | 可空 |
 | plot_direction_hint | string | 否 | ≤600 |
 
-响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 现包含 RAG 世界观/角色块与 Story Bible 上下文。错误：`404`、`500`。
+响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`context_manifest`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 包含世界观/角色块与 Story Bible 上下文；L1 简介通过独立 Prompt 变量注入，来源清单由 `context_manifest` 返回。错误：`404`、`500`。
 ### POST /api/generation/continue-stream — 章节续写（SSE 流式）
 请求字段同 `/continue`。响应 `Content-Type: text/event-stream`，`data:` 行为 JSON：
 
 | type | 载荷 | 说明 |
 |------|------|------|
-| `metadata` | `data` | 与 `/continue` 响应同结构元数据（一次） |
+| `metadata` | `data` | 与 `/continue` 对应的元数据，含 `context_manifest`；不含 `content`/`length`（一次） |
 | `chunk` | `content` | 正文块（每块约 5 字符） |
 | `done` | 无 | 完成 |
 | `error` | `message` | 出错 |
 | 其他 | `type`/`agent`/`status`/`data` | 转发各 Agent 中间事件 |
 
+`metadata.data.context_manifest` 与本轮最终生成使用的共享包一致。上下文检索完成的 Agent 事件也携带 `data.context_manifest`；来源清单不是生成成功信号，客户端仍需等待 `done`。
+
 取消：前端 `AbortSignal` → `reader.cancel()`；服务端 `http_request.is_disconnected()` 中止。HTTP 层错误：`404`、`500`；流内错误以 `error` 事件返回。
 ### POST /api/generation/outline — 生成大纲（200）
-字段：`novel_id`（>0，必填）、`theme`（1–1000，必填）、`target_chapters`（1–80，默认 10）。响应：`{outline, chapters}`。
+字段：`novel_id`（>0，必填）、`theme`（1–1000，必填）、`target_chapters`（1–80，默认 10）。响应：`{outline, chapters, context_manifest}`。
 ### POST /api/generation/character — 生成角色设定（200）
-字段：`novel_id`（>0，必填）、`character_type`（1–20，必填）、`character_description`（1–1000，必填）。响应：`{character, type}`。
+字段：`novel_id`（>0，必填）、`character_type`（1–20，必填）、`character_description`（1–1000，必填）。响应：`{character, type, context_manifest}`。
 ### GET /api/generation/test — 生成测试（仅 DEBUG）
-非 DEBUG 返回 `404`。响应含 `final_content`、`length`。
+非 DEBUG 返回 `404`。仍校验示例小说的作者归属；响应含 `final_content`、`length`、`context_manifest`。
 ## 七、审核（/api/review）
 ### POST /api/review/chapter — 章节全面审核（200）
 
@@ -328,7 +339,7 @@
 | novel_id | int | 是 | >0 |
 | chapter | int | 是 | >0（章节号） |
 | content | string | 是 | 1–50000 |
-| current_day | int | 否 | >0，默认 1 |
+| current_day | int/null | 否 | >0，默认 null（未知）；未知时跳过按日检查 |
 
 事件由 `consistency_service.check_content_stream` 产出（事件类型待核对），末尾追加 `{type:"done"}`；出错 `{type:"error", message}`。HTTP 层错误：`404` 小说/章节不存在或无权访问。
 ## 九、RAG（/api/rag）
@@ -422,7 +433,7 @@
 审计响应：`history` → `{user_id, total_records, operations[]}`，`operation` 含 `id`/`target_type`/`action`/`novel_id`/`target_id`/`success`/`execution_time_ms`/`ai_tokens_used`/`created_at`/`error_message`；`statistics` → `{statistics}`；`errors` → `{error_analysis}`。
 ## 十三、Story Bible（/api/story-bible）
 
-结构化事实账本与剧情事件基础接口。写入模型均拒绝未知字段；所有资源先校验小说归属，越权统一返回 `404`。生成工作流会读取**当前仍为 active**、且确立章节不晚于目标章节的事实，以及故事日/章节不晚于当前进度的事件，经统一预算裁剪后注入 Agent A/B/C。
+结构化事实账本与剧情事件基础接口。写入模型均拒绝未知字段；所有资源先校验小说归属，越权统一返回 `404`。生成工作流会读取目标章当时有效的事实（包括退役章晚于目标章的历史事实），以及在目标章/已知故事日范围内的 occurred 事件，planned 事件不注入。故事日未知且有限定章节时，未定位章节的事件不自动召回；故事日明确时可召回日期不晚于该日的无章事件。所有内容经统一预算裁剪后注入 Agent A/B/C。
 
 ### 事实账本（facts）
 
@@ -511,7 +522,7 @@
 - 客户端按 `\r?\n\r?\n` 切块，取 `data:` 行拼接后 `JSON.parse`。
 - 事件类型识别：`chunk`（正文）、`metadata`、`done`（成功结束）、`error`（抛错）。
 - **未收到 `done` 而流中断 → 抛 `SSEUnexpectedEOFError`**，避免断网误判成功。
-- 取消：`AbortSignal` → `reader.cancel()`；服务端 `is_disconnected()` 检测后中止。
+- 取消：`AbortSignal` → `reader.cancel()`；服务端在断连检查点中止响应，不保证已经发往模型服务的计算同步停止。
 ## 十五、与旧版文档的主要差异
 
 1. **新增 8+ 模块端点**：角色、生成（init/generate/plot-options/auto-chapter/rewrite/continue/outline/character）、审核、一致性、RAG、风格、研究、统一 MCP，及健康检查 `/api/health`、`/api/ping`。旧文档仅覆盖认证/小说/章节。
@@ -533,3 +544,71 @@
 9. **明确 501 语义**：MCP 未实现能力（`ai-takeover`、`ai-autopilot`）明确返回 `501`，不再提供占位成功结果。
 
 10. **新增 Story Bible 基础接口**：`/api/story-bible/facts` 与 `/api/story-bible/events` CRUD 已上线，写入预算与小说归属校验已补齐；角色已有独立管理，地点、大纲等其余结构化模型仍不在当前能力范围。
+
+
+## 十六、创作对话（/api/writing-chat）
+
+所有接口验证小说所有权；无权访问与不存在均返回 `404`。对话不会自动写入章节。
+
+### GET /api/writing-chat/{novel_id}/turns
+
+查询参数：`limit`（1–100，默认 30）、`before`（可选，正整数记录 ID）。返回最新一页，以 ID 升序排列；传当前页最小 ID 可加载更早历史。过期未完成请求标记失败。
+
+### POST /api/writing-chat/{novel_id}/turns
+
+请求字段：`request_id`（UUID，同小说内幂等）、`chapter_id`（所属章节）、`mode`（`discuss`/`continue`，默认讨论）、`message`（非空，最多 4000 字符）、`current_content`（编辑器快照，最多 50000 字符）。问题先落库，模型完成且通过输出契约后返回完整记录；失败也保留问题并返回 `failed` 状态；此类模型执行失败仍可返回 HTTP 200，客户端必须检查业务 `status`。
+
+记录包含 `id`、`request_id`、`novel_id`、`chapter_id`、`chapter_title`、`mode`、`user_text`、`assistant_text`、`base_content_hash`（UTF-8 正文 SHA-256）、`status`（`pending`/`completed`/`failed`/`cancelled`）、`error`、`context_manifest`（object/null）、`created_at`。客户端可轮询列表恢复未完成请求状态。重复请求 ID 返回原记录，失败后重新发送使用新 UUID。
+
+### POST /api/writing-chat/{novel_id}/turns/{request_id}/stop
+
+将尚未完成的记录标为 `cancelled`，返回记录；已完成记录保持原样。尚未落库返回 `404`。停止后迟到的模型响应不能写成成功回复，但不保证模型服务停止计算。
+
+模型上下文：最近最多 20 个已完成轮次，并限制历史总计 8000 字符；世界观、事实/事件与正文分别沿用统一预算。较早记录仍可在界面查看，但不承诺每轮全部注入。
+
+### 共享上下文清单（context_manifest）
+
+创作对话与高级生成通过同一 `ContextPack` 构建器读取作者世界观、已确认事实/事件及 L1 前章简介。作者 ID 与小说生命周期由服务端确定，不接受客户端作为生成请求的可信字段。L1 只选严格早于目标章节、当前原文版本、当前提取配方且 `ready` 的简介；同时复核作品/章节生命周期、原文哈希与逐字引用。当前章、未来章、旧稿和旧配方简介不注入，`state_change_candidates` 不作为确认事实注入。
+
+| 清单字段 | 类型 | 含义 |
+|---|---|---|
+| `version` | int | 当前协议版本为 `1` |
+| `scope` | object | `novel_id`、`novel_lifecycle_id`、`target_chapter`、`current_day`（int/null）、`memory_head_version` |
+| `sources` | object[] | 仅本轮实际注入的 L1 简介来源，按章序排列；不枚举正文、对话历史、Story Bible 或向量片段 |
+| `warnings` | string[] | 无有效简介、来源校验失败、扫描或预算限制、简介存储不可用等说明 |
+| `omitted` | object | 省略/裁剪原因到计数的映射；可能含 `digest_limit`、`context_budget`、`summary_trimmed`、`invalid_source`、`scan_window_at_least`，不是全书缺失简介统计 |
+| `fingerprint` | string | SHA-256，绑定清单及共享包中的世界观、事实/事件、实际简介文本；不包含当前指令、编辑器快照、历史问答、RAG 或 Agent 中间输出，不是完整模型输入指纹 |
+
+每个 `sources` 元素含 `kind`（固定 `chapter_digest`）、`id`（简介 ID）、`title`、`chapter_id`、`chapter_number`、`source_revision_id`、`source_version`、`content_hash`（来源原文 SHA-256）。可用原文版本 API 按 `source_revision_id` 只读核对来源；清单不直接携带全文。
+
+召回优先选最近的有效前章，最多 **3 章**；每条简介最多 **700 字符**，简介整体最多 **2400 字符**（含标题与参考性质说明）。来源与裁剪后的实际注入条目对应，模型节点不再二次截断简介。最多核验最近 50 条候选，窗口外仅报告至少还有候选未扫描。没有可用简介或简介存储异常时，`sources=[]` 并附说明，仍可使用原文和作者确认设定；作者或生命周期验证失败则停止生成。
+
+新 `WritingTurn` 在 `pending` 落库时冻结本轮清单，GET、重复 UUID、失败及取消均返回该轮原清单，之后章节改稿或重建简介不会重算历史清单。升级前的历史轮次返回 `context_manifest=null`，表示当时未记录来源；它与新轮次 `sources=[]` 的“本轮未使用 L1”含义不同。
+
+启动升级代码前备份数据库，并在 `backend` 目录执行 `.venv/bin/python init_db.py`，应用当前 Alembic head `e2b6c8d0f345`（依次经过 `b9e3f5a7c012`、`c0f4a6b8d123`、`d1a5b7c9e234`）。后续迁移增加来源清单、结构化状态、候选执行与持久投影任务，不回填或改写旧问答；回退前须导出新增派生与审计数据。
+
+### 已确认剧情的上下文边界
+
+创作对话和高级生成共用 Story Bible 查询：不晚于目标章节确立且在该章仍有效的事实可进入上下文；已退役事实在明确失效章之前仍可用于回写旧章，失效章起排除。没有目标章节时只取当前 active 事实。事件只取 occurred，planned 仍可通过账本 CRUD 管理，但不会被当作已发生剧情注入。
+
+一致性 HTTP/SSE 遇到未加载可执行规则或已确认时间线时，相关层返回 skipped 和原因，不标记检查通过。此行为不代表数据库账本已自动接入一致性服务，当前接线缺口见架构评审。
+
+模型输出异常：共享解析器拒绝提供方报告的截断/过滤/工具调用、非文本、空文本和超过 20000 字符的回复。创作对话保存 failed 与中文原因，不返回可采纳的半段正文；模型超时也有明确失败原因。高级生成的普通请求走现有错误响应，SSE 走 error 事件；六维审核失败不允许发布，轻量编辑输出结构异常时返回不可用。提供方缺失完成元数据时兼容文本输出，不推测 token 用量。
+
+## 原文版本与章节简介（M1）
+
+全部要求 Bearer JWT。小说、章节、原文版本、任务不属于当前作者或生命周期不匹配均返回 404。保存正文的现有 API 契约不变，服务端同事务写原文版本与简介任务；请求不等待模型。L0/L1 三表由迁移 `a8d2e4f6b901` 引入；当前版本还需运行 `init_db.py` 应用至当前 head `e2b6c8d0f345`，详见上文共享清单迁移说明。
+
+| 端点 | 返回 |
+|---|---|
+| `GET /api/novels/{novel_id}/chapters/{chapter_id}/digest` | 200，`{status,current_version,worker_enabled,digest,job}` |
+| `POST /api/novels/{novel_id}/chapters/{chapter_id}/digest/rebuild` | 202，任务对象；无请求体，仅使用已保存正文 |
+| `GET /api/novels/{novel_id}/chapters/{chapter_id}/revisions` | 200，版本摘要数组，倒序；limit 默认20最大100，before_version 正整数可选 |
+| `GET /api/novels/{novel_id}/revisions/{revision_id}` | 200，版本摘要加 `chapter_id,content`，UUID 来源 ID |
+| `GET /api/memory-jobs/{job_id}` | 200，任务对象，UUID ID |
+
+简介状态 `ready/stale/missing` 与任务状态独立。digest 可为 null，非空时含 `id,source_revision_id,source_version,summary,participants,events,state_change_candidates,open_threads,source_refs,created_at`；四类列表均为有界字符串。source_refs 含 `revision_id,start,end,quote,content_hash,quote_hash`，位置为 Python Unicode 字符索引、end 不包含；content_hash 为完整原文 SHA-256，quote_hash 为引用片段 SHA-256，来源身份由服务器生成。
+
+任务对象含 `id,state,attempts,max_attempts,error_code,error_message`。状态为 queued/running/succeeded/failed/cancelled/superseded，并提供任务查询、重建和取消 API。相同版本/配方重建复用同任务，已经成功的任务不重复调用模型；failed/cancelled/superseded 的显式重建将同一任务重新排队并重置本轮尝试。来源在重建竞争中变化返回409；空白或超过20000字符的整章来源返回422。
+
+worker_enabled 默认为 false，排队不代表模型正在执行；实际启用说明见 QUICKSTART。简介中的状态变化仍为候选，不会写 StoryFact。旧简介可返回 stale 供只读核对，不能当成当前事实。ContextPack 的 `memory_head_version` 在候选保存前会再次校验，记忆变化时旧候选返回 409；版本摘要含 `id,version,chapter_number,title,content_hash,created_at`。一键恢复、跨全书语义召回和场景级时间锚点暂未提供。

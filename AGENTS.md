@@ -31,10 +31,27 @@
 
 ## 验证(强制)
 
-- 后端:`cd backend && .venv/bin/python run_tests.py --mode all`,退出码必须为 0。
+- 后端:`cd backend && ./run_tests.sh --mode all`(或 `bash run_tests.sh --mode all`),退出码必须为 0。
+  该脚本自动清理代理变量,等价于下方的手工命令。
 - 前端:`npm run lint && npm run typecheck && npm run test`。
+- 真实模型冒烟(按需手动,不进入 pytest 基线,会真实调用并计费):
+  `cd backend && ./run_smoke.sh`。验证对话 Agent 的工具调用参数链路端到端完好。
 - 验证失败禁止提交;无法验证的部分必须在交付说明中列为风险并给出补验计划。
-- 本机若开 Clash(socks5 代理),先 `unset ALL_PROXY all_proxy` 再跑测试,否则 openai/httpx 导入即崩。
+- 环境坑(实测):本机开着 Clash 时只 `unset ALL_PROXY all_proxy` **不够**(只用这两个清过的命令
+  仍会崩)。`NO_PROXY` 里的 `[::1]` 会让 httpx 在**导入期**抛 `InvalidURL: Invalid port: ':1]'`,
+  测试在 collection 阶段就崩,报错看起来与代理无关。必须清掉全部 8 个代理变量:
+
+  ```bash
+  cd backend && env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy \
+    -u HTTPS_PROXY -u https_proxy -u NO_PROXY -u no_proxy \
+    .venv/bin/python run_tests.py --mode all
+  ```
+
+  任何直接调 `.venv/bin/python` 的命令(包括冒烟脚本)都要带这串清理,否则必崩;
+  用 `run_tests.sh` / `run_smoke.sh` 可免于此。
+
+- 另注:`run_tests.py` 通过 subprocess 调 pytest。把输出接进管道(如 `| tail`)看到的是管道退出码,
+  会掩盖真实失败,必须单独确认 `$?` 或直接用 `run_tests.sh`。
 
 ## 工作留痕
 

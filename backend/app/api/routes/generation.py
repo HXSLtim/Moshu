@@ -1,7 +1,7 @@
 """
 内容生成路由
 """
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Request, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.models.schemas import (
@@ -17,6 +17,8 @@ from app.models.schemas import (
     ChapterResponse,
     RewriteRequest,
     RewriteResponse,
+    IdeaParseRequest,
+    IdeaParseResponse,
 )
 from app.services.agent_service import agent_service
 from app.services.rag_service import rag_service
@@ -27,12 +29,27 @@ from app.models.user import User
 from pydantic import BaseModel, Field
 from typing import Literal
 from loguru import logger
-from langchain_openai import ChatOpenAI
+from app.services.model_provider import create_chat_model
+from app.services.model_result import parse_model_result
+from app.services.writing_execution import execution_scope, invoke_model
+from app.services.writing_jobs import (durable_route, register_handler, submit_job, dispatch_job,
+    owned_job, stop_job, reconcile_jobs, submit_legacy_job)
+from app.models.writing_chat import WritingGenerationJob
+from uuid import UUID, uuid4
+from datetime import datetime
+from pydantic import ConfigDict, ValidationError
+from app.services.writing_tasks import TaskOptions, execute_task
+from app.services.writing_service import writing_service
+from app.services.writing_proposals import create_proposal
+from app.models.writing_schemas import ProposalResponse
+from app.services.context_builder import build_context_pack
+from types import SimpleNamespace
 from langchain.prompts import ChatPromptTemplate
 from app.core.config import settings
 import json
 import asyncio
 from app.services.context_budget import (
+    MAX_CHAT_OUTPUT_CHARS,
     MAX_CURRENT_CONTENT_CHARS,
     MAX_GENERATION_PROMPT_CHARS,
     MAX_PLOT_HINT_CHARS,
@@ -45,38 +62,12 @@ from app.services.context_budget import (
 router = APIRouter()
 
 
-async def _index_auto_chapter_projection(**kwargs) -> None:
-    """后台刷新自动生成章节的RAG投影，并记录真实执行结果。"""
-    indexed = await rag_service.index_content(**kwargs)
-    if indexed:
-        logger.info(
-            "自动章节RAG后台索引完成：novel_id={}, chapter={}",
-            kwargs["novel_id"],
-            kwargs["chapter"],
-        )
-    elif not settings.EMBEDDING_ENABLED:
-        logger.info(
-            "自动章节RAG后台索引已按配置跳过：novel_id={}, chapter={}",
-            kwargs["novel_id"],
-            kwargs["chapter"],
-        )
-    else:
-        logger.warning(
-            "自动章节RAG后台索引失败：novel_id={}, chapter={}",
-            kwargs["novel_id"],
-            kwargs["chapter"],
-        )
-
-
 # 初始化设定使用的LLM
-init_llm = ChatOpenAI(
+init_llm = create_chat_model(
+    max_retries=0,
     model=settings.OPENAI_MODEL_COMPLEX,
-    api_key=settings.OPENAI_API_KEY,
-    base_url=settings.OPENAI_API_BASE,
     temperature=0.8,
     max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-    timeout=settings.LLM_TIMEOUT_SECONDS,
-    max_retries=settings.LLM_MAX_RETRIES,
 )
 
 
@@ -85,7 +76,10 @@ class ContinueRequest(BaseModel):
     novel_id: int = Field(..., gt=0)
     chapter_id: int = Field(..., gt=0)
     current_content: str = Field(..., max_length=MAX_CURRENT_CONTENT_CHARS)
+    expected_novel_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
+    expected_chapter_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
     target_length: int = Field(500, ge=100, le=3000)
+    current_day: int | None = Field(None, gt=0, description="故事当前天数；未知时只按章节限定上下文")
     # 用户可控参数
     style_strength: float = Field(0.7, ge=0, le=1)  # 文风强度 (0-1)
     pace: Literal["slow", "medium", "fast"] = "medium"
@@ -99,7 +93,7 @@ class OutlineRequest(BaseModel):
     """大纲生成请求"""
     novel_id: int = Field(..., gt=0)
     theme: str = Field(..., min_length=1, max_length=1000)
-    target_chapters: int = Field(10, ge=1, le=80)
+    target_chapters: int = Field(10, ge=1, le=200)
 
 
 class CharacterRequest(BaseModel):
@@ -109,7 +103,66 @@ class CharacterRequest(BaseModel):
     character_description: str = Field(..., min_length=1, max_length=1000)
 
 
+@router.post("/parse-idea", response_model=IdeaParseResponse)
+async def parse_idea(
+    request: IdeaParseRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """把作者的一段自然语言想法解析为可编辑的建书草案，不提前写入小说。
+
+    长篇按两层规划：全书用卷/阶段覆盖，只有开头若干章列逐章大纲。
+    这样几百上千章的作品不必依赖一次模型输出，也不会给作者一个虚假的章节上限。
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """你是 Nai 的建书策划 Agent。作者只会告诉你一段自然语言想法，你负责把它整理成可编辑的小说初始化草案。
+
+只使用作者明确说出的信息；缺失内容可以做保守的创作补全，但必须把不确定点放入 uncertainties，不能把猜测写成作者事实。
+
+规划按两层进行：
+1. arcs 是全书卷/阶段结构，3 到 8 条，chapter_start/chapter_end 必须连续无缝覆盖第 1 章到第 {planned_chapters} 章，用于支撑长篇。
+2. opening_outline 只详列开头可直接开写的章节，最多 8 章，chapter_number 从 1 连续递增。
+
+不要把整本书压缩成开头几章，也不要逐章展开全书。计划大纲属于 planned，不代表已经发生。
+角色必须拆成独立对象，剧情线索单独列出。
+planned_chapters 必须回填作者给出的全书预计章数。
+只输出严格 JSON，不要 Markdown、解释或代码围栏。JSON 必须符合这个 Schema：
+{schema}
+"""),
+        ("user", "全书预计章数：{planned_chapters}\n作者的想法：{idea}"),
+    ])
+    try:
+        chain = prompt | init_llm
+        raw = parse_model_result(await invoke_model(chain, {
+            "planned_chapters": request.planned_chapters,
+            "idea": request.idea.strip(),
+            "schema": json.dumps(IdeaParseResponse.model_json_schema(), ensure_ascii=False),
+        }), max_output_chars=MAX_CHAT_OUTPUT_CHARS).text
+        start, end = raw.find("{"), raw.rfind("}") + 1
+        if start < 0 or end <= start:
+            raise ValueError("模型未返回 JSON")
+        result = IdeaParseResponse.model_validate_json(raw[start:end])
+        if result.planned_chapters != request.planned_chapters:
+            raise ValueError("模型回填的全书篇幅与请求不一致")
+        expected_start = 1
+        for arc in result.arcs:
+            if arc.chapter_start != expected_start or arc.chapter_end < arc.chapter_start:
+                raise ValueError("卷/阶段没有连续覆盖全书")
+            expected_start = arc.chapter_end + 1
+        if expected_start != request.planned_chapters + 1:
+            raise ValueError("卷/阶段没有覆盖到全书最后一章")
+        numbers = [item.chapter_number for item in result.opening_outline]
+        if numbers != list(range(1, len(numbers) + 1)):
+            raise ValueError("开头章节大纲的章号不连续")
+        return result
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(status_code=422, detail="AI 未返回完整的结构化建书草案，请换一种说法重试") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("AI 解析作者想法失败")
+        raise HTTPException(status_code=502, detail="AI 暂时无法解析这段想法，请稍后重试") from exc
+
+
 @router.post("/init", response_model=InitNovelResponse)
+@durable_route('init')
 async def init_novel(
     request: InitNovelRequest,
     current_user: User = Depends(get_current_user),
@@ -172,7 +225,7 @@ async def init_novel(
         )
 
         chain = prompt | init_llm
-        result = await chain.ainvoke(
+        result = await invoke_model(chain,
             {
                 "title": novel.title,
                 "genre": novel.genre or "未指定",
@@ -186,7 +239,7 @@ async def init_novel(
             }
         )
 
-        raw = result.content.strip()
+        raw = parse_model_result(result, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text
 
         try:
             # 尝试从返回内容中提取JSON片段
@@ -235,6 +288,7 @@ async def init_novel(
 
 
 @router.post("/generate", response_model=GenerationResponse)
+@durable_route('generate')
 async def generate_content(
     request: GenerationRequest,
     current_user: User = Depends(get_current_user),
@@ -275,7 +329,9 @@ async def generate_content(
             request.chapter,
             len(request.prompt),
         )
-        response = await agent_service.generate_content(request)
+        response = await agent_service.generate_content(
+            request, actor_id=novel.user_id, novel_lifecycle_id=novel.rag_lifecycle_id,
+        )
         return response
     except HTTPException:
         raise
@@ -288,6 +344,7 @@ async def generate_content(
 
 
 @router.post("/plot-options", response_model=PlotOptionsResponse)
+@durable_route('plot_options')
 async def generate_plot_options(
     request: PlotOptionsRequest,
     current_user: User = Depends(get_current_user),
@@ -352,7 +409,7 @@ async def generate_plot_options(
         )
 
         chain = prompt | init_llm
-        response = await chain.ainvoke(
+        response = await invoke_model(chain,
             {
                 "num_options": request.num_options,
                 "title": novel.title,
@@ -365,7 +422,7 @@ async def generate_plot_options(
             }
         )
 
-        raw = response.content.strip()
+        raw = parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text
 
         try:
             start = raw.find("{")
@@ -421,164 +478,74 @@ async def generate_plot_options(
         raise HTTPException(status_code=500, detail=f"生成剧情选项失败: {str(e)}")
 
 
-@router.post("/auto-chapter", response_model=ChapterResponse)
+def _validate_source_identity(request, novel, chapter=None):
+    expected_novel = getattr(request, 'expected_novel_lifecycle_id', None)
+    expected_chapter = getattr(request, 'expected_chapter_lifecycle_id', None)
+    if expected_novel is not None and expected_novel != novel.rag_lifecycle_id:
+        raise HTTPException(409, '小说来源已变化，请重新打开作品')
+    if expected_chapter is not None and (chapter is None or expected_chapter != chapter.rag_lifecycle_id):
+        raise HTTPException(409, '章节来源已变化，请重新打开章节')
+
+
+async def _run_structured_task(db, novel, *, mode, instruction, options, current_content='', target_chapter=1):
+    """独立工具与主对话共享契约，任何来源变化均不发布结果。"""
+    novel_id, actor_id, lifecycle = novel.id, novel.user_id, novel.rag_lifecycle_id
+    pack = build_context_pack(db, novel_id=novel_id, actor_id=actor_id,
+        novel_lifecycle_id=lifecycle, target_chapter=target_chapter, current_day=options.current_day, task=mode)
+    db.commit()
+    async with execution_scope(max_model_calls=1) as meter:
+        result = await execute_task(mode=mode, service=writing_service, context_pack=pack,
+            current_content=current_content, instruction=instruction, history=[], options=options,
+            novel_id=novel_id, actor_id=actor_id, novel_lifecycle_id=lifecycle, target_chapter=target_chapter,
+            project_meta={'genre': novel.genre, 'description': novel.description})
+    db.expire_all()
+    current = novel_crud.get_novel_by_id(db, novel_id)
+    if current is None or current.user_id != actor_id or current.rag_lifecycle_id != lifecycle:
+        raise HTTPException(409, '小说来源已经改变，请重新生成')
+    return result, pack, meter.snapshot()
+
+
+@router.post("/auto-chapter", response_model=ProposalResponse)
+@durable_route('auto_chapter')
 async def auto_create_chapter(
     request: AutoChapterRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """AI自动生成并创建新章节
-
-    根据小说设定和参考章节，自动生成下一章的章节号、标题和正文，并写入数据库。
-    """
+    """生成持久的新章候选；作者通过候选确认接口决定是否创建章节。"""
+    novel = novel_crud.get_novel_by_id(db, request.novel_id)
+    if not novel or novel.user_id != current_user.id:
+        raise HTTPException(404, '小说不存在或无权访问')
+    base = novel_crud.get_chapter_by_id(db, request.base_chapter_id) if request.base_chapter_id else novel_crud.get_latest_chapter(db, novel.id)
+    if request.base_chapter_id and (base is None or base.novel_id != novel.id):
+        raise HTTPException(404, '参考章节不存在或不属于本书')
+    _validate_source_identity(request, novel, base)
+    base_content = base.content if base else ''
+    chapter_snapshot = SimpleNamespace(id=base.id, version=base.version, rag_lifecycle_id=base.rag_lifecycle_id) if base else None
+    novel_snapshot = SimpleNamespace(id=novel.id, rag_lifecycle_id=novel.rag_lifecycle_id)
+    actor_id = current_user.id
+    target = novel_crud.get_max_chapter_number(db, novel.id) + 1
     try:
-        # 验证小说所有权
-        novel = novel_crud.get_novel_by_id(db, request.novel_id)
-        if not novel or novel.user_id != current_user.id:
-            raise HTTPException(status_code=404, detail="小说不存在或无权访问")
-
-        # 确定参考章节
-        base_chapter = None
-        if request.base_chapter_id is not None:
-            base_chapter = novel_crud.get_chapter_by_id(db, request.base_chapter_id)
-            if not base_chapter or base_chapter.novel_id != request.novel_id:
-                raise HTTPException(status_code=404, detail="参考章节不存在")
-        else:
-            # 只读取最后一章，避免为选取参考内容加载整部小说正文。
-            base_chapter = novel_crud.get_latest_chapter(db, request.novel_id)
-
-        # 该编号仅用于提示模型；真正的章节号在写入时由服务端重新分配。
-        next_chapter_number = novel_crud.get_max_chapter_number(db, request.novel_id) + 1
-        if base_chapter:
-            base_content = base_chapter.content or ""
-        else:
-            base_content = ""
-
-        # 构造提示词
-        prompt = ChatPromptTemplate.from_messages([
-            (
-                "system",
-                """你是一名专业的长篇小说写作助手，负责为作者自动生成新章节。
-
-你的任务：
-1. 根据小说设定和参考内容，设计下一章的章节标题和完整正文初稿。
-2. 章节标题要简洁、有记忆点，并且符合该章的核心冲突或事件。
-3. 正文需要在指定字数范围内（可略有浮动），保持与前文一致的人设和世界观。
-4. 输出必须使用JSON格式：{{"title": "章节标题", "content": "章节正文"}}，不要添加其他内容。
-""",
-            ),
-            (
-                "user",
-                """小说标题：{title}
-小说类型：{genre}
-世界观（节选）：{worldview}
-故事简介：{description}
-
-参考章节号：{base_chapter_number}
-参考章节标题：{base_chapter_title}
-参考章节内容（节选）：{base_excerpt}
-
-本章剧情重点：{theme}
-目标章节号：{target_chapter_number}
-目标字数：约{target_length}字
-""",
-            ),
-        ])
-
-        base_excerpt = compact_text(base_content, 800, keep="tail")
-        worldview_excerpt = compact_text(
-            novel.worldview,
-            MAX_WORLDVIEW_CONTEXT_CHARS,
-            keep="head",
-        ) or "未设定"
-        description_excerpt = compact_text(
-            novel.description,
-            MAX_STORY_CONTEXT_CHARS,
-            keep="head",
-        ) or "暂无简介"
-        theme_excerpt = compact_text(
-            request.theme,
-            MAX_PLOT_HINT_CHARS,
-            keep="head",
-        ) or "无特别说明"
-
-        chain = prompt | init_llm
-        response = await chain.ainvoke(
-            {
-                "title": novel.title,
-                "genre": novel.genre or "未指定",
-                "worldview": worldview_excerpt,
-                "description": description_excerpt,
-                "base_chapter_number": base_chapter.chapter_number if base_chapter else "无",
-                "base_chapter_title": base_chapter.title if base_chapter else "无",
-                "base_excerpt": base_excerpt or "暂无内容",
-                "theme": theme_excerpt,
-                "target_chapter_number": next_chapter_number,
-                "target_length": request.target_length,
-            }
-        )
-
-        raw = response.content.strip()
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            json_str = raw[start:end] if start != -1 and end != 0 else raw
-            data = json.loads(json_str)
-            title = str(data.get("title") or "").strip() or None
-            content = str(data.get("content") or "")
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"解析自动章节JSON失败，将原始内容作为正文返回: {e}")
-            title = None
-            content = raw
-
-        # 模型若只回显预测编号，让数据库写入后的真实编号决定默认标题。
-        if title == f"第{next_chapter_number}章":
-            title = None
-        chapter_create = ChapterNextCreate(
-            title=title,
-            content=content,
-        )
-
-        # 在模型调用结束后重新计算并分配章节号，数据库唯一约束负责并发兜底。
-        try:
-            db_chapter = novel_crud.create_next_chapter(
-                db,
-                request.novel_id,
-                chapter_create,
-            )
-        except novel_crud.ChapterNumberConflictError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-        # 向量索引是可重建投影，不阻塞章节创建响应。
-        projection_token = rag_service.prepare_chapter_projection(
-            request.novel_id,
-            db_chapter.id,
-            db=db,
-        )
-        background_tasks.add_task(
-            _index_auto_chapter_projection,
-            novel_id=request.novel_id,
-            chapter=db_chapter.chapter_number,
-            content=db_chapter.content,
-            metadata={
-                "source": "chapter",
-                "chapter_id": db_chapter.id,
-                "version": db_chapter.version,
-                **projection_token,
-            },
-        )
-
-        return ChapterResponse.model_validate(db_chapter)
-
+        result, pack, execution = await _run_structured_task(db, novel, mode='new_chapter',
+            instruction=request.theme or '根据当前小说设定创作下一章。',
+            options=TaskOptions(target_length=request.target_length), current_content=base_content, target_chapter=target)
+        proposal = create_proposal(db, novel=novel_snapshot, actor_id=actor_id, chapter=chapter_snapshot,
+            base_content=base_content, operation='create', content=result.text, title=result.result['title'],
+            context_manifest=pack.manifest, execution=execution)
+        db.commit()
+        db.refresh(proposal)
+        return proposal
     except HTTPException:
         raise
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"AI自动生成章节失败: {e}")
-        raise HTTPException(status_code=500, detail=f"自动生成章节失败: {str(e)}")
+    except Exception as exc:
+        db.rollback()
+        logger.error('新章候选生成失败：{}', type(exc).__name__)
+        raise HTTPException(500, '新章候选生成失败，请检查任务要求后重试') from exc
 
 
 @router.post("/rewrite", response_model=RewriteResponse)
+@durable_route('rewrite')
 async def rewrite_text(
     request: RewriteRequest,
     current_user: User = Depends(get_current_user),
@@ -597,10 +564,34 @@ async def rewrite_text(
         if not request.original_text.strip():
             raise HTTPException(status_code=400, detail="原文不能为空")
 
+        source_snapshot = None
+        chapter_snapshot = None
+        selection_start = None
+        novel_snapshot = SimpleNamespace(id=novel.id, rag_lifecycle_id=novel.rag_lifecycle_id)
+        actor_id = current_user.id
         if request.chapter_id is not None:
             chapter = novel_crud.get_chapter_by_id(db, request.chapter_id)
             if not chapter or chapter.novel_id != request.novel_id:
                 raise HTTPException(status_code=404, detail="章节不存在")
+            start = getattr(request, 'selection_start', None)
+            end = getattr(request, 'selection_end', None)
+            if (start is None) != (end is None):
+                raise HTTPException(422, '选区起止位置必须同时提供')
+            if start is not None:
+                if not 0 <= start < end <= len(chapter.content) or chapter.content[start:end] != request.original_text:
+                    raise HTTPException(409, '选区原文与已保存版本不一致，请先保存后重试')
+                selection_start = start
+            else:
+                selection_start = chapter.content.find(request.original_text)
+                if selection_start < 0 or chapter.content.find(request.original_text, selection_start + 1) >= 0:
+                    raise HTTPException(409, '请先保存正文，并选择可唯一定位的原文后重新改写')
+            _validate_source_identity(request, novel, chapter)
+            source_snapshot = chapter.content
+            chapter_snapshot = SimpleNamespace(id=chapter.id, version=chapter.version, rag_lifecycle_id=chapter.rag_lifecycle_id)
+
+
+        if request.chapter_id is None:
+            _validate_source_identity(request, novel)
 
         # 改写类型说明
         type_map = {
@@ -642,13 +633,22 @@ async def rewrite_text(
         )
 
         chain = prompt | init_llm
-        result = await chain.ainvoke({"user_request": user_prompt})
-        rewritten = result.content.strip()
+        async with execution_scope(max_model_calls=1) as meter:
+            result = await invoke_model(chain, {"user_request": user_prompt})
+            rewritten = parse_model_result(result, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text
 
         if not rewritten:
             raise HTTPException(status_code=500, detail="改写失败，模型返回为空")
 
-        return RewriteResponse(rewritten_text=rewritten)
+        proposal_id = None
+        if chapter_snapshot is not None:
+            proposal = create_proposal(db, novel=novel_snapshot, actor_id=actor_id,
+                chapter=chapter_snapshot, base_content=source_snapshot, operation='replace_selection',
+                content=rewritten, execution=meter.snapshot(), selection_start=selection_start,
+                selection_end=selection_start + len(request.original_text))
+            db.commit()
+            proposal_id = proposal.id
+        return RewriteResponse(rewritten_text=rewritten, proposal_id=proposal_id, execution=meter.snapshot())
 
     except HTTPException:
         raise
@@ -658,6 +658,7 @@ async def rewrite_text(
 
 
 @router.post("/continue")
+@durable_route('continue')
 async def continue_chapter(
     request: ContinueRequest,
     current_user: User = Depends(get_current_user),
@@ -694,6 +695,7 @@ async def continue_chapter(
         chapter = novel_crud.get_chapter_by_id(db, request.chapter_id)
         if not chapter or chapter.novel_id != request.novel_id:
             raise HTTPException(status_code=404, detail="章节不存在或不属于该小说")
+        _validate_source_identity(request, novel, chapter)
 
         # 文风特征与上下文
         style_features: list[str] = []
@@ -823,15 +825,25 @@ async def continue_chapter(
             keep="both",
         )
 
+        novel_snapshot = SimpleNamespace(id=novel.id, rag_lifecycle_id=novel.rag_lifecycle_id)
+        chapter_snapshot = SimpleNamespace(id=chapter.id, version=chapter.version, rag_lifecycle_id=chapter.rag_lifecycle_id)
+        actor_id = current_user.id
         # 调用生成服务
         gen_request = GenerationRequest(
             novel_id=request.novel_id,
             prompt=prompt,
             chapter=chapter.chapter_number,
-            current_day=1,
+            current_day=request.current_day,
             target_length=request.target_length,
         )
-        response = await agent_service.generate_content(gen_request)
+        response = await agent_service.generate_content(
+            gen_request, actor_id=novel.user_id, novel_lifecycle_id=novel.rag_lifecycle_id,
+        )
+
+        proposal = create_proposal(db, novel=novel_snapshot, actor_id=actor_id,
+            chapter=chapter_snapshot, base_content=request.current_content, operation='append',
+            content=response.final_content, context_manifest=response.context_manifest, execution=response.execution)
+        db.commit()
 
         # 工作流追踪（用于前端可视化多Agent执行过程）
         workflow_trace = (
@@ -846,11 +858,14 @@ async def continue_chapter(
 
         return {
             "content": response.final_content,
+            "proposal_id": proposal.id,
             "length": len(response.final_content),
             "style_features": style_features,
             "style_sample_id": style_sample_id,
             "rag_style_context": rag_style_context,
             "rag_story_context": response.worldview_context + response.character_context + response.story_bible_context,
+            "context_manifest": response.context_manifest,
+            "execution": response.execution,
             "agent_outputs": [output.model_dump() for output in response.agent_outputs],
             "consistency_checks": [
                 check.model_dump() for check in response.consistency_checks
@@ -872,8 +887,7 @@ async def continue_chapter(
         raise HTTPException(status_code=500, detail=f"续写失败: {str(e)}")
 
 
-@router.post("/continue-stream")
-async def continue_chapter_stream(
+async def _continue_chapter_stream_impl(
     request: ContinueRequest,
     http_request: Request,
     current_user: User = Depends(get_current_user),
@@ -900,6 +914,7 @@ async def continue_chapter_stream(
         chapter = novel_crud.get_chapter_by_id(db, request.chapter_id)
         if not chapter or chapter.novel_id != request.novel_id:
             raise HTTPException(status_code=404, detail="章节不存在或不属于该小说")
+        _validate_source_identity(request, novel, chapter)
 
         # 文风特征与上下文
         style_features: list[str] = []
@@ -1010,14 +1025,22 @@ async def continue_chapter_stream(
             novel_id=request.novel_id,
             prompt=prompt,
             chapter=chapter.chapter_number,
-            current_day=1,
+            current_day=request.current_day,
             target_length=request.target_length,
         )
+
+        novel_snapshot = SimpleNamespace(id=novel.id, rag_lifecycle_id=novel.rag_lifecycle_id)
+        chapter_snapshot = SimpleNamespace(id=chapter.id, version=chapter.version, rag_lifecycle_id=chapter.rag_lifecycle_id)
+        generation_actor_id = novel.user_id
+        generation_lifecycle_id = novel.rag_lifecycle_id
 
         async def event_generator():
             """SSE事件生成器"""
             try:
-                async for event in agent_service.generate_content_stream(gen_request):
+                async for event in agent_service.generate_content_stream(
+                    gen_request, actor_id=generation_actor_id,
+                    novel_lifecycle_id=generation_lifecycle_id,
+                ):
                     if await http_request.is_disconnected():
                         logger.info(
                             "客户端已断开续写流：novel_id={}, chapter_id={}",
@@ -1027,6 +1050,10 @@ async def continue_chapter_stream(
                         break
                     if event["type"] == "final_response":
                         response = event["data"]
+                        proposal = create_proposal(db, novel=novel_snapshot, actor_id=generation_actor_id,
+                            chapter=chapter_snapshot, base_content=request.current_content, operation='append',
+                            content=response.final_content, context_manifest=response.context_manifest, execution=response.execution)
+                        db.commit()
                         
                         # 发送元数据
                         workflow_trace = (
@@ -1036,10 +1063,13 @@ async def continue_chapter_stream(
                         )
                         
                         metadata = {
+                            "proposal_id": proposal.id,
                             "style_features": style_features,
                             "style_sample_id": style_sample_id,
                             "rag_style_context": rag_style_context,
                             "rag_story_context": response.worldview_context + response.character_context + response.story_bible_context,
+                            "context_manifest": response.context_manifest,
+                            "execution": response.execution,
                             "agent_outputs": [output.model_dump() for output in response.agent_outputs],
                             "consistency_checks": [
                                 check.model_dump() for check in response.consistency_checks
@@ -1057,13 +1087,13 @@ async def continue_chapter_stream(
                         
                         # 发送正文块
                         full_content = response.final_content
-                        chunk_size = 5  # 每次发送5个字符，模拟打字
+                        chunk_size = max(1, len(full_content))  # 完整候选一次交付，不伪装提供方token流
                         for i in range(0, len(full_content), chunk_size):
                             if await http_request.is_disconnected():
                                 return
                             chunk = full_content[i:i+chunk_size]
                             yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
-                            await asyncio.sleep(0.01)
+
                         
                         yield f"data: {json.dumps({'type': 'done'})}\n\n"
                     else:
@@ -1099,144 +1129,39 @@ async def continue_chapter_stream(
 
 
 @router.post("/outline")
-async def generate_outline(
-    request: OutlineRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    生成小说大纲
-
-    Args:
-        request: 大纲生成请求（包含主题和章节数）
-        current_user: 当前用户
-        db: 数据库会话
-
-    Returns:
-        生成的大纲（章节列表）
-    """
+@durable_route('outline')
+async def generate_outline(request: OutlineRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """严格大纲结构独立生成，不经过环境/人物/正文三阶段。"""
+    novel = novel_crud.get_novel_by_id(db, request.novel_id)
+    if not novel or novel.user_id != current_user.id:
+        raise HTTPException(404, '小说不存在或无权访问')
     try:
-        # 验证小说所有权
-        novel = novel_crud.get_novel_by_id(db, request.novel_id)
-        if not novel or novel.user_id != current_user.id:
-            raise HTTPException(status_code=404, detail="小说不存在或无权访问")
-
-        # 构造大纲生成提示词
-        worldview_context = compact_text(
-            novel.worldview,
-            MAX_WORLDVIEW_CONTEXT_CHARS,
-            keep="head",
-        ) or "未设定"
-        prompt = f"""请为以下小说生成{request.target_chapters}章的详细大纲：
-
-小说标题：{novel.title}
-小说类型：{novel.genre or '未指定'}
-故事主题：{request.theme}
-世界观：{worldview_context}
-
-请按照以下格式生成大纲：
-第X章 章节标题
-- 主要情节点1
-- 主要情节点2
-- 主要情节点3
-"""
-        prompt = compact_text(prompt, MAX_GENERATION_PROMPT_CHARS, keep="both")
-
-        # 调用生成服务
-        gen_request = GenerationRequest(
-            novel_id=request.novel_id,
-            prompt=prompt,
-            chapter=1,
-            current_day=1,
-            target_length=request.target_chapters * 100
-        )
-        response = await agent_service.generate_content(gen_request)
-
-        logger.info(f"大纲生成成功：小说{request.novel_id}，{request.target_chapters}章")
-
-        return {
-            "outline": response.final_content,
-            "chapters": request.target_chapters
-        }
-
+        result, pack, execution = await _run_structured_task(db, novel, mode='outline',
+            instruction=request.theme, options=TaskOptions(target_chapters=request.target_chapters))
+        return {'outline': result.text, 'chapters': request.target_chapters, 'result': result.result,
+                'context_manifest': pack.manifest, 'execution': execution}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"大纲生成失败: {e}")
-        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(500, '未能生成符合要求的完整大纲，请重试') from exc
 
 
 @router.post("/character")
-async def generate_character(
-    request: CharacterRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    生成角色设定
-
-    Args:
-        request: 角色生成请求
-        current_user: 当前用户
-        db: 数据库会话
-
-    Returns:
-        生成的角色设定
-    """
+@durable_route('character')
+async def generate_character(request: CharacterRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """角色设计独立返回严格字段，不被正文续写指令改写为段落。"""
+    novel = novel_crud.get_novel_by_id(db, request.novel_id)
+    if not novel or novel.user_id != current_user.id:
+        raise HTTPException(404, '小说不存在或无权访问')
     try:
-        # 验证小说所有权
-        novel = novel_crud.get_novel_by_id(db, request.novel_id)
-        if not novel or novel.user_id != current_user.id:
-            raise HTTPException(status_code=404, detail="小说不存在或无权访问")
-
-        # 构造角色生成提示词
-        worldview_context = compact_text(
-            novel.worldview,
-            MAX_WORLDVIEW_CONTEXT_CHARS,
-            keep="head",
-        ) or "未设定"
-        prompt = f"""请为以下小说生成一个{request.character_type}角色的详细设定：
-
-小说标题：{novel.title}
-小说类型：{novel.genre or '未指定'}
-世界观：{worldview_context}
-
-角色类型：{request.character_type}
-角色描述：{request.character_description}
-
-请生成以下内容：
-1. 姓名
-2. 年龄/外貌
-3. 性格特点
-4. 背景故事
-5. 能力/特长
-6. 动机/目标
-7. 人物关系
-"""
-        prompt = compact_text(prompt, MAX_GENERATION_PROMPT_CHARS, keep="both")
-
-        # 调用生成服务
-        gen_request = GenerationRequest(
-            novel_id=request.novel_id,
-            prompt=prompt,
-            chapter=1,
-            current_day=1,
-            target_length=500
-        )
-        response = await agent_service.generate_content(gen_request)
-
-        logger.info(f"角色生成成功：小说{request.novel_id}，{request.character_type}")
-
-        return {
-            "character": response.final_content,
-            "type": request.character_type
-        }
-
+        result, pack, execution = await _run_structured_task(db, novel, mode='character',
+            instruction=request.character_description, options=TaskOptions(character_type=request.character_type))
+        return {'character': result.text, 'type': request.character_type, 'result': result.result,
+                'context_manifest': pack.manifest, 'execution': execution}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"角色生成失败: {e}")
-        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(500, '未能生成符合要求的完整角色设定，请重试') from exc
 
 
 @router.get("/test")
@@ -1259,12 +1184,14 @@ async def test_generation(
             novel_id=1,
             prompt="主角在魔法塔顶与导师决裂",
             chapter=1,
-            current_day=1,
             target_length=500
         )
-        response = await agent_service.generate_content(request)
+        response = await agent_service.generate_content(
+            request, actor_id=novel.user_id, novel_lifecycle_id=novel.rag_lifecycle_id,
+        )
         return {
             "message": "测试成功",
+            "context_manifest": response.context_manifest,
             "final_content": response.final_content,
             "length": len(response.final_content)
         }
@@ -1276,3 +1203,196 @@ async def test_generation(
             status_code=500,
             detail=f"测试失败: {str(e)}"
         )
+
+
+@router.post('/continue-stream')
+async def continue_chapter_stream(request: ContinueRequest, http_request: Request,
+                                  current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    bind, actor_id, novel_id = db.get_bind(), current_user.id, request.novel_id
+    job_id = await asyncio.to_thread(submit_legacy_job, bind, novel_id=novel_id,
+        actor_id=actor_id, kind='continue_stream', payload=request.model_dump(mode='json'))
+    dispatch_job(bind, job_id)
+
+    async def events():
+        from sqlalchemy.orm import sessionmaker
+        sessions = sessionmaker(bind=bind)
+        position = 0
+        yield 'data: ' + json.dumps({'type': 'job', 'data': {'job_id': job_id}}) + '\n\n'
+        while True:
+            if await http_request.is_disconnected():
+                return
+            def read_events():
+                with sessions() as read_db:
+                    current = owned_job(read_db, job_id, novel_id, actor_id)
+                    return (current.result or {}).get('events', []), current.status, current.error
+            available, state, error = await asyncio.to_thread(read_events)
+            for event in available[position:]:
+                yield 'data: ' + json.dumps(event, ensure_ascii=False, default=str) + '\n\n'
+            position = len(available)
+            if state in {'failed', 'cancelled'}:
+                yield 'data: ' + json.dumps({'type': 'error', 'message': error or '生成已中断'}, ensure_ascii=False) + '\n\n'
+                return
+            if state == 'completed':
+                return
+            await asyncio.sleep(0.1)
+    return StreamingResponse(events(), media_type='text/event-stream')
+
+
+class GenerationJobCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: UUID
+    novel_id: int = Field(gt=0)
+    expected_novel_lifecycle_id: str = Field(min_length=32, max_length=32)
+    kind: Literal['chat', 'generate', 'continue', 'rewrite', 'auto_chapter', 'outline', 'character', 'init', 'plot_options']
+    payload: dict
+
+
+class GenerationJobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    request_id: str
+    novel_id: int
+    novel_lifecycle_id: str
+    chapter_id: int | None = None
+    chapter_lifecycle_id: str | None = None
+    message: str | None = None
+    mode: str | None = None
+    chapter_title: str | None = None
+    kind: str
+    status: str
+    result: dict | None = None
+    execution: dict | None = None
+    error: str | None = None
+    error_code: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+def _job_response(job):
+    response = GenerationJobResponse.model_validate(job)
+    response.chapter_id = (job.source_scope or {}).get('chapter_id')
+    response.chapter_lifecycle_id = (job.source_scope or {}).get('chapter_lifecycle_id')
+    response.chapter_title = (job.source_scope or {}).get('chapter_title')
+    if job.kind == 'chat':
+        response.message = job.payload.get('message')
+        response.mode = job.payload.get('mode')
+    return response
+
+
+def _job_payload(kind, payload, novel_id, request_id):
+    from app.api.routes.writing_chat import TurnCreate
+    schemas = {'init': InitNovelRequest, 'plot_options': PlotOptionsRequest, 'chat': TurnCreate, 'generate': GenerationRequest, 'continue': ContinueRequest,
+               'rewrite': RewriteRequest, 'auto_chapter': AutoChapterRequest,
+               'outline': OutlineRequest, 'character': CharacterRequest}
+    try:
+        parsed = schemas[kind].model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(422, '创作任务参数不符合当前工具要求') from exc
+    if kind == 'chat':
+        if str(parsed.request_id) != str(request_id):
+            raise HTTPException(422, '对话与执行任务必须使用同一个请求标识')
+    elif parsed.novel_id != novel_id:
+        raise HTTPException(422, '任务与请求中的作品标识不一致')
+    return parsed.model_dump(mode='json')
+
+
+@router.post('/jobs', status_code=202, response_model=GenerationJobResponse)
+def create_generation_job(data: GenerationJobCreate, db: Session = Depends(get_db),
+                                user: User = Depends(get_current_user)):
+    payload = _job_payload(data.kind, data.payload, data.novel_id, data.request_id)
+    reconcile_jobs(db)
+    job = submit_job(db, novel_id=data.novel_id, actor_id=user.id,
+        lifecycle=data.expected_novel_lifecycle_id, request_id=str(data.request_id), kind=data.kind, payload=payload)
+    response = _job_response(job)
+    dispatch_job(db.get_bind(), job.id)
+    return response
+
+
+@router.get('/jobs', response_model=list[GenerationJobResponse])
+def list_generation_jobs(novel_id: int = Query(gt=0), kind: str | None = None,
+                         chapter_id: int | None = Query(None, gt=0),
+                         limit: int = Query(30, ge=1, le=100), db: Session = Depends(get_db),
+                         user: User = Depends(get_current_user)):
+    novel = novel_crud.get_novel_by_id(db, novel_id)
+    if novel is None or novel.user_id != user.id:
+        raise HTTPException(404, '小说不存在或无权访问')
+    lifecycle = novel.rag_lifecycle_id
+    reconcile_jobs(db)
+    query = db.query(WritingGenerationJob).filter_by(novel_id=novel_id, actor_id=user.id, novel_lifecycle_id=lifecycle)
+    if kind is not None:
+        query = query.filter_by(kind=kind)
+    if chapter_id is not None:
+        query = query.filter(WritingGenerationJob.source_scope['chapter_id'].as_integer() == chapter_id)
+    return [_job_response(job) for job in query.order_by(WritingGenerationJob.created_at.desc(), WritingGenerationJob.id.desc()).limit(limit)]
+
+
+@router.get('/jobs/{job_id}', response_model=GenerationJobResponse)
+def get_generation_job(job_id: UUID, novel_id: int = Query(gt=0), db: Session = Depends(get_db),
+                       user: User = Depends(get_current_user)):
+    job = owned_job(db, job_id, novel_id, user.id)
+    reconcile_jobs(db)
+    db.refresh(job)
+    return _job_response(job)
+
+
+@router.post('/jobs/{job_id}/stop', response_model=GenerationJobResponse)
+def stop_generation_job(job_id: UUID, novel_id: int = Query(gt=0), db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    return _job_response(stop_job(db, owned_job(db, job_id, novel_id, user.id)))
+
+
+class GenerationJobRetry(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: UUID
+
+
+@router.post('/jobs/{job_id}/retry', status_code=202, response_model=GenerationJobResponse)
+def retry_generation_job(job_id: UUID, data: GenerationJobRetry, novel_id: int = Query(gt=0),
+                               db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    original = owned_job(db, job_id, novel_id, user.id)
+    reconcile_jobs(db)
+    db.refresh(original)
+    if original.status not in {'failed', 'cancelled'}:
+        raise HTTPException(409, '只有失败或停止的执行可以重试')
+    payload = dict(original.payload)
+    if original.kind == 'chat':
+        payload['request_id'] = str(data.request_id)
+    job = submit_job(db, novel_id=novel_id, actor_id=user.id, lifecycle=original.novel_lifecycle_id,
+        request_id=str(data.request_id), kind=original.kind, payload=payload, source_scope=original.source_scope)
+    response = _job_response(job)
+    dispatch_job(db.get_bind(), job.id)
+    return response
+
+
+class _DetachedRequest:
+    async def is_disconnected(self):
+        return False
+
+
+async def _stream_job_handler(payload, novel_id, actor, db):
+    return await _continue_chapter_stream_impl(request=ContinueRequest.model_validate(payload),
+        http_request=_DetachedRequest(), current_user=actor, db=db)
+
+
+register_handler('continue_stream', _stream_job_handler)
+
+
+def _register_generation_handlers():
+    for kind, schema, handler in [
+        ('init', InitNovelRequest, init_novel), ('plot_options', PlotOptionsRequest, generate_plot_options),
+        ('generate', GenerationRequest, generate_content), ('continue', ContinueRequest, continue_chapter),
+        ('rewrite', RewriteRequest, rewrite_text), ('auto_chapter', AutoChapterRequest, auto_create_chapter),
+        ('outline', OutlineRequest, generate_outline), ('character', CharacterRequest, generate_character),
+    ]:
+        async def execute(payload, novel_id, actor, db, schema=schema, handler=handler, kind=kind):
+            kwargs = {'request': schema.model_validate(payload), 'current_user': actor, 'db': db}
+            if kind == 'auto_chapter':
+                kwargs['background_tasks'] = BackgroundTasks()
+            result = await handler(**kwargs)
+            if kind == 'auto_chapter':
+                return ProposalResponse.model_validate(result).model_dump(mode='json')
+            return result
+        register_handler(kind, execute)
+
+
+_register_generation_handlers()

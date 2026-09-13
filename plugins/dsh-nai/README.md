@@ -75,4 +75,4 @@ npm test
 
 - 插件只做 HTTP 桥接；Nai 后端需要单独启动，并确保 `init_db.py` 已执行到最新迁移。
 - `nai_generation_generate` 可能耗时较长，生成结果不会自动写入章节，符合 Nai“AI 只提供候选内容”的原则；作者确认后再用 `nai_chapter_update` 或 `nai_chapter_create_next` 落库。
-- `nai_chapter_update` 遵守后端乐观锁：必须先读取章节拿到 `version`，冲突时后端返回 409，需重新读取并向作者说明。
+- `nai_chapter_update` 遵守后端乐观锁与生命周期栅栏：必须先读取作品/章节拿到 `version` 和两个 `rag_lifecycle_id`，冲突时后端返回 409，需重新读取并向作者说明。

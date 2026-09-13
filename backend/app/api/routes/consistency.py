@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from loguru import logger
 from app.services.consistency_service import consistency_service
+from app.services.consistency_reference import load_consistency_reference
 from app.services.context_budget import MAX_CURRENT_CONTENT_CHARS
 from app.api.dependencies import get_current_user
 from app.crud import novel as novel_crud
@@ -23,7 +24,7 @@ class ConsistencyCheckRequest(BaseModel):
     novel_id: int = Field(..., gt=0)
     chapter: int = Field(..., gt=0)
     content: str = Field(..., min_length=1, max_length=MAX_CURRENT_CONTENT_CHARS)
-    current_day: int = Field(1, gt=0)
+    current_day: int | None = Field(None, gt=0, description="故事当前天数；未知时跳过按日时间线检查")
 
 
 @router.get("/test")
@@ -47,6 +48,9 @@ async def check_consistency_stream(
     if not chapter:
         raise HTTPException(status_code=404, detail="章节不存在或不属于该小说")
 
+    reference = load_consistency_reference(db, novel_id=request.novel_id, actor_id=current_user.id,
+        novel_lifecycle_id=novel.rag_lifecycle_id, chapter=request.chapter, current_day=request.current_day)
+    db.commit()
     logger.info(f"收到一致性检查请求: novel_id={request.novel_id}, chapter={request.chapter}")
     async def event_generator():
         disconnected = False
@@ -56,6 +60,7 @@ async def check_consistency_stream(
                 content=request.content,
                 chapter=request.chapter,
                 current_day=request.current_day,
+                reference=reference,
             ):
                 if await http_request.is_disconnected():
                     disconnected = True

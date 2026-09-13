@@ -89,7 +89,7 @@ export default function ChapterConflictDialog({
   const localContent = conflict?.snapshot.content || '';
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+    <Dialog open={open} onClose={() => { if (actionLoading === null) onClose(); }} maxWidth="lg" fullWidth>
       <DialogTitle>章节保存冲突</DialogTitle>
       <DialogContent>
         <Alert severity="warning" sx={{ mb: 2 }}>
@@ -122,7 +122,7 @@ export default function ChapterConflictDialog({
         </Grid>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>关闭</Button>
+        <Button disabled={actionLoading !== null} onClick={onClose}>关闭</Button>
         <Button
           color="inherit"
           disabled={actionLoading !== null || !serverChapter}
@@ -132,7 +132,7 @@ export default function ChapterConflictDialog({
         </Button>
         <Button
           variant="outlined"
-          disabled={actionLoading !== null}
+          disabled={actionLoading !== null || !serverChapter}
           onClick={onCopyToNewChapter}
         >
           {actionLoading === 'copy' ? '创建中...' : '另存为新章节'}

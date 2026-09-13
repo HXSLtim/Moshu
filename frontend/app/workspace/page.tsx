@@ -11,12 +11,11 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
-  AppBar,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
   Box,
   Button,
-  Card,
-  CardContent,
-  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -27,15 +26,15 @@ import {
   IconButton,
   List,
   ListItem,
-  ListItemSecondaryAction,
+  ListItemButton,
   ListItemText,
   Menu,
   MenuItem,
   TextField,
-  Toolbar,
   Typography,
-  useMediaQuery,
-  useTheme,
+  Tabs,
+  Tab,
+  Tooltip,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -59,17 +58,32 @@ import {
   type ChapterSaveConflict,
 } from '@/hooks/useChapterSave';
 import { useEditHistory } from '@/hooks/useEditHistory';
+import { useTextSelection } from '@/hooks/useTextSelection';
 import { useWorkspaceKeyboardShortcuts } from '@/hooks/useWorkspaceKeyboardShortcuts';
 import { countTextUnits } from '@/lib/textStats';
 import { runAfterSave } from '@/lib/workspaceNavigation';
 import type {
-  AgentWorkflowTrace,
   Chapter,
   ChapterSummary,
   Novel,
+  User,
 } from '@/types';
-import type { AiWritingAssistantRef } from '@/components/workspace/AiWritingAssistant';
+import type { WritingChatRef } from '@/components/workspace/WritingChat';
 import AiWritingAssistant from '@/components/workspace/AiWritingAssistant';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import WritingChat from '@/components/workspace/WritingChat';
+import ChapterMemory from '@/components/workspace/ChapterMemory';
+import DraftRecovery from '@/components/workspace/DraftRecovery';
+import StoryMemoryManager from '@/components/workspace/StoryMemoryManager';
+import { useAuthenticatedUser } from '@/hooks/useAuthenticatedUser';
+import StoryBibleManager from '@/components/novel/StoryBibleManager';
+import WorldviewEditor from '@/components/novel/WorldviewEditor';
+import ProjectInfoPanel from '@/components/workspace/ProjectInfoPanel';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import CloseIcon from '@mui/icons-material/Close';
 import AutoSaver from '@/components/workspace/AutoSaver';
 import CharacterStats from '@/components/workspace/CharacterStats';
 import ConsistencyChecker from '@/components/workspace/ConsistencyChecker';
@@ -77,10 +91,9 @@ import PlotOptionsGenerator from '@/components/workspace/PlotOptionsGenerator';
 import ResearchAssistant from '@/components/workspace/ResearchAssistant';
 import StyleManager from '@/components/workspace/StyleManager';
 import TextRewriter from '@/components/workspace/TextRewriter';
-import WorkflowPanel from '@/components/workspace/WorkflowPanel';
 
-const DRAWER_WIDTH = 280;
-const AI_PANEL_WIDTH = 400;
+const DRAWER_WIDTH = 228;
+const AI_PANEL_WIDTH = 390;
 const CHAPTER_PAGE_SIZE = 50;
 
 function toChapterSummary(chapter: Chapter): ChapterSummary {
@@ -131,10 +144,10 @@ function ChapterNavigator({
   onLoadMore,
 }: ChapterNavigatorProps) {
   return (
-    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
+    <Box sx={{ p: 1, height: '100%', overflow: 'auto' }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <Typography variant="h6" gutterBottom fontWeight="600">
-          章节管理
+        <Typography variant="subtitle2" gutterBottom fontWeight="600">
+          章节目录
         </Typography>
         <Typography variant="caption" color="text.secondary">
           {chapters.length}/{total}
@@ -158,58 +171,14 @@ function ChapterNavigator({
       ) : (
         <List dense disablePadding>
           {chapters.map((chapter) => (
-            <ListItem
-              key={chapter.id}
-              onClick={() => onSelect(chapter.id)}
-              sx={{
-                border: '1px solid',
-                borderColor: currentChapterId === chapter.id ? 'primary.main' : 'divider',
-                borderRadius: 1,
-                mb: 1,
-                cursor: 'pointer',
-                contentVisibility: 'auto',
-                containIntrinsicSize: '0 88px',
-                '&:hover': {
-                  borderColor: 'primary.main',
-                  bgcolor: 'action.hover',
-                },
-              }}
-            >
-              <ListItemText
-                disableTypography
-                primary={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="body2" fontWeight="medium">
-                      第{chapter.chapter_number}章
-                    </Typography>
-                    {currentChapterId === chapter.id && (
-                      <Chip label="当前" size="small" color="primary" />
-                    )}
-                  </Box>
-                }
-                secondary={
-                  <Box sx={{ mt: 0.5, pr: 3 }}>
-                    <Typography variant="body2" noWrap sx={{ fontWeight: 500 }}>
-                      {chapter.title}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      {(chapter.word_count || 0).toLocaleString()} 字
-                    </Typography>
-                  </Box>
-                }
-              />
-              <ListItemSecondaryAction>
-                <IconButton
-                  size="small"
-                  aria-label={`管理第${chapter.chapter_number}章`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onMenuOpen(event, chapter);
-                  }}
-                >
-                  <MoreVertIcon />
-                </IconButton>
-              </ListItemSecondaryAction>
+            <ListItem key={chapter.id} disablePadding secondaryAction={
+              <IconButton size="small" aria-label={`管理第${chapter.chapter_number}章`} onClick={(event) => { event.stopPropagation(); onMenuOpen(event, chapter); }}><MoreVertIcon fontSize="small" /></IconButton>
+            }>
+              <ListItemButton selected={currentChapterId === chapter.id} onClick={() => onSelect(chapter.id)} sx={{ py: 0.5, pl: 1, pr: 4, borderRadius: 0, borderLeft: '2px solid', borderColor: currentChapterId === chapter.id ? 'primary.main' : 'transparent' }}>
+                <DescriptionOutlinedIcon sx={{ fontSize: 16, mr: 1, color: 'text.secondary' }} />
+                <ListItemText primary={`${String(chapter.chapter_number).padStart(2, '0')}  ${chapter.title}`} secondary={`${(chapter.word_count || 0).toLocaleString()} 字`}
+                  primaryTypographyProps={{ noWrap: true, fontSize: 13 }} secondaryTypographyProps={{ fontSize: 11 }} />
+              </ListItemButton>
             </ListItem>
           ))}
         </List>
@@ -224,13 +193,11 @@ function ChapterNavigator({
   );
 }
 
-function WorkspacePageContent() {
+function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const novelId = Number(searchParams.get('novel')) || 0;
   const requestedChapterId = Number(searchParams.get('chapter')) || 0;
-  const theme = useTheme();
-  const desktopAiPanel = useMediaQuery(theme.breakpoints.up('lg'));
 
   const [novel, setNovel] = useState<Novel | null>(null);
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
@@ -249,7 +216,18 @@ function WorkspacePageContent() {
   const [conflictLoadingServer, setConflictLoadingServer] = useState(false);
   const [conflictActionLoading, setConflictActionLoading] = useState<ConflictAction | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [editorTab, setEditorTab] = useState<'chapter' | 'settings'>('chapter');
+  const [rightTab, setRightTab] = useState<'chat' | 'tools'>('chat');
+  const [openChapters, setOpenChapters] = useState<ChapterSummary[]>([]);
+  useEffect(() => { setOpenChapters([]); setEditorTab('chapter'); }, [novelId]);
+  useEffect(() => {
+    if (!currentChapter) return;
+    setOpenChapters((previous) => previous.some((item) => item.id === currentChapter.id)
+      ? previous.map((item) => item.id === currentChapter.id ? toChapterSummary(currentChapter) : item)
+      : [...previous, toChapterSummary(currentChapter)].slice(-10));
+  }, [currentChapter]);
+  useEffect(() => { setEditorTab('chapter'); }, [currentChapter?.id]);
 
   const [createChapterDialogOpen, setCreateChapterDialogOpen] = useState(false);
   const [newChapterTitle, setNewChapterTitle] = useState('');
@@ -262,19 +240,17 @@ function WorkspacePageContent() {
   const [deletingChapter, setDeletingChapter] = useState(false);
   const [updatingChapter, setUpdatingChapter] = useState(false);
 
-  const [selectionStart, setSelectionStart] = useState<number | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<number | null>(null);
-  const [selectedText, setSelectedText] = useState('');
-  const contentInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const { selectionStart, selectionEnd, selectedText, contentInputRef, handleTextSelection, clearSelection } = useTextSelection();
+  useEffect(clearSelection, [novelId, requestedChapterId, clearSelection]);
   const [selectedStyleSampleId, setSelectedStyleSampleId] = useState<number | null>(null);
   const [plotDirectionHint, setPlotDirectionHint] = useState<string | null>(null);
-  const [workflowTrace, setWorkflowTrace] = useState<AgentWorkflowTrace | null>(null);
-  const aiWritingAssistantRef = useRef<AiWritingAssistantRef | null>(null);
+  const aiWritingAssistantRef = useRef<WritingChatRef | null>(null);
 
   const novelRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const workspaceRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const loadMoreRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
   const conflictFetchControllerRef = useRef<AbortController | null>(null);
+  const conflictMutationControllerRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   const skipNextWorkspaceLoadRef = useRef(false);
 
@@ -344,11 +320,12 @@ function WorkspacePageContent() {
         signal: controller.signal,
       })
       .then((serverChapter) => {
+        if (controller.signal.aborted) return;
         setConflictServerChapter(serverChapter);
         setConflictLoadingServer(false);
       })
       .catch((loadError) => {
-        if (loadError instanceof Error && loadError.name === 'AbortError') return;
+        if (controller.signal.aborted || (loadError instanceof Error && loadError.name === 'AbortError')) return;
         setConflictLoadingServer(false);
         setError(loadError instanceof Error ? loadError.message : '加载服务端章节失败');
       });
@@ -362,11 +339,15 @@ function WorkspacePageContent() {
     conflict,
     isOffline,
     hasLocalBackup,
+    recoveryDrafts,
+    identityReady,
     saveNow,
     overwriteConflict,
     adoptServerChapter,
   } = useChapterSave({
     novelId,
+    userId: authenticatedUser && authenticatedUser.id === novel?.user_id && novel?.id === novelId ? authenticatedUser.id : null,
+    novelLifecycleId: novel?.id === novelId ? novel.rag_lifecycle_id : undefined,
     chapter: currentChapter,
     title,
     content,
@@ -381,6 +362,14 @@ function WorkspacePageContent() {
   dirtyRef.current = isDirty;
   saveNowRef.current = saveNow;
   currentChapterRef.current = currentChapter;
+  const workspaceIdentity = `${authenticatedUser?.id}:${novelId}:${novel?.rag_lifecycle_id}:${currentChapter?.id}:${currentChapter?.rag_lifecycle_id}`;
+  const workspaceIdentityRef = useRef(workspaceIdentity);
+  workspaceIdentityRef.current = workspaceIdentity;
+  useEffect(() => {
+    conflictFetchControllerRef.current?.abort(); conflictMutationControllerRef.current?.abort();
+    setConflictDialogOpen(false); setConflictServerChapter(null); setConflictActionLoading(null);
+    return () => { conflictFetchControllerRef.current?.abort(); conflictMutationControllerRef.current?.abort(); };
+  }, [workspaceIdentity]);
 
   const runAfterCurrentSave = useCallback(<T,>(action: () => Promise<T> | T) => {
     return runAfterSave({
@@ -499,6 +488,18 @@ function WorkspacePageContent() {
         setTitle(chapterDetail.title);
         setContent(chapterDetail.content);
         clearHistory(chapterDetail.content);
+      } else if (summaryPage.total === 0) {
+        // 空项目应当能直接开写：没有章节时自动建第 1 章，而不是把作者挡在禁用按钮前。
+        const first = await api.createNextChapter(novelId, { content: '' });
+        if (workspaceRequestRef.current?.id !== requestId) return;
+        setChapters([toChapterSummary(first)]);
+        setChapterTotal(1);
+        setCurrentChapter(first);
+        setTitle(first.title);
+        setContent(first.content);
+        clearHistory(first.content);
+        skipNextWorkspaceLoadRef.current = true;
+        router.replace(`/workspace?novel=${novelId}&chapter=${first.id}`);
       } else {
         setCurrentChapter(null);
         setTitle('');
@@ -573,6 +574,7 @@ function WorkspacePageContent() {
   }, [conflict, saveNow]);
 
   const applyServerChapterLocally = useCallback((serverChapter: Chapter) => {
+    if (!identityReady || serverChapter.novel_id !== novelId || serverChapter.id !== currentChapterRef.current?.id || serverChapter.rag_lifecycle_id !== currentChapterRef.current?.rag_lifecycle_id) return;
     const previousWordCount = currentChapterWordCountRef.current;
     currentChapterWordCountRef.current = serverChapter.word_count;
     setNovelTotalWords((total) =>
@@ -586,16 +588,36 @@ function WorkspacePageContent() {
       mergeChapterSummaries(previous, [toChapterSummary(serverChapter)]),
     );
     setError('');
-  }, [clearHistory]);
+  }, [clearHistory, identityReady, novelId]);
+
+  const handleProposalAccepted = useCallback((savedChapter: Chapter) => {
+    if (!identityReady || savedChapter.novel_id !== novelId) return;
+    setChapters((previous) => mergeChapterSummaries(previous, [toChapterSummary(savedChapter)]));
+    if (savedChapter.id === currentChapterRef.current?.id) {
+      if (dirtyRef.current) {
+        setError('候选已保存到服务器。采纳期间你又修改了本机正文，新稿已保留；请保存并核对版本冲突。');
+        return;
+      }
+      adoptServerChapter(savedChapter);
+      applyServerChapterLocally(savedChapter);
+    } else {
+      setChapterTotal((total) => total + 1);
+      if (dirtyRef.current) {
+        setError('候选已另存为新章节，本机新稿仍保留。保存后可从目录打开新章。');
+        return;
+      }
+      router.push(`/workspace?novel=${novelId}&chapter=${savedChapter.id}`);
+    }
+  }, [adoptServerChapter, applyServerChapterLocally, identityReady, novelId, router]);
 
   const handleAcceptServerConflict = useCallback(() => {
-    if (!conflictServerChapter) return;
+    if (!identityReady || !conflictServerChapter) return;
     setConflictActionLoading('accept');
     adoptServerChapter(conflictServerChapter);
     applyServerChapterLocally(conflictServerChapter);
     setConflictDialogOpen(false);
     setConflictActionLoading(null);
-  }, [adoptServerChapter, applyServerChapterLocally, conflictServerChapter]);
+  }, [adoptServerChapter, applyServerChapterLocally, conflictServerChapter, identityReady]);
 
   const handleOverwriteServerConflict = useCallback(async () => {
     if (!conflict || !conflictServerChapter) return;
@@ -611,14 +633,17 @@ function WorkspacePageContent() {
   }, [conflict, conflictServerChapter, overwriteConflict]);
 
   const handleCopyToNewChapter = useCallback(async () => {
-    if (!conflict || !conflictServerChapter) return;
+    if (!identityReady || !conflict || !conflictServerChapter || conflictServerChapter.rag_lifecycle_id !== currentChapterRef.current?.rag_lifecycle_id) return;
+    const identity = workspaceIdentityRef.current;
+    const controller = new AbortController(); conflictMutationControllerRef.current = controller;
     setConflictActionLoading('copy');
     try {
       const sourceTitle = conflict.snapshot.title.trim() || '未命名章节';
       const newChapter = await api.createNextChapter(novelId, {
         title: `${sourceTitle}（冲突副本）`,
         content: conflict.snapshot.content,
-      });
+      }, { signal: controller.signal });
+      if (controller.signal.aborted || workspaceIdentityRef.current !== identity) return;
       adoptServerChapter(conflictServerChapter);
       applyServerChapterLocally(conflictServerChapter);
       // 本地版本已复制到新章，当前章随即采纳服务端版本，离场不再触发旧冲突保存。
@@ -630,11 +655,12 @@ function WorkspacePageContent() {
       setConflictDialogOpen(false);
       router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
     } catch (copyError) {
-      setError(copyError instanceof Error ? copyError.message : '另存新章节失败');
+      if (!controller.signal.aborted && workspaceIdentityRef.current === identity) setError(copyError instanceof Error ? copyError.message : '另存新章节失败');
     } finally {
-      setConflictActionLoading(null);
+      if (workspaceIdentityRef.current === identity) setConflictActionLoading(null);
     }
   }, [
+    identityReady,
     adoptServerChapter,
     applyServerChapterLocally,
     conflict,
@@ -644,6 +670,7 @@ function WorkspacePageContent() {
   ]);
 
   const handleChapterSelected = useCallback(async (nextChapterId: number) => {
+    setEditorTab('chapter');
     if (nextChapterId === currentChapter?.id) {
       setMobileOpen(false);
       return;
@@ -662,24 +689,6 @@ function WorkspacePageContent() {
     setContent(newContent);
     addToHistory(newContent, { immediate: true });
   }, [addToHistory]);
-
-  const handleApplyGeneratedToNextChapter = useCallback(async (generatedText: string) => {
-    await runAfterCurrentSave(async () => {
-      const newChapter = await api.createNextChapter(novelId, { content: generatedText });
-      setChapters((previous) => mergeChapterSummaries(previous, [toChapterSummary(newChapter)]));
-      setChapterTotal((total) => total + 1);
-      router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
-    });
-  }, [novelId, router, runAfterCurrentSave]);
-
-  const handleTextRewritten = useCallback((newText: string, start: number, end: number) => {
-    const newContent = content.slice(0, start) + newText + content.slice(end);
-    setContent(newContent);
-    addToHistory(newContent, { immediate: true });
-    setSelectedText('');
-    setSelectionStart(null);
-    setSelectionEnd(null);
-  }, [addToHistory, content]);
 
   const formatPlotDirection = useCallback((option: {
     title: string;
@@ -714,6 +723,7 @@ function WorkspacePageContent() {
   }) => {
     const instruction = formatPlotDirection(option);
     setPlotDirectionHint(instruction);
+    setRightTab('chat');
     aiWritingAssistantRef.current?.triggerContinue(instruction);
   }, [formatPlotDirection]);
 
@@ -817,6 +827,7 @@ function WorkspacePageContent() {
       await api.deleteChapter(novelId, deletingId);
       const remaining = chapters.filter((chapter) => chapter.id !== deletingId);
       setChapters(remaining);
+      setOpenChapters((previous) => previous.filter((chapter) => chapter.id !== deletingId));
       setChapterTotal((total) => Math.max(0, total - 1));
       setDeleteChapterDialogOpen(false);
       setSelectedChapterForMenu(null);
@@ -872,6 +883,7 @@ function WorkspacePageContent() {
   useWorkspaceKeyboardShortcuts({
     enabled:
       !loading &&
+      editorTab === 'chapter' &&
       Boolean(currentChapter) &&
       !createChapterDialogOpen &&
       !editChapterDialogOpen &&
@@ -902,281 +914,113 @@ function WorkspacePageContent() {
     />
   );
 
-  const aiPanelContent = (
-    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
-      <WorkflowPanel workflowTrace={workflowTrace} />
-      <AiWritingAssistant
-        ref={aiWritingAssistantRef}
-        novelId={novelId}
-        chapterId={currentChapter?.id ?? null}
-        currentContent={content}
-        onContentGenerated={handleContentGenerated}
-        onError={setError}
-        onWorkflowTraceChange={setWorkflowTrace}
-        plotDirectionHint={plotDirectionHint}
-        onApplyToNextChapter={handleApplyGeneratedToNextChapter}
-      />
-      <TextRewriter
-        novelId={novelId}
-        chapterId={currentChapter?.id ?? null}
-        selectedText={selectedText}
-        selectionStart={selectionStart}
-        selectionEnd={selectionEnd}
-        onTextRewritten={handleTextRewritten}
-        onError={setError}
-      />
-      <PlotOptionsGenerator
-        novelId={novelId}
-        chapterId={currentChapter?.id ?? null}
-        currentContent={content}
-        onPlotSelected={handlePlotSelected}
-        onPlotSelectedAndContinue={handlePlotSelectedAndContinue}
-        onError={setError}
-      />
-      <StyleManager
-        novelId={novelId}
-        selectedStyleSampleId={selectedStyleSampleId}
-        onStyleSampleSelected={setSelectedStyleSampleId}
-        onError={setError}
-      />
-      <ResearchAssistant novelId={novelId} onError={setError} />
-      <CharacterStats novel={novel} currentContent={content} />
-      <ConsistencyChecker
-        novel={novel}
-        currentChapter={currentChapter}
-        content={content}
-        onError={setError}
-      />
-      {novel && (
-        <Card>
-          <CardContent>
-            <Typography variant="subtitle2" gutterBottom>
-              小说信息
-            </Typography>
-            <Divider sx={{ my: 1 }} />
-            <Typography variant="body2" sx={{ mb: 1 }}>
-              类型：{novel.genre || '未设置'}
-            </Typography>
-            <Typography variant="body2" sx={{ mb: 1, fontSize: '0.85rem' }}>
-              简介：{novel.description || '暂无'}
-            </Typography>
-            {novel.worldview && (
-              <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
-                世界观：{novel.worldview.slice(0, 100)}...
-              </Typography>
-            )}
-          </CardContent>
-        </Card>
-      )}
-    </Box>
-  );
+  const authorVerified = Boolean(authenticatedUser && novel && authenticatedUser.id === novel.user_id && novel.id === novelId);
+  const settingsContent = authorVerified && novel && <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 900, mx: 'auto' }}>
+    <Typography variant="h5" gutterBottom>项目与设定</Typography>
+    <ProjectInfoPanel key={`${novelId}-${novel.updated_at ?? ''}`} novel={novel} onNovelChange={setNovel} />
+    <Divider sx={{ my: 3 }} />
+    <WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} />
+    {novel.rag_lifecycle_id && <StoryMemoryManager novelId={novelId} novelLifecycleId={novel.rag_lifecycle_id} chapterId={currentChapter?.id ?? null} chapterNumber={currentChapter?.chapter_number ?? null} />}
+  </Box>;
+
+  const toolsContent = authorVerified && <Box key={`${authenticatedUser?.id}-${novelId}-${novel?.rag_lifecycle_id}`} sx={{ p: 1.5, height: '100%', overflow: 'auto' }}>
+    <ChapterMemory novelId={novelId} chapterId={currentChapter?.id ?? null} currentVersion={currentChapter?.version ?? 1}
+      novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
+      currentContent={content} canRestore={identityReady && !isDirty && !isSaving} onVersionRestored={handleProposalAccepted} />
+    <Accordion disableGutters sx={{ mb: 2, boxShadow: 'none' }}>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">高级续写 · 文风与节奏</Typography></AccordionSummary>
+      <AccordionDetails sx={{ p: 0 }}><AiWritingAssistant novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
+        onError={setError} plotDirectionHint={plotDirectionHint}
+        chapterVersion={currentChapter?.version} novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
+        canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} /></AccordionDetails>
+    </Accordion>
+    <TextRewriter novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
+      selectedText={selectedText} selectionStart={selectionStart} selectionEnd={selectionEnd}
+      onError={setError} chapterVersion={currentChapter?.version} novelLifecycleId={novel?.rag_lifecycle_id}
+      chapterLifecycleId={currentChapter?.rag_lifecycle_id} canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} />
+    <PlotOptionsGenerator novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
+      onPlotSelected={handlePlotSelected} onPlotSelectedAndContinue={handlePlotSelectedAndContinue} onError={setError} />
+    {plotDirectionHint && <Alert severity="info" sx={{ mb: 2 }}>已选择：{plotDirectionHint}</Alert>}
+    <StyleManager novelId={novelId} selectedStyleSampleId={selectedStyleSampleId} onStyleSampleSelected={setSelectedStyleSampleId} onError={setError} />
+    <ResearchAssistant novelId={novelId} onError={setError} />
+    <CharacterStats novel={novel} currentContent={content} />
+    <ConsistencyChecker novel={novel} currentChapter={currentChapter} content={content} onError={setError} />
+  </Box>;
 
   return (
     <Fragment>
-      <Drawer
-        variant="temporary"
-        anchor="left"
-        open={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-        sx={{
-          display: { xs: 'block', md: 'none' },
-          '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
-        }}
-      >
-        {chapterNavigator}
-      </Drawer>
-
-      <Box sx={{ display: 'flex', height: '100dvh', width: '100%' }}>
-        <Drawer
-          variant="permanent"
-          sx={{
-            display: { xs: 'none', md: 'block' },
-            width: DRAWER_WIDTH,
-            flexShrink: 0,
-            '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
-              boxSizing: 'border-box',
-              position: 'relative',
-            },
-          }}
-        >
-          {chapterNavigator}
-        </Drawer>
-
-        <Box
-          component="main"
-          sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-        >
-          <AppBar position="static" sx={{ bgcolor: 'primary.main', boxShadow: 1 }}>
-            <Toolbar sx={{ gap: 1 }}>
-              <IconButton
-                color="inherit"
-                edge="start"
-                aria-label="打开章节列表"
-                onClick={() => setMobileOpen(true)}
-                sx={{ display: { md: 'none' } }}
-              >
-                <MenuIcon />
-              </IconButton>
-              <IconButton color="inherit" aria-label="返回" onClick={() => void handleBack()}>
-                <ArrowBackIcon />
-              </IconButton>
-
-              <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="h6" noWrap sx={{ color: 'primary.contrastText', fontWeight: 600, fontSize: '1.1rem' }}>
-                  {novel?.title || '写作工作台'}
-                </Typography>
-                {currentChapter && (
-                  <Chip
-                    label={`第${currentChapter.chapter_number}章`}
-                    size="small"
-                    sx={{ display: { xs: 'none', sm: 'inline-flex' }, bgcolor: 'rgba(255,255,255,0.2)', color: 'primary.contrastText' }}
-                  />
-                )}
+      <Drawer variant="temporary" open={mobileOpen} onClose={() => setMobileOpen(false)}
+        sx={{ '& .MuiDrawer-paper': { width: DRAWER_WIDTH } }}>{chapterNavigator}</Drawer>
+      <Box sx={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: 'background.default',
+        '& .MuiButton-root': { borderRadius: 1 }, '& .MuiCard-root': { boxShadow: 'none' } }}>
+        <Box component="header" sx={{ height: 42, flexShrink: 0, display: 'flex', alignItems: 'center', px: 1, gap: 1, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}>
+          <IconButton size="small" aria-label="返回小说" onClick={() => void handleBack()}><ArrowBackIcon fontSize="small" /></IconButton>
+          <Typography variant="subtitle2" sx={{ color: 'primary.main', mr: 1 }}>NAI</Typography>
+          <Typography variant="body2" noWrap sx={{ flex: 1 }}>{novel?.title || '创作工作区'}</Typography>
+          <Button size="small" startIcon={<SaveIcon />} aria-label={isSaving ? '保存中' : '保存章节'} disabled={isSaving || !isDirty} onClick={() => void handleSave()}>保存</Button>
+          <ColorModeToggle />
+        </Box>
+        <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <Box component="nav" aria-label="工作区活动栏" sx={{ width: 46, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', gap: 1, py: 1, bgcolor: 'background.paper', borderRight: 1, borderColor: 'divider' }}>
+            <Tooltip title="章节资源管理器" placement="right"><IconButton aria-label="切换章节目录" color={sidebarOpen ? 'primary' : 'default'} onClick={() => setSidebarOpen((value) => !value)}><FolderOpenIcon /></IconButton></Tooltip>
+            <Tooltip title="设定与伏笔" placement="right"><IconButton aria-label="打开设定标签" color={editorTab === 'settings' ? 'primary' : 'default'} onClick={() => setEditorTab('settings')}><MenuBookIcon /></IconButton></Tooltip>
+            <Tooltip title="创作对话" placement="right"><IconButton aria-label="查看创作对话" color={rightTab === 'chat' ? 'primary' : 'default'} onClick={() => setRightTab('chat')}><SmartToyIcon /></IconButton></Tooltip>
+            <Tooltip title="创作工具" placement="right"><IconButton aria-label="查看创作工具" color={rightTab === 'tools' ? 'primary' : 'default'} onClick={() => setRightTab('tools')}><BuildOutlinedIcon /></IconButton></Tooltip>
+          </Box>
+          {sidebarOpen && <Box component="aside" aria-label="章节资源管理器" sx={{ width: DRAWER_WIDTH, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', minHeight: 0, borderRight: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+            <Button size="small" startIcon={<MenuBookIcon />} sx={{ justifyContent: 'flex-start', px: 2, py: 1 }} onClick={() => setEditorTab('settings')}>设定与伏笔</Button>
+            <Box sx={{ flex: 1, minHeight: 0 }}>{chapterNavigator}</Box>
+          </Box>}
+          <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, minHeight: 0 }}>
+            <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', minHeight: 39, flexShrink: 0, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper', overflow: 'auto' }}>
+                <IconButton size="small" aria-label="打开章节列表" sx={{ display: { md: 'none' } }} onClick={() => setMobileOpen(true)}><MenuIcon fontSize="small" /></IconButton>
+                <Box role="tablist" aria-label="编辑文档" sx={{ display: 'flex', minWidth: 0 }}>
+                  {openChapters.map((chapter) => <Box key={chapter.id} sx={{ display: 'flex', alignItems: 'center', borderRight: 1, borderTop: 2, borderColor: editorTab === 'chapter' && currentChapter?.id === chapter.id ? 'primary.main' : 'divider', bgcolor: editorTab === 'chapter' && currentChapter?.id === chapter.id ? 'background.default' : 'transparent' }}>
+                    <Button role="tab" aria-selected={editorTab === 'chapter' && currentChapter?.id === chapter.id} size="small" startIcon={<DescriptionOutlinedIcon fontSize="small" />} sx={{ maxWidth: 180, whiteSpace: 'nowrap', color: 'text.primary' }} onClick={() => void handleChapterSelected(chapter.id)}><Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{chapter.title}{currentChapter?.id === chapter.id && isDirty ? ' •' : ''}</Box></Button>
+                    {chapter.id !== currentChapter?.id && <IconButton size="small" aria-label={`关闭标签${chapter.title}`} onClick={() => setOpenChapters((previous) => previous.filter((item) => item.id !== chapter.id))}><CloseIcon sx={{ fontSize: 14 }} /></IconButton>}
+                  </Box>)}
+                  <Button role="tab" aria-selected={editorTab === 'settings'} size="small" startIcon={<MenuBookIcon />} sx={{ minWidth: 115, borderTop: 2, borderRadius: 0, borderColor: editorTab === 'settings' ? 'primary.main' : 'transparent' }} onClick={() => setEditorTab('settings')}>设定与伏笔</Button>
+                </Box>
               </Box>
-
-              <AutoSaver status={saveStatus} lastSavedAt={lastSavedAt} />
-              <Button
-                color="inherit"
-                startIcon={<SaveIcon />}
-                aria-label={isSaving ? '保存中' : '保存章节'}
-                onClick={() => void handleSave()}
-                disabled={isSaving || !isDirty}
-                sx={{ minWidth: { xs: 40, sm: 80 }, px: { xs: 1, sm: 2 } }}
-              >
-                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                  {isSaving ? '保存中...' : '保存'}
-                </Box>
-              </Button>
-              <ColorModeToggle inheritColor />
-              <IconButton
-                color="inherit"
-                aria-label="打开 AI 助手"
-                onClick={() => setAiPanelOpen(true)}
-                sx={{ display: { lg: 'none' } }}
-              >
-                <SmartToyIcon />
-              </IconButton>
-            </Toolbar>
-          </AppBar>
-
-          <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
-            <Box sx={{ width: '100%', maxWidth: 900, minHeight: '100%', mx: 'auto', p: { xs: 2, sm: 4, md: 5 } }}>
-              {error && (
-                <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>
-                  {error}
-                </Alert>
-              )}
-
-              {isOffline && isDirty && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  当前处于离线状态，{hasLocalBackup ? '草稿已保留在本机' : '正在保存本地草稿'}
-                  ，恢复连接后会自动重试保存。
-                </Alert>
-              )}
-
-              {loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
-                  <CircularProgress />
-                </Box>
-              ) : currentChapter ? (
-                <>
-                  <TextField
-                    fullWidth
-                    label="章节标题"
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    sx={{ mb: 4, '& .MuiInputBase-root': { fontSize: '1.5rem', fontWeight: 500 } }}
-                  />
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={18}
-                    label="章节内容"
-                    value={content}
-                    onChange={(event) => {
-                      const nextContent = event.target.value;
-                      setContent(nextContent);
-                      addToHistory(nextContent);
-                    }}
-                    onSelect={(event) => {
-                      const target = event.target as HTMLTextAreaElement;
-                      if (target.selectionStart !== target.selectionEnd) {
-                        setSelectionStart(target.selectionStart);
-                        setSelectionEnd(target.selectionEnd);
-                        setSelectedText(target.value.slice(target.selectionStart, target.selectionEnd));
-                      } else {
-                        setSelectionStart(null);
-                        setSelectionEnd(null);
-                        setSelectedText('');
-                      }
-                    }}
-                    inputRef={contentInputRef}
-                    placeholder="开始写作..."
-                    sx={{
-                      '& .MuiInputBase-input': {
-                        fontSize: '1rem',
-                        lineHeight: 1.75,
-                        letterSpacing: '0.02em',
-                      },
-                    }}
-                  />
-
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3, p: 2, bgcolor: 'background.subtle', borderRadius: 2, border: '1px solid', borderColor: 'border.light' }}>
-                    <Box>
-                      <IconButton size="small" aria-label="撤销" disabled={!canUndo} onClick={handleUndo}>
-                        <UndoIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton size="small" aria-label="重做" disabled={!canRedo} onClick={handleRedo}>
-                        <RedoIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <Chip
-                        label={`本章 ${countTextUnits(content).toLocaleString()} 字`}
-                        size="small"
-                        variant="outlined"
-                      />
-                      <Chip
-                        label={`全书 ${novelTotalWords.toLocaleString()} 字`}
-                        size="small"
-                        variant="outlined"
-                      />
-                    </Box>
-                  </Box>
-                </>
-              ) : (
-                <Box sx={{ textAlign: 'center', mt: 8 }}>
-                  <Typography variant="h6" color="text.secondary" sx={{ mb: 1 }}>
-                    请从章节列表选择一个章节开始编辑
-                  </Typography>
-                  <Button startIcon={<AddIcon />} onClick={handleCreateChapterOpen}>
-                    新建下一章
-                  </Button>
-                </Box>
-              )}
+              <Box sx={{ display: editorTab === 'settings' ? 'block' : 'none', flex: 1, minHeight: 0, overflow: 'auto' }}>{settingsContent}</Box>
+              <Box sx={{ display: editorTab === 'chapter' ? 'block' : 'none', flex: 1, minHeight: 0, overflow: 'auto', px: { xs: 2, md: 4 }, py: 2 }}>
+                {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
+                <DraftRecovery drafts={recoveryDrafts} />
+                {!identityReady && currentChapter && <Alert severity="info">正在核验作者与章节身份；若长时间未完成，请重新登录并打开作品。</Alert>}
+                {isOffline && isDirty && <Alert severity="warning" sx={{ mb: 2 }}>当前离线，{hasLocalBackup ? '草稿已保留在本机' : '正在保存本地草稿'}，恢复连接后会重试保存。</Alert>}
+                {loading ? <CircularProgress size={24} /> : currentChapter ? <Box data-workspace-editor sx={{ maxWidth: 860, mx: 'auto' }}>
+                  <Typography variant="caption" color="text.secondary">正文 / 第 {currentChapter.chapter_number} 章</Typography>
+                  <TextField disabled={!identityReady} fullWidth variant="standard" label="章节标题" value={title} onChange={(event) => setTitle(event.target.value)} sx={{ mb: 2, mt: 1, '& .MuiInputBase-root': { fontSize: '1.4rem' } }} />
+                  <TextField disabled={!identityReady} fullWidth multiline variant="standard" minRows={10} label="章节内容" value={content}
+                    onChange={(event) => { const nextContent = event.target.value; setContent(nextContent); clearSelection(); addToHistory(nextContent); }}
+                    onSelect={handleTextSelection} inputRef={contentInputRef} placeholder="开始写作…"
+                    slotProps={{ input: { disableUnderline: true } }}
+                    sx={{ '& .MuiInputBase-input': { fontSize: '1rem', lineHeight: 1.95, letterSpacing: '0.02em' } }} />
+                </Box> : <Box sx={{ p: 3 }}><Typography>从左侧选择章节，开始创作。</Typography><Button startIcon={<AddIcon />} onClick={handleCreateChapterOpen}>新建下一章</Button></Box>}
+              </Box>
+            </Box>
+            <Box component="aside" aria-label="AI 创作工作区" sx={{ width: { xs: '100%', md: AI_PANEL_WIDTH, xl: 440 }, height: { xs: '48%', md: '100%' }, minHeight: { xs: 270, md: 0 }, flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: { md: 1 }, borderTop: { xs: 1, md: 0 }, borderColor: 'divider', bgcolor: 'background.paper' }}>
+              <Tabs value={rightTab} onChange={(_event, value: 'chat' | 'tools') => setRightTab(value)} aria-label="AI 面板" sx={{ minHeight: 38, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minHeight: 38, py: 0.5, fontSize: 13 } }}>
+                <Tab label="对话" value="chat" /><Tab label="工具" value="tools" />
+              </Tabs>
+              <Box sx={{ flex: 1, minHeight: 0, display: rightTab === 'chat' ? 'block' : 'none' }}>
+                {authorVerified && novel && <WritingChat key={`${authenticatedUser?.id}-${novelId}-${novel.rag_lifecycle_id}`} ref={aiWritingAssistantRef} novelId={novelId} chapterId={currentChapter?.id ?? null} chapterTitle={title} currentContent={content} onContentGenerated={handleContentGenerated}
+                  chapterVersion={currentChapter?.version} novelLifecycleId={novel.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
+                  canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted}
+                  onSettingsApplied={() => { void api.getNovel(novelId).then(setNovel).catch(() => undefined); }} />}
+              </Box>
+              <Box sx={{ flex: 1, minHeight: 0, display: rightTab === 'tools' ? 'block' : 'none' }}>{toolsContent}</Box>
             </Box>
           </Box>
         </Box>
-
-        <Drawer
-          variant={desktopAiPanel ? 'permanent' : 'temporary'}
-          anchor="right"
-          open={desktopAiPanel || aiPanelOpen}
-          onClose={() => setAiPanelOpen(false)}
-          sx={{
-            width: desktopAiPanel ? AI_PANEL_WIDTH : 0,
-            flexShrink: 0,
-            '& .MuiDrawer-paper': {
-              width: { xs: 'min(92vw, 400px)', sm: AI_PANEL_WIDTH },
-              boxSizing: 'border-box',
-              position: desktopAiPanel ? 'relative' : 'fixed',
-              height: '100%',
-            },
-          }}
-        >
-          {aiPanelContent}
-        </Drawer>
+        <Box component="footer" sx={{ minHeight: 28, flexShrink: 0, display: 'flex', alignItems: 'center', px: 1, gap: 1, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+          <AutoSaver status={saveStatus} lastSavedAt={lastSavedAt} />
+          <Box sx={{ flex: 1 }} />
+          <IconButton size="small" aria-label="撤销" disabled={!canUndo || editorTab !== 'chapter'} onClick={handleUndo}><UndoIcon sx={{ fontSize: 16 }} /></IconButton>
+          <IconButton size="small" aria-label="重做" disabled={!canRedo || editorTab !== 'chapter'} onClick={handleRedo}><RedoIcon sx={{ fontSize: 16 }} /></IconButton>
+          <Typography variant="caption">本章 {countTextUnits(content).toLocaleString()} 字 · 全书 {novelTotalWords.toLocaleString()} 字</Typography>
+        </Box>
       </Box>
 
       <Menu
@@ -1274,6 +1118,16 @@ function WorkspacePageContent() {
       </Dialog>
     </Fragment>
   );
+}
+
+function WorkspacePageContent() {
+  const authenticatedUser = useAuthenticatedUser();
+  if (!authenticatedUser) return <Box sx={{ p: 3 }}>
+    <Typography role="status">正在核验登录身份。若会话已失效，请重新登录。</Typography>
+    <Button href="/login">前往登录</Button>
+  </Box>;
+  // 作者改变时卸载正文、撤销历史及所有在途操作，重新读取该作者可访问的作品。
+  return <WorkspaceSession key={authenticatedUser.id} authenticatedUser={authenticatedUser} />;
 }
 
 export default function WorkspacePage() {

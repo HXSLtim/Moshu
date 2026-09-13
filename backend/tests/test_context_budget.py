@@ -75,7 +75,7 @@ async def test_character_generation_compacts_persisted_and_nested_context():
             "app.services.agent_service.ChatPromptTemplate.from_template",
             return_value=prompt_template,
         ),
-        patch("app.services.agent_service.ChatOpenAI", return_value=object()),
+        patch("app.services.agent_service.create_chat_model", return_value=object()),
     ):
         await service.generate_character(context)
 
@@ -118,7 +118,7 @@ async def test_character_analysis_compacts_records_before_model_call():
             "app.services.agent_service.ChatPromptTemplate.from_template",
             return_value=prompt_template,
         ),
-        patch("app.services.agent_service.ChatOpenAI", return_value=object()),
+        patch("app.services.agent_service.create_chat_model", return_value=object()),
     ):
         await service.analyze_character(context)
 

@@ -66,7 +66,7 @@ describe('ChapterConflictDialog', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('服务端版本尚未加载时禁止覆盖与放弃，但允许另存', () => {
+  it('服务端版本尚未加载时禁止处理，避免另存按钮成为无响应入口', () => {
     render(
       <ChapterConflictDialog
         open
@@ -92,6 +92,13 @@ describe('ChapterConflictDialog', () => {
     expect(
       (screen.getByRole('button', { name: '另存为新章节' }) as HTMLButtonElement)
         .disabled,
-    ).toBe(false);
+    ).toBe(true);
+  });
+  it('冲突另存在途保持对话框打开，避免后台新稿被完成回包覆盖', () => {
+    const close = vi.fn();
+    render(<ChapterConflictDialog open conflict={conflict} serverChapter={serverChapter} loadingServer={false} actionLoading="copy" onAcceptServer={vi.fn()} onOverwriteServer={vi.fn()} onCopyToNewChapter={vi.fn()} onClose={close} />);
+    screen.getByRole('button', { name: '关闭' }).click();
+    expect(close).not.toHaveBeenCalled();
+    expect((screen.getByRole('button', { name: '关闭' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

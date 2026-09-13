@@ -93,7 +93,10 @@ async def update_fact(
     if not fact:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事实不存在")
     _require_owned_novel(db, current_user, fact.novel_id)
-    updated = story_bible_crud.update_fact(db, fact_id, request)
+    try:
+        updated = story_bible_crud.update_fact(db, fact_id, request)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     return updated
 
 
@@ -108,7 +111,10 @@ async def delete_fact(
     if not fact:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事实不存在")
     _require_owned_novel(db, current_user, fact.novel_id)
-    story_bible_crud.delete_fact(db, fact_id)
+    try:
+        story_bible_crud.delete_fact(db, fact_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 # ========== 剧情事件 ==========
@@ -166,7 +172,10 @@ async def update_event(
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="事件不存在")
     _require_owned_novel(db, current_user, event.novel_id)
-    return story_bible_crud.update_event(db, event_id, request)
+    try:
+        return story_bible_crud.update_event(db, event_id, request)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.delete("/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)

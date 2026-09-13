@@ -83,7 +83,6 @@ export default function ConsistencyChecker({
           novel_id: novel.id,
           chapter: currentChapter.chapter_number,
           content: text,
-          current_day: 1,
         },
         {
           onEvent: (event: SSEEvent) => {
@@ -301,7 +300,7 @@ export default function ConsistencyChecker({
           </Box>
         ) : (
           <Typography variant="body2" color="text.secondary">
-            基于知识图谱对章节内容进行深度一致性分析，检查角色关系、时间线和世界观的逻辑一致性。
+            核对当前正文与已确认的设定、状态和事件。检查结果会说明冲突依据及未执行项目。
           </Typography>
         )}
 

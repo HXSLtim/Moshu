@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.models.workflow_schemas import AgentWorkflowTrace
 
@@ -153,6 +153,7 @@ class NovelUpdate(StrictWriteModel):
 
 class NovelResponse(BaseModel):
     """小说响应"""
+    rag_lifecycle_id: str
     id: int
     title: str
     genre: Optional[str]
@@ -204,10 +205,20 @@ class ChapterNextCreate(StrictWriteModel):
         description="章节内容",
     )
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def blank_title_uses_default(cls, value):
+        """允许空标题：服务端会按章节号生成默认标题。"""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
 
 class ChapterUpdate(StrictWriteModel):
     """更新章节请求"""
     expected_version: int = Field(..., ge=1, description="客户端读取到的章节版本")
+    expected_novel_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
+    expected_chapter_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
     chapter_number: Optional[int] = Field(None, gt=0, description="新的章节号")
     title: Optional[str] = Field(None, min_length=1, max_length=200, description="章节标题")
     content: Optional[str] = Field(
@@ -226,6 +237,7 @@ class ChapterUpdate(StrictWriteModel):
 
 class ChapterResponse(BaseModel):
     """章节响应"""
+    rag_lifecycle_id: str
     id: int
     novel_id: int
     chapter_number: int
@@ -242,6 +254,7 @@ class ChapterResponse(BaseModel):
 
 class ChapterSummary(BaseModel):
     """章节列表摘要，不携带正文。"""
+    rag_lifecycle_id: str
 
     id: int
     novel_id: int
@@ -426,7 +439,7 @@ class GenerationRequest(StrictWriteModel):
     novel_id: int = Field(..., gt=0, description="小说ID")
     prompt: str = Field(..., min_length=1, max_length=4000, description="剧情提示词")
     chapter: int = Field(..., gt=0, description="当前章节号")
-    current_day: int = Field(1, gt=0, description="故事当前天数")
+    current_day: Optional[int] = Field(None, gt=0, description="故事当前天数；未指定时仅按章节限定上下文，并跳过按日时间线检查")
     target_length: int = Field(500, ge=100, le=8000, description="目标字数")
 
 
@@ -464,6 +477,7 @@ class FinalConsistencyStatus(BaseModel):
 
 class GenerationResponse(BaseModel):
     """内容生成响应"""
+    execution: Dict[str, Any] = Field(default_factory=dict)
     novel_id: int
     chapter: int
     final_content: str
@@ -475,6 +489,7 @@ class GenerationResponse(BaseModel):
     worldview_context: List[str] = Field(default_factory=list)
     character_context: List[str] = Field(default_factory=list)
     story_bible_context: List[str] = Field(default_factory=list)
+    context_manifest: Dict[str, Any] = Field(default_factory=dict, description="本次实际注入的分层记忆来源与省略原因")
     rag_results: List[Dict[str, Any]] = Field(default_factory=list)
     workflow_trace: Optional[AgentWorkflowTrace] = Field(
         default=None,
@@ -489,6 +504,58 @@ class InitNovelResponse(BaseModel):
     main_characters: List[str]
     outline: str
     plot_hooks: List[str]
+
+
+class IdeaCharacter(BaseModel):
+    """自然语言建书时的结构化角色预览。"""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=100)
+    role: str = Field(min_length=1, max_length=300)
+    personality: str = Field(min_length=1, max_length=500)
+    goal: str = Field(min_length=1, max_length=500)
+
+
+class IdeaOutlineItem(BaseModel):
+    """自然语言建书时的计划大纲节点。"""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    chapter_number: int = Field(gt=0, strict=True)
+    title: str = Field(min_length=1, max_length=200)
+    summary: str = Field(min_length=1, max_length=1000)
+    conflict: str = Field(min_length=1, max_length=1000)
+    outcome: str = Field(min_length=1, max_length=1000)
+
+
+class IdeaArc(BaseModel):
+    """全书卷/阶段级结构；长篇按阶段覆盖，不要求逐章展开。"""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=100)
+    chapter_start: int = Field(gt=0, strict=True)
+    chapter_end: int = Field(gt=0, strict=True)
+    summary: str = Field(min_length=1, max_length=1000)
+
+
+class IdeaParseRequest(StrictWriteModel):
+    """把作者的自然语言想法解析为建书草案，不创建小说或写入数据库。"""
+    idea: str = Field(min_length=1, max_length=4_000)
+    # 全书预计篇幅属于作者的长期目标，不是一次模型输出的条数上限。
+    planned_chapters: int = Field(120, ge=1, le=3_000, strict=True)
+
+
+class IdeaParseResponse(BaseModel):
+    """自然语言建书的可编辑结构化预览。"""
+    title: str = Field(min_length=1, max_length=200)
+    genre: str = Field(min_length=1, max_length=50)
+    description: str = Field(min_length=1, max_length=8_000)
+    worldview: str = Field(min_length=1, max_length=50_000)
+    planned_chapters: int = Field(ge=1, le=3_000, strict=True)
+    arcs: List[IdeaArc] = Field(min_length=1, max_length=12)
+    characters: List[IdeaCharacter] = Field(min_length=1, max_length=8)
+    # 只详列开头可直接开写的章节，后续章节在写作中按卷推进。
+    opening_outline: List[IdeaOutlineItem] = Field(min_length=1, max_length=12)
+    plot_hooks: List[str] = Field(min_length=1, max_length=12)
+    uncertainties: List[str] = Field(default_factory=list, max_length=12)
+
+
 
 
 class PlotOption(BaseModel):
@@ -520,6 +587,8 @@ class PlotOptionsResponse(BaseModel):
 
 
 class AutoChapterRequest(StrictWriteModel):
+    expected_novel_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
+    expected_chapter_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
     """AI自动生成章节请求"""
     novel_id: int = Field(..., gt=0, description="小说ID")
     base_chapter_id: Optional[int] = Field(
@@ -536,6 +605,10 @@ class AutoChapterRequest(StrictWriteModel):
 
 
 class RewriteRequest(StrictWriteModel):
+    selection_start: int | None = Field(None, ge=0, description="选区起点，Unicode 字符位置")
+    selection_end: int | None = Field(None, gt=0, description="选区终点，不包含该位置")
+    expected_novel_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
+    expected_chapter_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
     """局部文本改写请求"""
     novel_id: int = Field(..., gt=0, description="小说ID")
     chapter_id: Optional[int] = Field(None, gt=0, description="当前章节ID（可选，用于权限校验）")
@@ -561,8 +634,18 @@ class RewriteRequest(StrictWriteModel):
         description="目标字数（可选，不指定则由模型自动控制长度）",
     )
 
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if (self.selection_start is None) != (self.selection_end is None):
+            raise ValueError("改写选区起止位置必须同时提供")
+        if self.selection_start is not None and self.selection_end <= self.selection_start:
+            raise ValueError("改写选区终点必须晚于起点")
+        return self
+
 
 class RewriteResponse(BaseModel):
+    proposal_id: str | None = None
+    execution: Dict[str, Any] = Field(default_factory=dict)
     """局部文本改写响应"""
     rewritten_text: str = Field(..., description="改写后的文本")
 
@@ -613,6 +696,8 @@ class RAGResult(BaseModel):
 
 class RAGResponse(BaseModel):
     """RAG检索响应"""
+    status: str = "ready"
+    reason: str | None = None
     query: str
     results: List[RAGResult]
     retrieval_method: str  # "hybrid", "vector", "bm25"

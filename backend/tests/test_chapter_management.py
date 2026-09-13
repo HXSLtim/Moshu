@@ -15,6 +15,7 @@ from app.api.routes import novels as novel_routes
 from app.crud import novel as novel_crud
 from app.db.base import Base, get_db
 from app.models.novel import Novel
+from app.models.character import Character, CharacterAppearance, CharacterRelationship
 from app.models.schemas import ChapterCreate, ChapterUpdate, GenerationRequest, RAGQuery
 from app.models.user import User
 
@@ -93,6 +94,40 @@ def _create_chapter(db, novel_id: int, chapter_number: int):
             content=f"正文{chapter_number}",
         ),
     )
+
+
+@pytest.mark.parametrize("deleted_kind", ["novel", "chapter", "character"])
+def test_aggregate_deletion_cleans_character_dependents(chapter_api, deleted_kind):
+    """作品、章节和角色的删除路径均清理对应出场与关系，不影响其他作品。"""
+    client, db, novel = chapter_api
+    chapter = _create_chapter(db, novel.id, 1)
+    first = Character(novel_id=novel.id, name="主角")
+    second = Character(novel_id=novel.id, name="同伴")
+    other_novel = Novel(title="保留作品", user_id=novel.user_id)
+    db.add_all([first, second, other_novel]); db.commit()
+    other_chapter = _create_chapter(db, other_novel.id, 1)
+    other_character = Character(novel_id=other_novel.id, name="保留人物")
+    db.add(other_character); db.commit()
+    db.add_all([
+        CharacterAppearance(character_id=first.id, chapter_id=chapter.id),
+        CharacterRelationship(novel_id=novel.id, character_a_id=first.id, character_b_id=second.id, relationship_type="friend"),
+        CharacterAppearance(character_id=other_character.id, chapter_id=other_chapter.id),
+    ]); db.commit()
+    chapter_id, character_id, novel_id = chapter.id, first.id, novel.id
+    if deleted_kind == "novel":
+        assert client.delete(f"/api/novels/{novel_id}").status_code == 204
+    elif deleted_kind == "chapter":
+        assert client.delete(f"/api/novels/{novel_id}/chapters/{chapter_id}").status_code == 204
+    else:
+        # ORM 聚合删除也须完整，不能只依赖某个专用 CRUD 手工清理。
+        db.delete(first); db.commit()
+    db.expire_all()
+    assert db.query(CharacterAppearance).filter_by(chapter_id=chapter_id).count() == 0
+    assert db.query(CharacterAppearance).filter_by(chapter_id=other_chapter.id).count() == 1
+    assert db.query(CharacterRelationship).filter_by(novel_id=novel_id).count() == (1 if deleted_kind == "chapter" else 0)
+    if deleted_kind == "chapter":
+        recreated = _create_chapter(db, novel_id, 2)
+        assert db.query(CharacterAppearance).filter_by(chapter_id=recreated.id).count() == 0
 
 
 def test_chapter_summary_pagination_and_server_next(chapter_api):
@@ -183,90 +218,38 @@ def test_novel_statistics_use_one_aggregate_query_and_isolate_user(chapter_api):
     assert len(executed_selects) == 1
 
 
-def test_novel_worldview_is_indexed_on_create_and_update_with_persisted_version(
-    chapter_api,
-    monkeypatch,
-):
-    """携带世界观的新建和更新都排队索引，版本由数据库原子递增。"""
-    client, db, novel = chapter_api
-    index_mock = novel_routes.rag_service.index_content
-    index_mock.reset_mock()
-    prepare_novel = MagicMock(
-        return_value={"_novel_lifecycle": "novel-lifecycle", "_owner_id": novel.user_id}
-    )
-    prepare_worldview = MagicMock(
-        side_effect=[
-            {
-                "_novel_lifecycle": "novel-lifecycle",
-                "_owner_id": novel.user_id,
-                "_source_lifecycle": "novel-lifecycle",
-            },
-            {
-                "_novel_lifecycle": "novel-lifecycle",
-                "_owner_id": novel.user_id,
-                "_source_lifecycle": "novel-lifecycle",
-            },
-        ]
-    )
-    monkeypatch.setattr(novel_routes.rag_service, "prepare_novel_projection", prepare_novel)
-    monkeypatch.setattr(
-        novel_routes.rag_service,
-        "prepare_worldview_projection",
-        prepare_worldview,
-    )
-
-    created_response = client.post(
-        "/api/novels/",
-        json={"title": "带世界观的新书", "worldview": "初始世界观"},
-    )
-    assert created_response.status_code == 201
-    created = novel_crud.get_novel_by_id(db, created_response.json()["id"])
-    first_metadata = index_mock.await_args_list[0].kwargs["metadata"]
-    assert first_metadata["version"] == novel_routes._worldview_projection_version(created)
-    assert first_metadata["_novel_lifecycle"] == "novel-lifecycle"
-    assert first_metadata["_source_lifecycle"] == "novel-lifecycle"
-    prepare_novel.assert_called_once_with(created.id, db=ANY)
-    assert prepare_novel.call_args.kwargs["db"].get_bind() == db.get_bind()
-
-    updated_response = client.put(
-        f"/api/novels/{created.id}",
-        json={"worldview": "更新后的世界观"},
-    )
-    assert updated_response.status_code == 200
-    db.refresh(created)
-    second_metadata = index_mock.await_args_list[1].kwargs["metadata"]
-    assert second_metadata["version"] == novel_routes._worldview_projection_version(created)
-    assert second_metadata["version"] == first_metadata["version"] + 1
-    assert second_metadata["_novel_lifecycle"] == "novel-lifecycle"
-    assert index_mock.await_count == 2
+def test_novel_worldview_is_indexed_on_create_and_update_with_persisted_version(chapter_api):
+    """创建与更新世界观同事务排队，HTTP不等待索引。"""
+    from app.models.projection_job import ProjectionJob
+    client, db, _ = chapter_api
+    created = client.post("/api/novels/", json={"title": "带世界观的新书", "worldview": "初始世界观"})
+    assert created.status_code == 201
+    novel_id = created.json()["id"]
+    first = db.query(ProjectionJob).filter_by(novel_id=novel_id).one()
+    assert first.source_version == 1
+    assert first.payload["token"]["_novel_lifecycle"] == created.json()["rag_lifecycle_id"]
+    updated = client.put(f"/api/novels/{novel_id}", json={"worldview": "新世界观"})
+    assert updated.status_code == 200
+    db.expire_all()
+    assert first.state == "superseded"
+    pending = db.query(ProjectionJob).filter_by(novel_id=novel_id, state="queued").one()
+    assert pending.source_version == 2
+    novel_routes.rag_service.index_content.assert_not_awaited()
 
 
-def test_chapter_update_prepares_persistent_projection_identity(chapter_api, monkeypatch):
-    """普通章节更新携带数据库持久生命周期，而不是进程内代次。"""
+def test_chapter_update_prepares_persistent_projection_identity(chapter_api):
+    """普通更新将真实不可复用身份写入outbox。"""
+    from app.models.projection_job import ProjectionJob
     client, db, novel = chapter_api
     chapter = _create_chapter(db, novel.id, 1)
-    prepare = MagicMock(
-        return_value={
-            "_novel_lifecycle": "novel-lifecycle",
-            "_owner_id": novel.user_id,
-            "_source_lifecycle": "chapter-lifecycle",
-        }
-    )
-    monkeypatch.setattr(novel_routes.rag_service, "prepare_chapter_projection", prepare)
-    index_mock = novel_routes.rag_service.index_content
-    index_mock.reset_mock()
-
-    response = client.put(
-        f"/api/novels/{novel.id}/chapters/{chapter.id}",
-        json={"expected_version": 1, "content": "更新正文"},
-    )
-
+    response = client.put(f"/api/novels/{novel.id}/chapters/{chapter.id}",
+                          json={"expected_version": 1, "content": "更新正文"})
     assert response.status_code == 200
-    prepare.assert_called_once_with(novel.id, chapter.id, db=ANY)
-    assert prepare.call_args.kwargs["db"].get_bind() == db.get_bind()
-    metadata = index_mock.await_args.kwargs["metadata"]
-    assert metadata["_novel_lifecycle"] == "novel-lifecycle"
-    assert metadata["_source_lifecycle"] == "chapter-lifecycle"
+    job = db.query(ProjectionJob).filter_by(novel_id=novel.id, state="queued").one()
+    assert job.source_version == 2
+    assert job.payload["token"]["_source_lifecycle"] == chapter.rag_lifecycle_id
+    assert job.novel_lifecycle_id == novel.rag_lifecycle_id
+    novel_routes.rag_service.index_content.assert_not_awaited()
 
 
 def test_chapter_update_uses_version_and_rejects_unknown_fields(chapter_api):
@@ -376,3 +359,35 @@ def test_generation_and_rag_requests_have_hard_bounds():
         GenerationRequest(novel_id=1, prompt="正常", chapter=1, target_length=8001)
     with pytest.raises(ValueError):
         RAGQuery(novel_id=1, query="设定", top_k=21)
+
+
+def test_export_text_contains_all_saved_chapters_in_order(chapter_api):
+    """导出不受列表分页限制，保持已保存正文和章节顺序。"""
+    client, db, novel = chapter_api
+    novel.description = "测试简介"
+    db.commit()
+    for number in range(105, 0, -1):
+        _create_chapter(db, novel.id, number)
+    response = client.get(f"/api/novels/{novel.id}/export.txt")
+    assert response.status_code == 200
+    text = response.content.decode("utf-8-sig")
+    assert text.startswith("长篇测试\n\n测试简介\n\n")
+    assert text.index("第 2 章 ·") < text.index("第 10 章 ·") < text.index("第 105 章 ·")
+    assert "正文105" in text
+    assert "attachment;" in response.headers["content-disposition"]
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_export_text_hides_other_authors_novels(chapter_api):
+    """导出必须执行所有权校验，不能通过小说 ID 读取他人正文。"""
+    client, db, novel = chapter_api
+    other = User(username="export-other", email="export-other@example.com", hashed_password="not-used")
+    db.add(other)
+    db.flush()
+    hidden = Novel(title="他人小说", user_id=other.id)
+    db.add(hidden)
+    db.commit()
+    assert client.get(f"/api/novels/{hidden.id}/export.txt").status_code == 404
+    assert client.get("/api/novels/99999/export.txt").status_code == 404
+    response = client.get(f"/api/novels/{novel.id}/export.txt")
+    assert response.content.decode("utf-8-sig") == "长篇测试\n"

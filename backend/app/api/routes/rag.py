@@ -36,7 +36,10 @@ async def rag_debug(
             detail="小说不存在或无权访问",
         )
 
-    response = await rag_service.hybrid_search(request)
+    try:
+        response = await rag_service.hybrid_search(request, actor_id=current_user.id, novel_lifecycle_id=novel.rag_lifecycle_id)
+    except ValueError as exc:
+        raise HTTPException(404, "作品来源已变化") from exc
     return response
 
 
@@ -77,7 +80,8 @@ async def cleanup_rag_data(
         logger.info(f"开始清理小说 {request.novel_id} 的RAG数据")
         
         # 清理向量数据库
-        vector_count = await rag_service.cleanup_novel_vectors(request.novel_id)
+        token = rag_service.prepare_novel_projection(request.novel_id, db=db)
+        vector_count = await rag_service.cleanup_projection_strict("delete_novel", token)
         
         # 清理知识图谱（如果有的话）
         graph_count = await rag_service.cleanup_novel_graph(request.novel_id)

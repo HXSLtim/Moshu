@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 
 from pydantic import field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -33,7 +34,21 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: float = 120.0
     LLM_MAX_RETRIES: int = 2
     LLM_MAX_OUTPUT_TOKENS: int = 4096
+    LLM_REASONING_EFFORT: str | None = None
+    LLM_JSON_SCHEMA_ENABLED: bool = False
     REVIEW_MAX_CONCURRENCY: int = 2
+
+    # 保存只写持久任务；显式开启后才执行简介模型请求。
+    MEMORY_WORKER_ENABLED: bool = False
+    MEMORY_POLL_SECONDS: float = Field(2.0, gt=0)
+    MEMORY_LEASE_SECONDS: float = Field(420.0, gt=0)
+    MEMORY_MAX_ATTEMPTS: int = Field(3, ge=1, le=10)
+
+    PROJECTION_WORKER_ENABLED: bool = True
+    PROJECTION_POLL_SECONDS: float = Field(2.0, gt=0)
+    PROJECTION_LEASE_SECONDS: float = Field(180.0, gt=0)
+    PROJECTION_OPERATION_SECONDS: float = Field(120.0, gt=0)
+    WRITING_JOB_RECOVERY_ENABLED: bool = True
 
     # PostgreSQL配置
     POSTGRES_HOST: str = "localhost"

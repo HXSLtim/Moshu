@@ -15,6 +15,8 @@ from app.crud.story_bible import (
 )
 from app.db.base import Base
 from app.models.story_bible import StoryEvent, StoryFact
+from app.models.novel import Novel
+from app.services.context_builder import ContextPack
 from app.services.agent_service import AgentService
 from app.services.context_budget import (
     MAX_STORY_BIBLE_CONTEXT_CHARS,
@@ -33,11 +35,13 @@ def story_bible_db():
     Base.metadata.create_all(bind=engine)
 
     db = testing_session()
+    db.add(Novel(id=1, user_id=7, title="测试小说", rag_lifecycle_id="story-life"))
+    db.commit()
     db.add_all(
         [
             StoryFact(
                 id=1,
-                novel_id=1,
+                novel_id=1, novel_lifecycle_id="story-life",
                 subject="林夏",
                 attribute="身份",
                 value="青州城守将",
@@ -45,7 +49,7 @@ def story_bible_db():
             ),
             StoryFact(
                 id=2,
-                novel_id=1,
+                novel_id=1, novel_lifecycle_id="story-life",
                 subject="青州城",
                 attribute="戒严原因",
                 value="追查玉佩失窃",
@@ -54,7 +58,7 @@ def story_bible_db():
             ),
             StoryFact(
                 id=3,
-                novel_id=1,
+                novel_id=1, novel_lifecycle_id="story-life",
                 subject="林夏",
                 attribute="位置",
                 value="云梦泽",
@@ -63,7 +67,7 @@ def story_bible_db():
             ),
             StoryFact(
                 id=4,
-                novel_id=1,
+                novel_id=1, novel_lifecycle_id="story-life",
                 subject="旧设定",
                 attribute="身份",
                 value="平民",
@@ -134,6 +138,31 @@ def test_generation_queries_exclude_future_events_and_keep_recent_first(
     assert [event.id for event in events] == [3, 1]
 
 
+def test_historical_generation_uses_fact_valid_at_target_chapter(story_bible_db):
+    """回写旧章仍可读取当时持有的物品，失效章及之后不能继续使用。"""
+    story_bible_db.add(StoryFact(
+        id=10, novel_id=1, subject="主角", attribute="持有物", value="青霜剑",
+        status="retired", chapter_established=3, retired_chapter=12,
+    ))
+    story_bible_db.commit()
+    for chapter, expected in [(2, False), (3, True), (11, True), (12, False), (20, False), (None, False)]:
+        facts = get_active_facts_for_generation(story_bible_db, 1, max_chapter=chapter)
+        assert (10 in [fact.id for fact in facts]) is expected
+
+
+def test_planned_events_cannot_enter_confirmed_generation_context(story_bible_db):
+    """即使计划的章号已到，也不能把未发生事件当成既定剧情。"""
+    story_bible_db.add(StoryEvent(
+        id=10, novel_id=1, title="计划交出宝剑", description="尚未发生的转交",
+        chapter=1, story_day=1, status="planned",
+    ))
+    story_bible_db.commit()
+    events = get_events_for_generation(story_bible_db, 1, max_chapter=3, current_day=3)
+    assert 10 not in [event.id for event in events]
+    # 格式化边界也拒绝未确认事件，避免其他调用方误传。
+    assert "计划交出宝剑" not in "\n".join(build_story_bible_context([], [story_bible_db.get(StoryEvent, 10)]))
+
+
 def test_story_bible_context_formats_facts_and_events_within_budget():
     """事实与事件合并成行，注入前仍受统一字符预算约束。"""
     facts = [
@@ -194,7 +223,8 @@ def test_story_bible_context_compacts_oversized_inputs():
 
 
 @pytest.mark.asyncio
-async def test_retrieve_context_reads_story_bible_and_records_trace():
+@pytest.mark.parametrize("current_day", [None, 3])
+async def test_retrieve_context_reads_story_bible_and_records_trace(current_day):
     """检索节点读取事实/事件，并把裁剪后的上下文写回状态与 trace。"""
     facts = [
         SimpleNamespace(
@@ -219,7 +249,7 @@ async def test_retrieve_context_reads_story_bible_and_records_trace():
         "novel_id": 1,
         "prompt": "主角进入青州城",
         "chapter": 3,
-        "current_day": 3,
+        "current_day": current_day,
         "workflow_steps": [],
     }
 
@@ -233,14 +263,18 @@ async def test_retrieve_context_reads_story_bible_and_records_trace():
             AsyncMock(return_value=[]),
         ),
         patch(
-            "app.services.agent_service.asyncio.to_thread",
-            AsyncMock(return_value=(facts, events)),
-        ),
+            "app.services.agent_service.AgentService._load_context_pack_sync",
+            return_value=(ContextPack("", build_story_bible_context(facts, events), "", {"sources": []}), 7, "story-life"),
+        ) as load_context,
+        patch("app.services.agent_service.AgentService._assert_context_scope_sync"),
+        patch("app.services.agent_service.AgentService._load_consistency_reference_sync", return_value={}),
     ):
         result = await service._retrieve_context(state)
 
+    load_context.assert_called_once_with(1, 3, current_day, None, None)
     assert result["story_bible_context"] == build_story_bible_context(facts, events)
     step = result["workflow_steps"][0]
+    assert step["input"]["current_day"] == current_day
     assert step["output"]["story_bible_lines"] == len(result["story_bible_context"])
     assert step["data_sources"]["story_bible_context"] == result["story_bible_context"]
 
@@ -276,3 +310,45 @@ async def test_agent_c_receives_story_bible_context_in_model_call():
     assert result["workflow_steps"][0]["data_sources"]["story_bible_context"] == state[
         "story_bible_context"
     ]
+
+
+@pytest.mark.parametrize("current_day, expected", [(None, [1]), (1, []), (2, [1]), (3, [3, 1])])
+def test_generation_loader_keeps_chapter_scope_when_day_unknown(
+    story_bible_db, monkeypatch, current_day, expected,
+):
+    """未知日不截掉第二天事件，明确日仍过滤，未来章节始终排除。"""
+    story_bible_db.add(StoryEvent(
+        id=20, novel_id=1, title="后续章节事件", description="不能出现在旧章",
+        story_day=1, chapter=8, status="occurred",
+    ))
+    story_bible_db.commit()
+    monkeypatch.setattr("app.services.agent_service.SessionLocal", lambda: story_bible_db)
+    facts = get_active_facts_for_generation(story_bible_db, 1, max_chapter=3)
+    events = get_events_for_generation(story_bible_db, 1, max_chapter=3, current_day=current_day)
+    assert [event.id for event in events] == expected
+    expected_context = build_story_bible_context(facts, events)
+    pack, owner, lifecycle = AgentService._load_context_pack_sync(1, 3, current_day, 7, "story-life")
+    assert (owner, lifecycle) == (7, "story-life")
+    assert pack.story_bible_context == expected_context
+
+
+@pytest.mark.parametrize("max_chapter, current_day, expected", [
+    (3, None, [1]),
+    (3, 3, [3, 1]),
+    (3, 80, [30, 3, 1]),
+    (None, None, [30, 3, 1]),
+])
+def test_unlocated_events_require_known_day_in_chapter_scoped_recall(
+    story_bible_db, max_chapter, current_day, expected,
+):
+    """无章事件不能泄露给日期未知的旧章，明确日期或全局查询仍可读取。"""
+    story_bible_db.add(StoryEvent(
+        id=30, novel_id=1, title="终局事件", description="故事第八十天的结局",
+        story_day=80, chapter=None, status="occurred",
+    ))
+    story_bible_db.commit()
+    events = get_events_for_generation(
+        story_bible_db, 1, max_chapter=max_chapter, current_day=current_day,
+    )
+    assert [event.id for event in events] == expected
+    assert story_bible_db.get(StoryEvent, 30).description == "故事第八十天的结局"

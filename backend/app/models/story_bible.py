@@ -11,15 +11,17 @@
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, JSON, String, Text
 
 from app.db.base import Base
+from app.db.story_bible_integrity import STORY_FACT_CHECKS, STORY_EVENT_CHECKS
 
 
 class StoryFact(Base):
     """作者确认的故事内事实(角色位置、身份、持有物等)。"""
 
     __tablename__ = "story_facts"
+    __table_args__ = tuple(CheckConstraint(expression, name=name) for name, expression in STORY_FACT_CHECKS.items())
 
     id = Column(Integer, primary_key=True, index=True)
     novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False, index=True)
@@ -34,6 +36,13 @@ class StoryFact(Base):
     chapter_established = Column(Integer, nullable=True)
     status = Column(String(20), nullable=False, default="active", index=True)
     retired_chapter = Column(Integer, nullable=True)
+    entity_id = Column(String(36), nullable=True, index=True)
+    value_entity_id = Column(String(36), nullable=True)
+    novel_lifecycle_id = Column(String(32), nullable=True)
+    origin = Column(String(20), nullable=False, default="author", server_default="author")
+    source_refs = Column(JSON, nullable=False, default=list, server_default="[]")
+    source_status = Column(String(20), nullable=False, default="ready", server_default="ready")
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -46,6 +55,7 @@ class StoryEvent(Base):
     """剧情事件:故事时间轴上的关键节点。"""
 
     __tablename__ = "story_events"
+    __table_args__ = tuple(CheckConstraint(expression, name=name) for name, expression in STORY_EVENT_CHECKS.items())
 
     id = Column(Integer, primary_key=True, index=True)
     novel_id = Column(Integer, ForeignKey("novels.id"), nullable=False, index=True)

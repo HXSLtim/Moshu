@@ -87,6 +87,13 @@ export function useWorkspaceKeyboardShortcuts({
         return;
       }
 
+      const target = event.target;
+      const editingOtherField = target instanceof HTMLElement &&
+        (target.matches('input, textarea') || target.isContentEditable) &&
+        !target.closest('[data-workspace-editor]');
+      // 对话与设定输入框使用各自的原生撤销，不能误改正文。
+      if (primary && (key === 'z' || key === 'y') && editingOtherField) return;
+
       if (primary && key === 'z') {
         // 正文是受控 TextField，统一阻止浏览器原生历史，避免绕过有界撤销栈。
         event.preventDefault();

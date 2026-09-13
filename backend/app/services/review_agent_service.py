@@ -12,7 +12,7 @@
 """
 from typing import TypedDict, Dict, Any, List, Optional
 from datetime import datetime
-from langchain_openai import ChatOpenAI
+from app.services.model_provider import create_chat_model
 from app.core.config import settings
 from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
 from app.services.context_budget import (
@@ -113,14 +113,10 @@ class ReviewAgentService:
     def __init__(self):
         """初始化审核服务"""
         # 初始化LLM（使用复杂模型进行审核）
-        self.llm = ChatOpenAI(
+        self.llm = create_chat_model(
             model=settings.OPENAI_MODEL_COMPLEX,
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_API_BASE,
             temperature=0.3,  # 审核需要更稳定的输出
             max_tokens=min(settings.LLM_MAX_OUTPUT_TOKENS, 2048),
-            timeout=settings.LLM_TIMEOUT_SECONDS,
-            max_retries=settings.LLM_MAX_RETRIES,
         )
         self._semaphore = asyncio.Semaphore(
             max(1, settings.REVIEW_MAX_CONCURRENCY)

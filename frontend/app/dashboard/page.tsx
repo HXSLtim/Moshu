@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Container,
   Box,
   Typography,
   Button,
@@ -19,16 +18,19 @@ import {
   Alert,
   LinearProgress,
   Chip,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Stack,
 } from '@mui/material';
 import InputAdornment from '@mui/material/InputAdornment';
-import AddIcon from '@mui/icons-material/Add';
-import LogoutIcon from '@mui/icons-material/Logout';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import SearchIcon from '@mui/icons-material/Search';
-import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import AppFrame from '@/components/layout/AppFrame';
 import { countTextUnits } from '@/lib/textStats';
 import { api, ApiError } from '@/lib/api';
 import type { Novel, NovelCreate } from '@/types';
@@ -46,9 +48,8 @@ export default function DashboardPage() {
     description: '',
     worldview: '',
   });
-  const [quickCreateDialogOpen, setQuickCreateDialogOpen] = useState(false);
-  const [quickCreateTheme, setQuickCreateTheme] = useState('');
-  const [quickCreateLoading, setQuickCreateLoading] = useState(false);
+  const [quickTitle, setQuickTitle] = useState('');
+  const [quickCreating, setQuickCreating] = useState(false);
   const [lastWorkspace, setLastWorkspace] = useState<{ novelId: number; chapterId: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [autoCreatingNovelId, setAutoCreatingNovelId] = useState<number | null>(null);
@@ -169,15 +170,22 @@ export default function DashboardPage() {
     return () => loadRequestRef.current?.controller.abort();
   }, [loadNovels]);
 
-  const handleCreateNovel = () => {
-    setNovelForm({ title: '', genre: '', description: '', worldview: '' });
-    setEditingNovel(null);
-    setOpenDialog(true);
-  };
-
-  const handleOpenQuickCreate = () => {
-    setQuickCreateTheme('');
-    setQuickCreateDialogOpen(true);
+  /** 创建只需要一个名字；其余信息进工作台后再补。 */
+  const createFromName = async () => {
+    const title = quickTitle.trim();
+    if (!title || quickCreating) return;
+    setQuickCreating(true);
+    setError('');
+    try {
+      const created = await api.createNovel({ title });
+      setQuickTitle('');
+      await loadNovels();
+      router.push(`/workspace?novel=${created.id}`);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '创建失败，请重试');
+    } finally {
+      setQuickCreating(false);
+    }
   };
 
   const handleEditNovel = (novel: Novel) => {
@@ -192,72 +200,26 @@ export default function DashboardPage() {
   };
 
   const handleSaveNovel = async () => {
+    const title = novelForm.title.trim();
+    if (!title) return;
     try {
       if (editingNovel) {
         await api.updateNovel(editingNovel.id, novelForm);
       } else {
-        await api.createNovel(novelForm);
+        const created = await api.createNovel({ ...novelForm, title });
+        setOpenDialog(false);
+        if (typeof window !== 'undefined') window.localStorage.removeItem('novel_form_draft_new');
+        await loadNovels();
+        router.push(`/workspace?novel=${created.id}`);
+        return;
       }
       setOpenDialog(false);
       if (typeof window !== 'undefined') {
-        const draftKey = editingNovel
-          ? `novel_form_draft_edit_${editingNovel.id}`
-          : 'novel_form_draft_new';
-        window.localStorage.removeItem(draftKey);
+        window.localStorage.removeItem(`novel_form_draft_edit_${editingNovel.id}`);
       }
       await loadNovels();
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
-    }
-  };
-
-  const handleQuickCreateNovel = async () => {
-    try {
-      setQuickCreateLoading(true);
-      const theme = quickCreateTheme.trim();
-      const baseTitle = theme || '未命名小说';
-      const title = baseTitle.length > 20 ? baseTitle.slice(0, 20) : baseTitle;
-
-      const novel = await api.createNovel({
-        title,
-        genre: '',
-        description: theme,
-        worldview: '',
-      });
-
-      try {
-        if (theme) {
-          const initResult = await api.initNovel({
-            novel_id: novel.id,
-            target_chapters: 10,
-            theme,
-          });
-
-          const combinedWorldview = `【世界观】\n${initResult.worldview}\n\n【主要角色】\n${
-            initResult.main_characters && initResult.main_characters.length > 0
-              ? initResult.main_characters.join('\n')
-              : ''
-          }\n\n【章节大纲】\n${initResult.outline}\n\n【剧情线索】\n${
-            initResult.plot_hooks && initResult.plot_hooks.length > 0
-              ? initResult.plot_hooks.join('\n')
-              : ''
-          }`;
-
-          await api.updateNovel(novel.id, {
-            worldview: combinedWorldview,
-          });
-        }
-      } catch {
-        // 初始化失败不影响小说创建
-      }
-
-      setQuickCreateDialogOpen(false);
-      setQuickCreateTheme('');
-      router.push(`/novels/${novel.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '一键创建小说失败');
-    } finally {
-      setQuickCreateLoading(false);
     }
   };
 
@@ -326,52 +288,62 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <Container maxWidth="lg">
-        <Box sx={{ mt: 4, textAlign: 'center' }}>
-          <Typography>加载中...</Typography>
-        </Box>
-      </Container>
+      <AppFrame eyebrow="项目" title="正在载入你的项目…">
+        <Box sx={{ py: 4 }}><LinearProgress /></Box>
+      </AppFrame>
     );
   }
 
   return (
-    <Container maxWidth="lg">
-      <Box sx={{ mt: 4, mb: 4 }}>
-        <Box sx={{ mb: 3 }}>
-          <Card>
-            <CardContent>
-              <Typography variant="h5" gutterBottom>
-                一站式 AI 小说写作
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                说一句话开始新故事，或一键回到上次写作位置。
-              </Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
-                <Button
-                  variant="contained"
-                  onClick={handleOpenQuickCreate}
-                  disabled={loading}
-                >
-                  一键开始新小说（AI 带写）
-                </Button>
-                {lastWorkspace ? (
-                  <Button
-                    variant="outlined"
-                    onClick={() => {
-                      router.push(`/workspace?novel=${lastWorkspace.novelId}&chapter=${lastWorkspace.chapterId}`);
-                    }}
-                  >
-                    继续上次写作
-                  </Button>
-                ) : (
-                  <Typography variant="body2" color="text.secondary">
-                    暂无最近编辑的小说
-                  </Typography>
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        </Box>
+    <AppFrame
+      eyebrow="项目"
+      title="你的小说项目"
+      description="每部小说就是一个项目：先创建，再在工作台里逐章写作。"
+      actions={
+        <>
+          {lastWorkspace && (
+            <Button
+              size="small"
+              onClick={() => router.push(`/workspace?novel=${lastWorkspace.novelId}&chapter=${lastWorkspace.chapterId}`)}
+            >
+              继续上次写作
+            </Button>
+          )}
+          <Button size="small" onClick={handleLogout}>退出登录</Button>
+        </>
+      }
+    >
+      <Box>
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom sx={{ fontWeight: 700 }}>
+              新建小说
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              起个名字就能开始。类型、简介、世界观、角色和大纲都进工作台后再说——你可以自己写，也可以让 AI 起草。
+            </Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} gap={1}>
+              <TextField
+                fullWidth
+                size="small"
+                label="小说名称"
+                value={quickTitle}
+                disabled={quickCreating}
+                onChange={(event) => setQuickTitle(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) void createFromName(); }}
+                placeholder="例如：长河行"
+              />
+              <Button
+                variant="contained"
+                disabled={quickCreating || !quickTitle.trim()}
+                onClick={() => void createFromName()}
+                sx={{ flexShrink: 0, minWidth: 180 }}
+              >
+                {quickCreating ? '正在创建…' : '创建并开始写作'}
+              </Button>
+            </Stack>
+          </CardContent>
+        </Card>
 
         <Box sx={{ mb: 3 }}>
           <Card>
@@ -403,27 +375,7 @@ export default function DashboardPage() {
           </Card>
         </Box>
 
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
-          <Typography variant="h4">我的小说</Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <ColorModeToggle />
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={handleCreateNovel}
-              sx={{ ml: 1, mr: 2 }}
-            >
-              新建小说
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<LogoutIcon />}
-              onClick={handleLogout}
-            >
-              退出登录
-            </Button>
-          </Box>
-        </Box>
+        <Typography variant="h5" sx={{ mb: 2 }}>全部项目</Typography>
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
@@ -503,6 +455,8 @@ export default function DashboardPage() {
                     )}
                   </CardContent>
                   <CardActions sx={{ justifyContent: 'space-between', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <Button variant="contained" size="small" startIcon={<EditIcon />} sx={{ mb: 1 }}
+                      onClick={() => router.push(`/workspace?novel=${novel.id}`)}>进入创作工作区</Button>
                     {autoCreatingNovelId === novel.id && (
                       <Box sx={{ mb: 1 }}>
                         <LinearProgress />
@@ -555,95 +509,98 @@ export default function DashboardPage() {
         )}
       </Box>
 
-      {/* 创建/编辑小说对话框 */}
+      {/* 创建/编辑小说对话框：只有名称必填，其余可以留到工作台让 AI 补 */}
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editingNovel ? '编辑小说' : '新建小说'}</DialogTitle>
+        <DialogTitle>{editingNovel ? '编辑小说信息' : '新建小说'}</DialogTitle>
         <DialogContent>
+          {!editingNovel && (
+            <Alert severity="info" sx={{ mt: 1 }}>
+              只需要一个名字就能开始。类型、简介和世界观都可以留空，之后在工作台里让 AI 帮你整理。
+            </Alert>
+          )}
           <TextField
             fullWidth
-            label="小说标题"
+            label="小说名称"
             value={novelForm.title}
             onChange={(e) => setNovelForm({ ...novelForm, title: e.target.value })}
             margin="normal"
             required
             autoFocus
+            placeholder="例如：长河行"
           />
-          <TextField
-            fullWidth
-            label="小说类型"
-            value={novelForm.genre}
-            onChange={(e) => setNovelForm({ ...novelForm, genre: e.target.value })}
-            margin="normal"
-            helperText="如：玄幻、都市、科幻等"
-          />
-          <TextField
-            fullWidth
-            label="小说简介"
-            value={novelForm.description}
-            onChange={(e) => setNovelForm({ ...novelForm, description: e.target.value })}
-            margin="normal"
-            multiline
-            rows={3}
-          />
-          <TextField
-            fullWidth
-            label="世界观设定"
-            value={novelForm.worldview}
-            onChange={(e) => setNovelForm({ ...novelForm, worldview: e.target.value })}
-            margin="normal"
-            multiline
-            rows={4}
-            helperText="描述小说的世界观、设定等"
-          />
+          {editingNovel ? (
+            <>
+              <TextField
+                fullWidth
+                label="小说类型（可选）"
+                value={novelForm.genre}
+                onChange={(e) => setNovelForm({ ...novelForm, genre: e.target.value })}
+                margin="normal"
+                helperText="如：玄幻、都市、科幻等"
+              />
+              <TextField
+                fullWidth
+                label="小说简介（可选）"
+                value={novelForm.description}
+                onChange={(e) => setNovelForm({ ...novelForm, description: e.target.value })}
+                margin="normal"
+                multiline
+                rows={3}
+              />
+              <TextField
+                fullWidth
+                label="世界观设定（可选）"
+                value={novelForm.worldview}
+                onChange={(e) => setNovelForm({ ...novelForm, worldview: e.target.value })}
+                margin="normal"
+                multiline
+                rows={4}
+              />
+            </>
+          ) : (
+            <Accordion elevation={0} sx={{ mt: 2, border: 1, borderColor: 'divider', '&:before': { display: 'none' } }}>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Typography variant="body2">现在就填写更多信息（可选）</Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <TextField
+                  fullWidth
+                  label="小说类型（可选）"
+                  value={novelForm.genre}
+                  onChange={(e) => setNovelForm({ ...novelForm, genre: e.target.value })}
+                  margin="normal"
+                  helperText="如：玄幻、都市、科幻等"
+                />
+                <TextField
+                  fullWidth
+                  label="小说简介（可选）"
+                  value={novelForm.description}
+                  onChange={(e) => setNovelForm({ ...novelForm, description: e.target.value })}
+                  margin="normal"
+                  multiline
+                  rows={3}
+                />
+                <TextField
+                  fullWidth
+                  label="世界观设定（可选）"
+                  value={novelForm.worldview}
+                  onChange={(e) => setNovelForm({ ...novelForm, worldview: e.target.value })}
+                  margin="normal"
+                  multiline
+                  rows={4}
+                />
+              </AccordionDetails>
+            </Accordion>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenDialog(false)}>取消</Button>
           <Button
             onClick={handleSaveNovel}
             variant="contained"
-            disabled={!novelForm.title}
+            disabled={!novelForm.title.trim()}
           >
-            {editingNovel ? '保存' : '创建'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 一键开始新小说对话框 */}
-      <Dialog
-        open={quickCreateDialogOpen}
-        onClose={() => {
-          if (quickCreateLoading) return;
-          setQuickCreateDialogOpen(false);
-        }}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>一键开始新小说（AI 带写）</DialogTitle>
-        <DialogContent>
-          <TextField
-            fullWidth
-            label="用一句话描述你想写的故事"
-            value={quickCreateTheme}
-            onChange={(e) => setQuickCreateTheme(e.target.value)}
-            margin="normal"
-            multiline
-            rows={3}
-            placeholder="例如：一名落魄魔法师重返学院复仇，却发现真正的敌人另有其人"
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => setQuickCreateDialogOpen(false)}
-            disabled={quickCreateLoading}
-          >
-            取消
-          </Button>
-          <Button
-            onClick={handleQuickCreateNovel}
-            variant="contained"
-            disabled={quickCreateLoading}
-          >
-            {quickCreateLoading ? '生成中...' : '一键生成'}
+            {editingNovel ? '保存' : '创建并进入工作台'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -706,6 +663,6 @@ export default function DashboardPage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Container>
+    </AppFrame>
   );
 }

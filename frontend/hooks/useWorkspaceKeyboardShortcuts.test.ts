@@ -113,4 +113,16 @@ describe('useWorkspaceKeyboardShortcuts', () => {
     expect(onSave).not.toHaveBeenCalled();
     expect(onUndo).not.toHaveBeenCalled();
   });
+  it('对话输入框的撤销不会误改正文', () => {
+    const onUndo = vi.fn();
+    renderHook(() => useWorkspaceKeyboardShortcuts({ onSave: vi.fn(), onUndo, canUndo: true }));
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    const event = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(onUndo).not.toHaveBeenCalled();
+    input.remove();
+  });
+
 });

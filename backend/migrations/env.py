@@ -69,10 +69,25 @@ def run_migrations_online() -> None:
     connectable = _resolve_engine()
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-
-        with context.begin_transaction():
-            context.run_migrations()
+        sqlite = connection.dialect.name == "sqlite"
+        previous_fk = connection.exec_driver_sql("PRAGMA foreign_keys").scalar() if sqlite else None
+        if sqlite:
+            connection.commit()
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
+        try:
+            context.configure(connection=connection, target_metadata=target_metadata)
+            with context.begin_transaction():
+                context.run_migrations()
+            if sqlite:
+                violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise RuntimeError(f"迁移后外键校验失败：{len(violations)} 条，请从备份核对")
+        finally:
+            if sqlite:
+                connection.rollback()
+                connection.exec_driver_sql(f"PRAGMA foreign_keys={int(previous_fk or 0)}")
+                connection.commit()
 
 
 if context.is_offline_mode():

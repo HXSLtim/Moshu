@@ -42,6 +42,7 @@ def test_legacy_database_is_backfilled_and_stamped(tmp_path):
     with engine.begin() as connection:
         connection.execute(text(OLD_CHAPTERS_SCHEMA))
         connection.execute(text("CREATE TABLE novels (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("INSERT INTO novels (id) VALUES (7)"))
         connection.execute(
             text(
                 "INSERT INTO chapters (id, novel_id, chapter_number, title, content) "
@@ -89,4 +90,25 @@ def test_managed_database_upgrade_is_idempotent(tmp_path):
             text("SELECT version_num FROM alembic_version")
         ).scalar()
     assert first_version == second_version == _current_head(engine)
+    engine.dispose()
+
+
+def test_chat_migration_preserves_existing_manuscript(tmp_path):
+    """从上一版迁移升级时新增对话表，旧正文保持原样。"""
+    from alembic import command
+    from sqlalchemy.orm import Session
+    from app.models.user import User
+    from app.models.novel import Novel, Chapter
+    engine = _file_engine(tmp_path, "before-chat.db")
+    command.upgrade(_alembic_config(engine), "e6dc8b549c6d")
+    with Session(engine) as db:
+        db.add(User(id=1, username="writer", email="writer@example.com", hashed_password="unused"))
+        db.add(Novel(id=1, user_id=1, title="原有小说"))
+        db.commit()
+        db.add(Chapter(novel_id=1, chapter_number=1, title="原有章节", content="必须保留的正文"))
+        db.commit()
+    initialize_database(engine)
+    assert "writing_turns" in inspect(engine).get_table_names()
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT content FROM chapters")).scalar() == "必须保留的正文"
     engine.dispose()

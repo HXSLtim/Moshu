@@ -1,8 +1,9 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from '@/lib/api';
 import type { Chapter } from '@/types';
 import { useChapterSave } from './useChapterSave';
+import { chapterDraftKey } from '@/lib/chapterDrafts';
 
 function chapter(
   content: string,
@@ -11,6 +12,7 @@ function chapter(
 ): Chapter {
   return {
     id: 10,
+    rag_lifecycle_id: "chapter-life",
     novel_id: 1,
     chapter_number: 1,
     title: '第一章',
@@ -23,7 +25,8 @@ function chapter(
   };
 }
 
-const DRAFT_KEY = 'nai_chapter_draft_1_10';
+const identity = { userId: 7, novelLifecycleId: 'novel-life', chapterLifecycleId: 'chapter-life' };
+const DRAFT_KEY = chapterDraftKey(1, 10, identity);
 
 function setNavigatorOnline(online: boolean) {
   Object.defineProperty(window.navigator, 'onLine', {
@@ -40,6 +43,7 @@ describe('useChapterSave 冲突与离线防护', () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     localStorage.clear();
   });
@@ -55,7 +59,7 @@ describe('useChapterSave 冲突与离线防护', () => {
     const { result, rerender } = renderHook(
       ({ content }) =>
         useChapterSave({
-          novelId: 1,
+          novelId: 1, userId: 7, novelLifecycleId: "novel-life",
           chapter: initialChapter,
           title: '第一章',
           content,
@@ -95,7 +99,7 @@ describe('useChapterSave 冲突与离线防护', () => {
     const { result, rerender } = renderHook(
       ({ content }) =>
         useChapterSave({
-          novelId: 1,
+          novelId: 1, userId: 7, novelLifecycleId: "novel-life",
           chapter: chapter('旧稿', 1),
           title: '第一章',
           content,
@@ -135,7 +139,7 @@ describe('useChapterSave 冲突与离线防护', () => {
     const { result, rerender } = renderHook(
       ({ content, title }) =>
         useChapterSave({
-          novelId: 1,
+          novelId: 1, userId: 7, novelLifecycleId: "novel-life",
           chapter: chapter('旧稿', 1),
           title,
           content,
@@ -165,7 +169,7 @@ describe('useChapterSave 冲突与离线防护', () => {
       const { result, rerender } = renderHook(
         ({ content }) =>
           useChapterSave({
-            novelId: 1,
+            novelId: 1, userId: 7, novelLifecycleId: "novel-life",
             chapter: chapter('旧稿', 1),
             title: '第一章',
             content,
@@ -192,6 +196,37 @@ describe('useChapterSave 冲突与离线防护', () => {
     }
   });
 
+  it('旧快照保存成功但新稿保存失败时，新稿本机备份仍保留', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirst!: (value: Chapter) => void;
+      vi.spyOn(api, 'updateChapter')
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+        .mockRejectedValueOnce(new Error('网络中断'));
+      const initialChapter = chapter('旧稿', 1);
+      const { result, rerender } = renderHook(({ content }) => useChapterSave({
+        novelId: 1, userId: 7, novelLifecycleId: "novel-life", chapter: initialChapter, title: '第一章', content, autoSaveDelay: 60_000,
+      }), { initialProps: { content: '旧稿' } });
+      rerender({ content: '第一版' });
+      let saving!: Promise<void>;
+      act(() => { saving = result.current.saveNow('manual'); });
+      rerender({ content: '尚未保存的新稿' });
+      act(() => vi.advanceTimersByTime(600));
+      expect(JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}').content).toBe('尚未保存的新稿');
+      await act(async () => {
+        const failed = expect(saving).rejects.toThrow('网络中断');
+        resolveFirst(chapter('第一版', 2));
+        await failed;
+      });
+      expect(JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}')).toMatchObject({
+        content: '尚未保存的新稿', version: 2,
+      });
+      expect(result.current.hasLocalBackup).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('离线时保留草稿，online 事件后自动重放保存', async () => {
     const updateSpy = vi
       .spyOn(api, 'updateChapter')
@@ -201,7 +236,7 @@ describe('useChapterSave 冲突与离线防护', () => {
     const { result, rerender } = renderHook(
       ({ content }) =>
         useChapterSave({
-          novelId: 1,
+          novelId: 1, userId: 7, novelLifecycleId: "novel-life",
           chapter: chapter('旧稿', 1),
           title: '第一章',
           content,
@@ -226,10 +261,11 @@ describe('useChapterSave 冲突与离线防护', () => {
 
   it('本地草稿比服务端新时通过回调恢复', async () => {
     const draft = {
-      novelId: 1,
+      novelId: 1, userId: 7, novelLifecycleId: "novel-life",
       chapterId: 10,
       title: '第一章',
       content: '崩溃前未保存的草稿',
+      identity, schemaVersion: 2,
       version: 1,
       savedAt: '2026-07-10T00:05:00.000Z',
     };
@@ -237,7 +273,7 @@ describe('useChapterSave 冲突与离线防护', () => {
     const onDraftRestored = vi.fn();
     const { result } = renderHook(() =>
       useChapterSave({
-        novelId: 1,
+        novelId: 1, userId: 7, novelLifecycleId: "novel-life",
         chapter: chapter('服务端旧稿', 1),
         title: '第一章',
         content: '服务端旧稿',

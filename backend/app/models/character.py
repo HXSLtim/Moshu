@@ -56,6 +56,15 @@ class Character(Base):
     
     # 关系
     novel = relationship("Novel", back_populates="characters")
+    appearances = relationship("CharacterAppearance", back_populates="character", cascade="all, delete-orphan")
+    relationships_as_a = relationship(
+        "CharacterRelationship", foreign_keys="CharacterRelationship.character_a_id",
+        back_populates="character_a", cascade="all, delete-orphan",
+    )
+    relationships_as_b = relationship(
+        "CharacterRelationship", foreign_keys="CharacterRelationship.character_b_id",
+        back_populates="character_b", cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Character {self.name}>"
@@ -95,9 +104,9 @@ class CharacterRelationship(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # 关系
-    character_a = relationship("Character", foreign_keys=[character_a_id])
-    character_b = relationship("Character", foreign_keys=[character_b_id])
-    novel = relationship("Novel")
+    character_a = relationship("Character", foreign_keys=[character_a_id], back_populates="relationships_as_a")
+    character_b = relationship("Character", foreign_keys=[character_b_id], back_populates="relationships_as_b")
+    novel = relationship("Novel", back_populates="character_relationships")
 
     def __repr__(self):
         return f"<Relationship {self.character_a.name} - {self.character_b.name}: {self.relationship_type}>"
@@ -127,8 +136,8 @@ class CharacterAppearance(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # 关系
-    character = relationship("Character")
-    chapter = relationship("Chapter")
+    character = relationship("Character", back_populates="appearances")
+    chapter = relationship("Chapter", back_populates="character_appearances")
 
     def __repr__(self):
         return f"<Appearance {self.character.name} in Chapter {self.chapter.chapter_number}>"

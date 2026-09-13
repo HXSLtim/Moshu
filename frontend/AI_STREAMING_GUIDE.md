@@ -1,266 +1,48 @@
-# AI实时生成内容显示功能使用指南
+# AI 请求、持久任务与候选
 
-## 功能概述
+工作区的创作对话、高级续写、局部改写统一经持久生成任务执行。HTTP 入队与实际模型运行分开；页面退出只中断本页等待，作者点击停止才向服务器发送取消命令。
 
-已成功实现实时查看AI生成内容的功能，包括：
+## 当前链路
 
-1. **打字机效果** - 逐字显示AI生成的内容
-2. **多AI实时显示** - 同时显示多个AI Agent的生成状态和内容
-3. **Agent工作流可视化** - 实时查看每个Agent的工作状态
+| 入口 | 请求与恢复 | 正文采纳 |
+|---|---|---|
+| 常驻对话 | `POST /generation/jobs`，kind 为 chat；历史合并 WritingTurn 与尚未建立轮次的真实任务 | 讨论、规划和检查只供参考；正文类任务返回 proposal，作者确认后保存 |
+| 高级续写 | kind 为 continue，保留文风、节奏、目标长度；按作品和章节恢复最近任务 | 服务器验证原文版本、哈希和生命周期后追加正文 |
+| 局部改写 | kind 为 rewrite；选区下标从 UTF-16 转为 Unicode 码点 | 原选区和可编辑候选对照，`candidate_content` 随确认命令提交 |
+| 审核与其他已有流接口 | 原 SSE 协议继续可用 | 按业务结构展示，不当作创作任务已经完成 |
 
-## 实现文件
+公共客户端为 `lib/generationJobs.ts`，高级续写和改写共用 `hooks/useGenerationTask.ts`。任务的状态为 queued、running、completed、failed、cancelled；HTTP 200/202 不代表模型完成。失败或取消时不得展示为可采纳成功结果。
 
-### 核心组件
+## 恢复和停止
 
-1. **TypewriterDisplay.tsx** - 打字机效果显示组件
-   - 逐字显示AI生成的内容
-   - 支持闪烁光标效果
-   - 显示当前Agent名称和状态
+- 入队请求包含 UUID、作品生命周期和原工具 payload；chat 内外 request_id 一致。服务端冻结章号、版本、生命周期等来源。
+- 对话按小说恢复历史、每 2 秒轮询未完成记录。已入队而尚无 WritingTurn 的任务保留真实 job_id、问题、模式、来源标题，显示等待执行；不伪造数据库轮次 ID。
+- 高级续写与改写按作品、章节、能力查询最近 30 项任务，再按章节生命周期核验；可选择本章旧任务查看之前的候选。失败的新任务不会使旧候选永久不可见。
+- 切作品、章节生命周期变化或卸载时 AbortController 中止读取，并忽略迟到结果。取消入口调用 `/generation/jobs/{id}/stop`；未知是否送达时保留错误，提示刷新核对。
+- 服务重启后不自动重放收费模型请求；过期任务记录明确失败，作者重新生成时使用新 request_id。保留对话草稿与候选，不把断网当成功。
 
-2. **MultiAiStreamDisplay.tsx** - 多AI流式内容显示组件
-   - 实时展示多个AI Agent的生成过程
-   - 显示每个Agent的状态（思考中、生成中、已完成、错误）
-   - 可折叠的UI，节省空间
-   - 显示活跃Agent数量和统计信息
+## 候选保存与身份
 
-3. **AiWritingAssistant.tsx** (已优化)
-   - 集成多AI流式显示
-   - 增强SSE事件处理
-   - 显示Agent数量和工作流信息
+`WritingProposalActions`、`useWritingProposal` 和 `writingProposalApi` 共用服务端采纳命令。显示候选时先读取真实状态，刷新后已采纳和已拒绝状态仍可恢复。
 
-## 使用说明
+正文类生成前要求作者身份核验完成且正文已保存。采纳前核验当前小说、章节生命周期、原文版本和 SHA-256；服务器在同事务中写新正文版本与采纳审计。相同确认重试复用 request_id，编辑候选内容后生成新的命令身份。
 
-### 前端集成
+确认期间再编辑正文时，保留本机新稿并提示服务器已经保存，不用回包覆盖。重新保存可进入现有版本冲突流程。生成新章使用对话的「起草下一章」，作者点击「确认创建新章」后才创建章节。
 
-组件已在 `AiWritingAssistant.tsx` 中自动集成，无需额外配置。
+## 本轮参考来源
 
-### 功能特点
+`ContextSources` 只展示服务端响应中的 context_manifest。来源包含 L1 简介、结构化大纲、核心状态和原文短摘；可按不可变 revision 回查。没有清单的旧记录不补造今天的来源，省略与失效警告如实显示。
 
-#### 1. 打字机效果
+清单是共享上下文的来源记录，不等于完整 Prompt、全书阅读证明或候选采纳条件。模型只接收预算允许的历史与正文；界面加载的全部历史不会自动全部传给模型。
 
-- **实时逐字显示** - 后端每发送一个字符，前端立即显示
-- **流畅动画** - 50ms间隔显示新字符，呈现自然打字效果
-- **光标闪烁** - 显示闪烁的光标，增强视觉效果
-- **动态追加** - 支持追加文本，显示更流畅（30ms间隔）
+## SSE 客户端契约
 
-#### 2. 多AI实时显示
+保留的流式接口统一使用 `lib/sse.ts`。`chunk`/`content` 传正文片段，`metadata`/`data` 传来源或工作流信息，`done` 是显式完成标记，`error` 必须转为失败。EOF 缺少 done 时抛出 SSEUnexpectedEOFError；AbortSignal 取消 reader。
 
-- **独立显示每个Agent** - 每个AI Agent有独立的显示面板
-- **状态追踪** - 实时显示Agent状态：
-  - 🟡 **思考中** - Agent正在分析任务
-  - 🔵 **生成中** - Agent正在生成内容
-  - 🟢 **已完成** - Agent已完成生成
-  - 🔴 **错误** - Agent生成失败
-- **文本内容实时显示** - 每个Agent生成的内容实时显示在自己的面板中
-- **统计信息** - 显示活跃Agent数量、已完成数量等
+工作区主对话和高级工具不宣称逐 token 输出。实际模型、usage、耗时以服务端执行记录为准；缺失值保持未知，不能用动画或估算替代。
 
-#### 3. 增强的SSE事件处理
-
-- **增强事件日志** - 每个事件包含时间戳、Agent信息、状态等
-- **Agent信息提取** - 自动从SSE事件中提取Agent名称和状态
-- **动态Agent数量显示** - 根据后端返回的Agent数量动态更新标题
-
-### UI效果
-
-#### 生成中
-- 显示"生成中"标签，带脉冲动画
-- 线性进度条显示生成进度
-- 每个Agent面板显示打字机效果的内容
-- 活跃的Agent带有动画效果
-
-#### 生成完成
-- Agent状态更新为"已完成"
-- 内容完整显示
-- 3秒后自动清除Agent状态
-
-### 后端要求
-
-为了正确显示每个Agent的内容，后端需要在SSE事件中返回：
-
-```javascript
-// Agent相关事件示例
-event: agent
-data: {
-  "agent": "PlotGenerator",
-  "status": "start"  // 或 "generating", "completed", "failed"
-}
-
-// 或者返回Agent列表
-Metadata: {
-  "agents": ["Agent1", "Agent2", "Agent3"],
-  "agent_names": ["PlotGenerator", "StyleAnalyzer", "ContentWriter"]
-}
-```
-
-### 与现有功能集成
-
-#### 与 AgentWorkflowVisualization 集成
-- `AgentWorkflowVisualization` 继续显示工作流步骤
-- `MultiAiStreamDisplay` 显示每个Agent的详细生成内容
-- 两者共存，提供不同维度的信息
-
-#### 与传统事件列表共存
-- MultiAI流式显示作为主要显示区域
-- 传统事件列表作为辅助显示，保留作为回退选项
-- 用户可以查看详细的事件日志进行调试
-
-## 使用场景
-
-### 场景1：单Agent生成
-- 只有一个AI生成内容
-- MultiAI面板显示唯一的Agent
-- 打字机效果逐字显示内容
-
-### 场景2：多Agent协作
-- 多个AI Agent协作生成
-- 每个Agent的内容独立显示
-- 用户可以清楚看到每个Agent的贡献
-
-### 场景3：Agent链式调用
-- Agent依次执行
-- 每个Agent完成后状态更新
-- 新的Agent开始工作时动态添加显示
-
-## 技术实现细节
-
-### 打字机效果实现
-
-```typescript
-// 核心算法：逐字显示
-let index = 0;
-const interval = setInterval(() => {
-  if (index < currentText.length) {
-    setDisplayedText(prev => prev + currentText.charAt(index));
-    index++;
-  } else {
-    clearInterval(interval);
-  }
-}, 50); // 50ms间隔
-```
-
-### 多Agent内容分配
-
-- 监听SSE的agent事件
-- 自动识别Agent状态变化
-- 将生成的文本分配给正确的Agent
-- 使用Map数据结构管理多个Agent状态
-
-### 状态管理
-
-```typescript
-// Agent状态Map
-const agents = new Map<string, AgentStreamData>([
-  [agentId, {
-    agentId: string,
-    agentName: string,
-    status: 'waiting' | 'thinking' | 'generating' | 'done' | 'error',
-    generatedText: string,
-    ...
-  }]
-]);
-```
-
-## 优化点
-
-### 性能优化
-- 使用Map数据结构，O(1)查找复杂度
-- 限制历史事件数量（最多20条）
-- 事件节流，防止频繁更新
-- 3秒后自动清理完成状态，节省内存
-
-### 用户体验优化
-- 可折叠的UI，节省空间
-- 流畅的动画效果
-- 清晰的视觉反馈（颜色、动画、状态标签）
-- 响应式设计，适配不同屏幕
-
-### 代码质量保证
-- 完整的TypeScript类型定义
-- 清晰的接口设计
-- 可重用的组件结构
-
-## 测试步骤
-
-### 1. 启动后端服务
-```bash
-# 确保SSE接口正常工作
-cd backend && python main.py
-```
-
-### 2. 启动前端
-```bash
-cd frontend && npm run dev
-```
-
-### 3. 进入工作台
-- 打开小说章节
-- 点击"AI续写"
-
-### 4. 观察实时显示
-- 应该能看到打字机效果实时显示生成的文字
-- 如果后端返回多个Agent，应该能看到每个Agent的独立显示
-
-### 5. 测试停止
-- 点击"停止生成"
-- 生成应该立即停止
-
-## 故障排查
-
-### 问题1：看不到打字机效果
-- 检查后端是否正确发送SSE事件
-- 检查浏览器控制台是否有错误信息
-- 确保SSE的onChunk回调被正确调用
-
-### 问题2：Agent信息显示不正确
-- 检查后端是否返回agent字段
-- 检查SSE事件格式是否正确
-
-### 问题3：内容显示延迟
-- 检查打字机效果的间隔时间配置
-- 确保React状态更新正常
-
-## 后续优化建议
-
-1. **支持用户选择显示模式**
-   - 紧凑模式：只显示当前活跃Agent
-   - 详细模式：显示所有Agent和历史记录
-   - 极简模式：只显示打字机效果的内容
-
-2. **性能优化**
-   - 长文本虚拟滚动
-   - 防抖处理高速输入
-   - Web Worker处理复杂文本
-
-3. **交互增强**
-   - 支持暂停/恢复生成
-   - 支持复制单个Agent的内容
-   - 支持查看Agent的详细工作日志
-
-4. **可访问性**
-   - 添加键盘快捷键
-   - 屏幕阅读器支持
-   - 高对比度模式
-
-## 总结
-
-本功能实现了：
-
-✅ 打字机效果，实时逐字显示AI生成内容
-✅ 多AI实时显示，每个Agent独立展示
-✅ Agent状态追踪，清晰显示每个Agent的工作状态
-✅ 流畅的动画效果，提升用户体验
-✅ 与现有系统无缝集成
-
-用户使用AI写作时，可以清晰地看到：
-- AI正在生成什么内容
-- 哪个AI在生成
-- 生成的进度如何
-- 多个AI如何协作完成写作任务
-
----
-
-**实现完成时间**：2025年11月19日
-**相关文件**：
-- `components/workspace/TypewriterDisplay.tsx`
-- `components/workspace/MultiAiStreamDisplay.tsx`
-- `components/workspace/AiWritingAssistant.tsx`（已优化）
+## 验证
+
+前端测试覆盖持久任务 HTTP 字段、排队历史恢复、显式停止与退出分离、来源生命周期、Unicode 重复原句选区、幂等确认、在途新稿、冲突候选保留、取消终态和历史原文恢复。
+
+运行 `npm run lint && npm run typecheck && npm run test && npm run build`。Node 25/26 环境使用 `NODE_OPTIONS=--no-experimental-webstorage`，避免原生 webstorage 与 jsdom 冲突。自动化替身与隔离 UI fixture 都不代表真实模型效果评测。

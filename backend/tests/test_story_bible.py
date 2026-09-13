@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 import app.models  # noqa: F401  # 注册完整SQLAlchemy模型
 from app.api.dependencies import get_current_user
 from app.api.routes import story_bible as story_bible_routes
+from app.crud.novel import delete_novel
 from app.db.base import Base, get_db
 from app.models.novel import Novel
 from app.models.story_bible import StoryEvent, StoryFact
@@ -89,6 +90,43 @@ def _create_fact(client: TestClient, **overrides):
     }
     payload.update(overrides)
     return client.post("/api/story-bible/facts", json=payload)
+
+
+def test_public_fact_creation_binds_current_novel_lifecycle(story_bible_api):
+    """公开事实写入不能只保存可复用的整数小说 ID。"""
+    client, db = story_bible_api
+    response = _create_fact(client)
+    assert response.status_code == 201
+    fact = db.query(StoryFact).filter_by(id=response.json()["id"]).one()
+    assert fact.novel_lifecycle_id == db.get(Novel, 2).rag_lifecycle_id
+
+
+def test_deleted_novel_ledger_cannot_leak_through_reused_id(story_bible_api):
+    """删除作品清理全部账本，其他作者复用小说主键时不能读到旧设定。"""
+    client, db = story_bible_api
+    db.add_all([
+        StoryFact(novel_id=1, subject="旧人物", attribute="身份", value="保密设定"),
+        StoryFact(novel_id=1, subject="旧人物", attribute="位置", value="旧城", status="retired"),
+        StoryEvent(novel_id=1, title="旧计划", description="保密剧情", status="planned"),
+        StoryEvent(novel_id=1, title="旧事件", description="已发生剧情", status="occurred"),
+        StoryFact(novel_id=2, subject="当前人物", attribute="身份", value="应保留"),
+        StoryEvent(novel_id=2, title="当前事件", description="应保留"),
+    ])
+    db.commit()
+
+    assert delete_novel(db, 1)
+    assert db.query(StoryFact).filter_by(novel_id=1).count() == 0
+    assert db.query(StoryEvent).filter_by(novel_id=1).count() == 0
+    assert db.query(StoryFact).filter_by(novel_id=2).count() == 1
+    assert db.query(StoryEvent).filter_by(novel_id=2).count() == 1
+
+    # 显式复用旧 ID，验证隔离不依赖数据库当前的分配顺序。
+    db.add(Novel(id=1, title="当前作者的新作品", user_id=2))
+    db.commit()
+    for resource in ("facts", "events"):
+        response = client.get(f"/api/story-bible/{resource}", params={"novel_id": 1})
+        assert response.status_code == 200
+        assert response.json() == []
 
 
 def _create_event(client: TestClient, **overrides):

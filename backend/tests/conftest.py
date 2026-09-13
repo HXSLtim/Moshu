@@ -27,6 +27,14 @@ from app.models.novel import Novel
 from app.models.user import User
 
 
+@pytest.fixture(autouse=True)
+def isolate_background_workers(monkeypatch):
+    """普通 API 测试不启动连接作者数据库的 worker；专用测试显式注入执行器。"""
+    monkeypatch.setattr(settings, "PROJECTION_WORKER_ENABLED", False)
+    monkeypatch.setattr(settings, "MEMORY_WORKER_ENABLED", False)
+    monkeypatch.setattr(settings, "WRITING_JOB_RECOVERY_ENABLED", False)
+
+
 def pytest_addoption(parser):
     """显式允许需要本机真实模型服务的集成测试。"""
 

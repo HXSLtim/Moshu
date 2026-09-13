@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Container,
   Box,
   TextField,
   Button,
@@ -19,7 +18,7 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InfoIcon from '@mui/icons-material/Info';
-import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import AuthFrame from '@/components/layout/AuthFrame';
 import { api } from '@/lib/api';
 
 export default function LoginPage() {
@@ -111,24 +110,7 @@ export default function LoginPage() {
   };
 
   return (
-    <Container maxWidth="sm">
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <ColorModeToggle />
-      </Box>
-      <Box
-        sx={{
-          mt: 8,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-        }}
-      >
-        <Typography variant="h4" component="h1" gutterBottom>
-          AI小说创作系统
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          使用Material 3「纸墨」设计语言
-        </Typography>
+    <AuthFrame title="欢迎回到 Nai" description="把想法变成章节，AI 负责协助，你保留最后决定权。">
         <Card sx={{ mt: 3, width: '100%' }}>
           <CardContent>
             <form onSubmit={handleLogin}>
@@ -140,6 +122,7 @@ export default function LoginPage() {
               <TextField
                 fullWidth
                 label="用户名"
+                placeholder="输入你的用户名"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 margin="normal"
@@ -149,6 +132,7 @@ export default function LoginPage() {
               <TextField
                 fullWidth
                 label="密码"
+                placeholder="输入密码"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -162,7 +146,7 @@ export default function LoginPage() {
                 sx={{ mt: 2 }}
                 disabled={loading || connectionStatus === 'testing'}
               >
-                {loading ? '登录中...' : '登录'}
+                {loading ? '正在进入…' : '进入写作空间'}
               </Button>
               
               {/* 连接测试按钮 */}
@@ -177,9 +161,9 @@ export default function LoginPage() {
                          connectionStatus === 'failed' ? 'error.main' : 'primary.main'
                 }}
               >
-                {connectionStatus === 'testing' ? '测试连接中...' : 
-                 connectionStatus === 'success' ? '连接正常' :
-                 connectionStatus === 'failed' ? '连接失败' : '测试API连接'}
+                {connectionStatus === 'testing' ? '检查连接中…' : 
+                 connectionStatus === 'success' ? '服务连接正常' :
+                 connectionStatus === 'failed' ? '服务连接失败' : '检查服务连接'}
               </Button>
               
               <Button
@@ -188,7 +172,7 @@ export default function LoginPage() {
                 onClick={() => router.push('/register')}
                 sx={{ mt: 1 }}
               >
-                注册账号
+                创建新账号
               </Button>
             </form>
           </CardContent>
@@ -260,7 +244,6 @@ export default function LoginPage() {
             </Accordion>
           </Card>
         )}
-      </Box>
-    </Container>
+    </AuthFrame>
   );
 }

@@ -7,11 +7,14 @@ import asyncio
 from typing import TypedDict, Dict, Any, List
 
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
+from app.services.model_provider import create_chat_model
+from app.services.model_result import parse_model_result
+from app.services.writing_execution import execution_scope, invoke_model
 from langchain.prompts import ChatPromptTemplate
 
 from app.core.config import settings
-from app.crud import story_bible as story_bible_crud
+from app.models.novel import Novel
+from app.services.context_builder import build_context_pack
 from app.db.base import SessionLocal
 from app.models.schemas import (
     GenerationRequest,
@@ -26,11 +29,11 @@ from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
 from app.services.rag_service import rag_service
 from app.services.consistency_service import consistency_service
 from app.services.context_budget import (
+    MAX_CHAT_OUTPUT_CHARS,
     MAX_STORY_CONTEXT_CHARS,
     MAX_WORLDVIEW_CONTEXT_CHARS,
     build_prompt_trace_summary,
     build_rag_query,
-    build_story_bible_context,
     compact_text,
     ensure_generation_prompt_budget,
 )
@@ -140,9 +143,11 @@ class NovelGenerationState(TypedDict):
     """小说生成工作流状态"""
     # 输入
     novel_id: int
+    actor_id: int | None
+    novel_lifecycle_id: str | None
     prompt: str
     chapter: int
-    current_day: int
+    current_day: int | None
     target_length: int
 
     # Agent输出
@@ -154,6 +159,10 @@ class NovelGenerationState(TypedDict):
     worldview_context: List[str]
     character_context: List[str]
     story_bible_context: List[str]
+    digest_context: str
+    structured_context: str
+    context_manifest: Dict[str, Any]
+    consistency_reference: Dict[str, Any]
 
     # 一致性检查结果
     consistency_result: Dict[str, Any]
@@ -173,23 +182,17 @@ class AgentService:
     def __init__(self):
         """初始化Agent服务"""
         # 初始化LLM
-        self.llm_complex = ChatOpenAI(
+        self.llm_complex = create_chat_model(
+            max_retries=0,
             model=settings.OPENAI_MODEL_COMPLEX,
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_API_BASE,
             temperature=0.8,
             max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-            timeout=settings.LLM_TIMEOUT_SECONDS,
-            max_retries=settings.LLM_MAX_RETRIES,
         )
-        self.llm_simple = ChatOpenAI(
+        self.llm_simple = create_chat_model(
+            max_retries=0,
             model=settings.OPENAI_MODEL_SIMPLE,
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_API_BASE,
             temperature=0.7,
             max_tokens=min(settings.LLM_MAX_OUTPUT_TOKENS, 1024),
-            timeout=settings.LLM_TIMEOUT_SECONDS,
-            max_retries=settings.LLM_MAX_RETRIES,
         )
 
         # 构建工作流图
@@ -229,28 +232,45 @@ class AgentService:
         return workflow.compile()
 
     @staticmethod
-    def _load_story_bible_context_sync(
+    def _load_context_pack_sync(
         novel_id: int,
         chapter: int,
-        current_day: int,
+        current_day: int | None,
+        actor_id: int | None,
+        novel_lifecycle_id: str | None,
     ):
-        """同步读取 Story Bible 事实与事件，会话用完即关。"""
-        db = SessionLocal()
-        try:
-            facts = story_bible_crud.get_active_facts_for_generation(
-                db,
-                novel_id,
-                max_chapter=chapter,
+        """内部调用仅在首次读取时解析作用域，路由必须传入已鉴权的作用域。"""
+        with SessionLocal() as db:
+            if actor_id is None and novel_lifecycle_id is None:
+                novel = db.get(Novel, novel_id)
+                if novel is None or not novel.rag_lifecycle_id:
+                    raise ValueError("小说不存在或生命周期不可用")
+                actor_id = novel.user_id
+                novel_lifecycle_id = novel.rag_lifecycle_id
+            if actor_id is None or not novel_lifecycle_id:
+                raise ValueError("生成上下文缺少完整的作者与小说生命周期")
+            pack = build_context_pack(
+                db, novel_id=novel_id, actor_id=actor_id,
+                novel_lifecycle_id=novel_lifecycle_id,
+                target_chapter=chapter, current_day=current_day,
             )
-            events = story_bible_crud.get_events_for_generation(
-                db,
-                novel_id,
-                max_chapter=chapter,
-                current_day=current_day,
-            )
-            return facts, events
-        finally:
-            db.close()
+            return pack, actor_id, novel_lifecycle_id
+
+    @staticmethod
+    def _load_consistency_reference_sync(novel_id, actor_id, novel_lifecycle_id, chapter, current_day):
+        from app.services.consistency_reference import load_consistency_reference
+        with SessionLocal() as db:
+            return load_consistency_reference(db, novel_id=novel_id, actor_id=actor_id,
+                novel_lifecycle_id=novel_lifecycle_id, chapter=chapter, current_day=current_day)
+
+    @staticmethod
+    def _assert_context_scope_sync(novel_id: int, actor_id: int, novel_lifecycle_id: str):
+        """异步 RAG 完成后再次核对作用域，拒绝删除重建期间返回的新书内容。"""
+        with SessionLocal() as db:
+            novel = db.get(Novel, novel_id)
+            if (novel is None or novel.user_id != actor_id
+                    or novel.rag_lifecycle_id != novel_lifecycle_id):
+                raise ValueError("小说已删除或生命周期已变更，请重新打开小说")
 
     async def _retrieve_context(self, state: NovelGenerationState) -> Dict:
         """
@@ -268,29 +288,37 @@ class AgentService:
         current_chapter = state.get("chapter", 1)
         max_chapter = current_chapter if current_chapter > 0 else None
 
-        # 检索世界观相关内容
+        # 数据库记忆先完成作者与生命周期验证，再进行任何异步向量检索。
         step_start = datetime.utcnow()
+        pack, actor_id, lifecycle_id = await asyncio.to_thread(
+            self._load_context_pack_sync,
+            state["novel_id"], current_chapter, state.get("current_day"),
+            state.get("actor_id"), state.get("novel_lifecycle_id"),
+        )
+        consistency_reference = await asyncio.to_thread(
+            self._load_consistency_reference_sync, state['novel_id'], actor_id, lifecycle_id,
+            current_chapter, state.get('current_day'),
+        )
         worldview_context = await rag_service.retrieve_worldview(
             novel_id=state["novel_id"],
             query=build_rag_query(state["prompt"]),
-            max_chapter=max_chapter,
+            max_chapter=max_chapter, actor_id=actor_id, novel_lifecycle_id=lifecycle_id,
         )
 
-        # 检索角色相关内容（假设提示词中包含角色名）
-        # TODO: 实际应该通过NER提取角色名
+        # 当前任务文本作为有界角色检索词；不假设书中存在名为“主角”的实体。
         character_context = await rag_service.retrieve_character_info(
             novel_id=state["novel_id"],
-            character_name="主角",  # 简化处理
-            max_chapter=max_chapter,
+            character_name=build_rag_query(state["prompt"]),
+            max_chapter=max_chapter, actor_id=actor_id, novel_lifecycle_id=lifecycle_id,
         )
 
-        story_facts, story_events = await asyncio.to_thread(
-            self._load_story_bible_context_sync,
-            state["novel_id"],
-            current_chapter,
-            state.get("current_day", 1),
+        await asyncio.to_thread(
+            self._assert_context_scope_sync, state["novel_id"], actor_id, lifecycle_id,
         )
-        story_bible_context = build_story_bible_context(story_facts, story_events)
+        # 简介已经按完整来源单元预算，不得在节点内再次截断造成清单与输入不一致。
+        story_bible_context = pack.story_bible_context
+        if pack.worldview:
+            worldview_context = [pack.worldview, *worldview_context]
         step_end = datetime.utcnow()
 
         # 记录工作流步骤
@@ -301,12 +329,13 @@ class AgentService:
             type="rag",
             agent_name="RAGService",
             title="检索上下文",
-            description="从RAG中检索世界观和角色信息，并读取不晚于当前章节的 Story Bible 事实与事件。",
+            description="检索世界观和角色，读取当前章节范围的已确认事实，以及严格早于当前章的有效简介。",
             input={
                 "novel_id": state["novel_id"],
                 "chapter": state["chapter"],
                 **build_prompt_trace_summary(state["prompt"]),
                 "max_chapter": max_chapter,
+                "current_day": state.get("current_day"),
             },
             output={
                 "worldview_chunks": len(worldview_context or []),
@@ -317,6 +346,7 @@ class AgentService:
                 "worldview_context": worldview_context[:5],
                 "character_context": character_context[:5],
                 "story_bible_context": story_bible_context[:5],
+                "context_manifest": pack.manifest,
             },
             llm={},
             status="completed",
@@ -330,6 +360,12 @@ class AgentService:
             "worldview_context": worldview_context,
             "character_context": character_context,
             "story_bible_context": story_bible_context,
+            "digest_context": pack.digest_context,
+            "structured_context": pack.structured_context,
+            "context_manifest": pack.manifest,
+            "consistency_reference": consistency_reference,
+            "actor_id": actor_id,
+            "novel_lifecycle_id": lifecycle_id,
             "workflow_steps": steps,
         }
 
@@ -356,6 +392,12 @@ class AgentService:
 
 已确认的故事事实与事件：
 {story_bible_context}
+
+前文简介（AI 提取参考，不是作者确认事实；冲突时以原文及已确认设定为准）：
+{digest_context}
+
+结构化状态与大纲（规划不是已发生剧情）：
+{structured_context}
 """),
             ("user", "剧情提示：{prompt}\n\n请描写场景的世界观和环境氛围。")
         ])
@@ -363,14 +405,17 @@ class AgentService:
         # 调用LLM
         step_start = datetime.utcnow()
         chain = prompt | self.llm_simple
-        response = await chain.ainvoke({
+        response = await invoke_model(chain, {
             "prompt": state["prompt"],
             "worldview_context": "\n".join(state.get("worldview_context", ["无相关世界观信息"])),
             "story_bible_context": "\n".join(state.get("story_bible_context", []) or ["无已确认设定"]),
+            "digest_context": state.get("digest_context", "") or "无可用前文简介",
+            "structured_context": state.get("structured_context", "") or "无结构化状态与大纲",
         })
         step_end = datetime.utcnow()
 
-        worldview_output = response.content
+        model_result = parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS)
+        worldview_output = model_result.text
         logger.info(f"Agent A输出：{worldview_output[:50]}...")
 
         steps = list(state.get("workflow_steps", []))
@@ -392,8 +437,12 @@ class AgentService:
             data_sources={
                 "worldview_context": state.get("worldview_context", [])[:5],
                 "story_bible_context": state.get("story_bible_context", [])[:5],
+                "context_manifest": state.get("context_manifest", {}),
             },
             llm={
+                "response_model": model_result.model,
+                "usage": model_result.usage,
+                "finish_reason": model_result.finish_reason,
                 "model": settings.OPENAI_MODEL_SIMPLE,
                 "temperature": 0.7,
             },
@@ -433,6 +482,12 @@ class AgentService:
 
 已确认的故事事实与事件：
 {story_bible_context}
+
+前文简介（AI 提取参考，不是作者确认事实；冲突时以原文及已确认设定为准）：
+{digest_context}
+
+结构化状态与大纲（规划不是已发生剧情）：
+{structured_context}
 """),
             ("user", "剧情提示：{prompt}\n\n请创作角色的对话、心理和动作描写。")
         ])
@@ -440,15 +495,18 @@ class AgentService:
         # 调用LLM
         step_start = datetime.utcnow()
         chain = prompt | self.llm_simple
-        response = await chain.ainvoke({
+        response = await invoke_model(chain, {
             "prompt": state["prompt"],
             "worldview_output": state["worldview_output"],
             "character_context": "\n".join(state.get("character_context", ["无相关角色信息"])),
             "story_bible_context": "\n".join(state.get("story_bible_context", []) or ["无已确认设定"]),
+            "digest_context": state.get("digest_context", "") or "无可用前文简介",
+            "structured_context": state.get("structured_context", "") or "无结构化状态与大纲",
         })
         step_end = datetime.utcnow()
 
-        character_output = response.content
+        model_result = parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS)
+        character_output = model_result.text
         logger.info(f"Agent B输出：{character_output[:50]}...")
 
         steps = list(state.get("workflow_steps", []))
@@ -470,8 +528,12 @@ class AgentService:
             data_sources={
                 "character_context": state.get("character_context", [])[:5],
                 "story_bible_context": state.get("story_bible_context", [])[:5],
+                "context_manifest": state.get("context_manifest", {}),
             },
             llm={
+                "response_model": model_result.model,
+                "usage": model_result.usage,
+                "finish_reason": model_result.finish_reason,
                 "model": settings.OPENAI_MODEL_SIMPLE,
                 "temperature": 0.7,
             },
@@ -516,18 +578,31 @@ class AgentService:
 {character_output}
 
 已确认的故事事实与事件：
-{story_bible_context}"""
+{story_bible_context}
 
+前文简介（AI 提取参考，不是作者确认事实；冲突时以原文及已确认设定为准）：
+{digest_context}
+
+结构化状态与大纲（规划不是已发生剧情）：
+{structured_context}"""
+
+        # 反馈作为模板数据传入，避免诊断中的花括号被再次解析。
+        violation_text = ""
         # 如果是重试，添加一致性违规信息
         if has_conflict and retry_count > 0:
             violations = consistency_result.get("violations", [])
             if violations:
-                violation_text = "\n".join([f"- {v}" for v in violations])
+                violation_text = compact_text("\n".join([f"- {v}" for v in violations]), MAX_STORY_CONTEXT_CHARS)
                 logger.info(f"Agent C 重试第{retry_count}次，违规信息：{violations}")
-                system_prompt += f"""
+                system_prompt += """
 
 ⚠️ 重要提醒：上一次生成的内容存在一致性问题，请在本次生成中避免以下违规：
 {violation_text}
+
+上次待修正候选：
+{previous_candidate}
+
+请在候选基础上逐项修复上述明确问题，不得重复原错误。
 
 请特别注意：
 - 时间线的合理性（角色移动、事件发生的时间间隔）
@@ -544,16 +619,21 @@ class AgentService:
         # 使用复杂模型
         step_start = datetime.utcnow()
         chain = prompt | self.llm_complex
-        response = await chain.ainvoke({
+        response = await invoke_model(chain, {
             "prompt": state["prompt"],
             "worldview_output": state["worldview_output"],
             "character_output": state["character_output"],
             "story_bible_context": "\n".join(state.get("story_bible_context", []) or ["无已确认设定"]),
+            "digest_context": state.get("digest_context", "") or "无可用前文简介",
+            "structured_context": state.get("structured_context", "") or "无结构化状态与大纲",
             "target_length": state["target_length"],
+            "violation_text": violation_text,
+            "previous_candidate": compact_text(state.get("plot_output", ""), MAX_CHAT_OUTPUT_CHARS, keep="both"),
         })
         step_end = datetime.utcnow()
 
-        plot_output = response.content
+        model_result = parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS)
+        plot_output = model_result.text
         logger.info(f"Agent C输出：{plot_output[:50]}...（共{len(plot_output)}字）")
 
         steps = list(state.get("workflow_steps", []))
@@ -578,8 +658,12 @@ class AgentService:
             },
             data_sources={
                 "story_bible_context": state.get("story_bible_context", [])[:5],
+                "context_manifest": state.get("context_manifest", {}),
             },
             llm={
+                "response_model": model_result.model,
+                "usage": model_result.usage,
+                "finish_reason": model_result.finish_reason,
                 "model": settings.OPENAI_MODEL_COMPLEX,
                 "temperature": 0.8,
             },
@@ -606,7 +690,8 @@ class AgentService:
             novel_id=state["novel_id"],
             content=state["plot_output"],
             chapter=state["chapter"],
-            current_day=state["current_day"]
+            current_day=state["current_day"],
+            reference=state.get("consistency_reference", {}),
         )
         step_end = datetime.utcnow()
 
@@ -674,9 +759,22 @@ class AgentService:
         retry_count = state.get("retry_count", 0) + 1
         return {"retry_count": retry_count}
 
-    async def generate_content(
+    async def generate_content(self, request: GenerationRequest, *, actor_id: int | None = None,
+                               novel_lifecycle_id: str | None = None) -> GenerationResponse:
+        """整轮共享截止时间，最多五次 A/B/C 模型调用。"""
+        async with execution_scope(max_model_calls=5) as execution:
+            response = await self._generate_content(
+                request, actor_id=actor_id, novel_lifecycle_id=novel_lifecycle_id,
+            )
+        response.execution = execution.snapshot()
+        return response
+
+    async def _generate_content(
         self,
-        request: GenerationRequest
+        request: GenerationRequest,
+        *,
+        actor_id: int | None = None,
+        novel_lifecycle_id: str | None = None,
     ) -> GenerationResponse:
         """
         生成小说内容
@@ -698,6 +796,8 @@ class AgentService:
         # 准备初始状态
         initial_state: NovelGenerationState = {
             "novel_id": request.novel_id,
+            "actor_id": actor_id,
+            "novel_lifecycle_id": novel_lifecycle_id,
             "prompt": bounded_prompt,
             "chapter": request.chapter,
             "current_day": request.current_day,
@@ -708,6 +808,9 @@ class AgentService:
             "worldview_context": [],
             "character_context": [],
             "story_bible_context": [],
+            "digest_context": "",
+            "structured_context": "",
+            "context_manifest": {},
             "consistency_result": {},
             "retry_count": 0,
             "workflow_steps": [],
@@ -736,7 +839,7 @@ class AgentService:
             trigger="generation.generate_content",
             novel_id=request.novel_id,
             chapter_id=request.chapter,
-            user_id=None,
+            user_id=final_state.get("actor_id"),
             summary=f"小说{request.novel_id} 第{request.chapter}章的多Agent内容生成",
             steps=steps,
         )
@@ -770,15 +873,35 @@ class AgentService:
             worldview_context=final_state.get("worldview_context", []),
             character_context=final_state.get("character_context", []),
             story_bible_context=final_state.get("story_bible_context", []),
+            context_manifest=final_state.get("context_manifest", {}),
             workflow_trace=workflow_trace,
         )
 
         logger.info(f"内容生成完成，共{len(response.final_content)}字")
         return response
 
-    async def generate_content_stream(
+    async def generate_content_stream(self, request: GenerationRequest, *, actor_id: int | None = None,
+                                      novel_lifecycle_id: str | None = None):
+        """阶段事件与普通生成使用相同的整轮截止时间和计量。"""
+        final_event = None
+        async with execution_scope(max_model_calls=5) as execution:
+            async for event in self._generate_content_stream(
+                request, actor_id=actor_id, novel_lifecycle_id=novel_lifecycle_id,
+            ):
+                if event['type'] == 'final_response':
+                    final_event = event
+                else:
+                    yield event
+        if final_event is not None:
+            final_event['data'].execution = execution.snapshot()
+            yield final_event
+
+    async def _generate_content_stream(
         self,
-        request: GenerationRequest
+        request: GenerationRequest,
+        *,
+        actor_id: int | None = None,
+        novel_lifecycle_id: str | None = None,
     ):
         """
         流式生成小说内容，yield事件
@@ -794,6 +917,8 @@ class AgentService:
         # 准备初始状态
         initial_state: NovelGenerationState = {
             "novel_id": request.novel_id,
+            "actor_id": actor_id,
+            "novel_lifecycle_id": novel_lifecycle_id,
             "prompt": bounded_prompt,
             "chapter": request.chapter,
             "current_day": request.current_day,
@@ -804,6 +929,9 @@ class AgentService:
             "worldview_context": [],
             "character_context": [],
             "story_bible_context": [],
+            "digest_context": "",
+            "structured_context": "",
+            "context_manifest": {},
             "consistency_result": {},
             "retry_count": 0,
             "workflow_steps": [],
@@ -822,7 +950,7 @@ class AgentService:
                 
                 # 根据节点名称发送事件
                 if node_name == "retrieve_context":
-                    yield {"type": "agent", "agent": "RAG", "status": "上下文检索完成", "data": {"worldview_chunks": len(node_data.get("worldview_context", [])), "character_chunks": len(node_data.get("character_context", [])), "story_bible_lines": len(node_data.get("story_bible_context", []))}}
+                    yield {"type": "agent", "agent": "RAG", "status": "上下文检索完成", "data": {"worldview_chunks": len(node_data.get("worldview_context", [])), "character_chunks": len(node_data.get("character_context", [])), "story_bible_lines": len(node_data.get("story_bible_context", [])), "context_manifest": node_data.get("context_manifest", {})}}
                     yield {"type": "agent", "agent": "Agent A", "status": "正在构思世界观...", "data": None}
                 
                 elif node_name == "agent_a_worldview":
@@ -887,7 +1015,7 @@ class AgentService:
             trigger="generation.generate_content_stream",
             novel_id=request.novel_id,
             chapter_id=request.chapter,
-            user_id=None,
+            user_id=final_state.get("actor_id"),
             summary=f"小说{request.novel_id} 第{request.chapter}章的多Agent内容生成",
             steps=steps,
         )
@@ -921,6 +1049,7 @@ class AgentService:
             worldview_context=final_state.get("worldview_context", []),
             character_context=final_state.get("character_context", []),
             story_bible_context=final_state.get("story_bible_context", []),
+            context_manifest=final_state.get("context_manifest", {}),
             workflow_trace=workflow_trace,
         )
 
@@ -972,14 +1101,11 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.8,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             existing_characters = context.get("existing_characters") or []
@@ -1008,10 +1134,10 @@ class AgentService:
             }
 
             chain = prompt | llm
-            response = await chain.ainvoke(generation_context)
+            response = await invoke_model(chain, generation_context)
             
             # 解析JSON响应
-            character_data = json.loads(response.content)
+            character_data = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             
             logger.info(f"AI生成角色: {character_data.get('name', 'Unknown')}")
             return character_data
@@ -1110,14 +1236,11 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.3,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             # 格式化关系和出场信息
@@ -1173,10 +1296,10 @@ class AgentService:
             }
             
             chain = prompt | llm
-            response = await chain.ainvoke(analysis_context)
+            response = await invoke_model(chain, analysis_context)
             
             # 解析JSON响应
-            analysis_result = json.loads(response.content)
+            analysis_result = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             analysis_result['analysis_timestamp'] = datetime.utcnow().isoformat()
             
             logger.info(f"AI角色分析完成: {context['character']['name']}")
@@ -1265,14 +1388,11 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.5,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             # 格式化上下文
@@ -1312,10 +1432,10 @@ class AgentService:
             }
             
             chain = prompt | llm
-            response = await chain.ainvoke(optimization_context)
+            response = await invoke_model(chain, optimization_context)
             
             # 解析JSON响应
-            optimization_result = json.loads(response.content)
+            optimization_result = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             
             logger.info(f"AI角色优化完成: {context['character']['name']}")
             return optimization_result
@@ -1406,21 +1526,18 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.3,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
-            response = await chain.ainvoke(context)
+            response = await invoke_model(chain, context)
             
             # 解析JSON响应
-            analysis_result = json.loads(response.content)
+            analysis_result = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             analysis_result['analysis_timestamp'] = datetime.utcnow().isoformat()
             
             logger.info(f"AI世界观分析完成: {context.get('novel_title', 'Unknown')}")
@@ -1508,21 +1625,18 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.5,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
-            response = await chain.ainvoke(context)
+            response = await invoke_model(chain, context)
             
             # 解析JSON响应
-            optimization_result = json.loads(response.content)
+            optimization_result = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             
             logger.info(f"AI世界观优化完成: {context.get('novel_title', 'Unknown')}")
             return optimization_result
@@ -1578,21 +1692,18 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.7,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
-            response = await chain.ainvoke(context)
+            response = await invoke_model(chain, context)
             
             # 解析JSON响应
-            setting_data = json.loads(response.content)
+            setting_data = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             
             logger.info(f"AI生成世界观设定: {setting_data.get('name', 'Unknown')}")
             return setting_data
@@ -1643,20 +1754,17 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.3,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
-            response = await chain.ainvoke(context)
+            response = await invoke_model(chain, context)
             
-            analysis_result = json.loads(response.content)
+            analysis_result = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             analysis_result['analysis_timestamp'] = datetime.utcnow().isoformat()
             
             logger.info(f"AI情节结构分析完成: {context.get('novel_title', 'Unknown')}")
@@ -1695,20 +1803,17 @@ class AgentService:
         """)
         
         try:
-            llm = ChatOpenAI(
+            llm = create_chat_model(
+            max_retries=0,
                 model=settings.OPENAI_MODEL_COMPLEX,
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_API_BASE,
                 temperature=0.4,
                 max_tokens=settings.LLM_MAX_OUTPUT_TOKENS,
-                timeout=settings.LLM_TIMEOUT_SECONDS,
-                max_retries=settings.LLM_MAX_RETRIES,
             )
             
             chain = prompt | llm
-            response = await chain.ainvoke(context)
+            response = await invoke_model(chain, context)
             
-            optimization_result = json.loads(response.content)
+            optimization_result = json.loads(parse_model_result(response, max_output_chars=MAX_CHAT_OUTPUT_CHARS).text)
             optimization_result['optimization_timestamp'] = datetime.utcnow().isoformat()
             
             logger.info(f"AI全面优化完成: {context.get('novel_title', 'Unknown')}")

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
-  Container,
   Box,
   Typography,
   Button,
@@ -22,14 +21,17 @@ import {
   Divider,
   LinearProgress,
   Grid,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import CreateIcon from '@mui/icons-material/Create';
-import ColorModeToggle from '@/components/layout/ColorModeToggle';
+import AppFrame from '@/components/layout/AppFrame';
 import { countTextUnits } from '@/lib/textStats';
 import { api } from '@/lib/api';
 import type {
@@ -69,6 +71,7 @@ export default function NovelDetailPage() {
 
   // AI生成状态
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // AI初始化设定状态
   const [initDialogOpen, setInitDialogOpen] = useState(false);
@@ -163,6 +166,25 @@ export default function NovelDetailPage() {
       loadMoreRequestRef.current?.controller.abort();
     };
   }, [loadNovelAndChapters]);
+
+  const handleExport = async () => {
+    if (!novel || exporting) return;
+    setExporting(true);
+    setError('');
+    try {
+      const blob = await api.exportNovelText(novelId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${novel.title.replace(/[\\/:*?"<>|]/g, '_') || '小说'}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : '导出失败，请重试');
+    } finally { setExporting(false); }
+  };
 
   const handleCreateChapter = () => {
     setChapterForm({
@@ -319,11 +341,9 @@ export default function NovelDetailPage() {
 
   if (loading) {
     return (
-      <Container maxWidth="lg">
-        <Box sx={{ mt: 4, textAlign: 'center' }}>
-          <Typography>加载中...</Typography>
-        </Box>
-      </Container>
+      <AppFrame eyebrow="项目" title="正在打开项目…" backHref="/dashboard" backLabel="返回项目列表">
+        <Box sx={{ py: 4, textAlign: 'center' }}><LinearProgress /></Box>
+      </AppFrame>
     );
   }
 
@@ -332,19 +352,27 @@ export default function NovelDetailPage() {
   }
 
   return (
-    <Container maxWidth="lg">
-      <Box sx={{ mt: 4, mb: 4 }}>
-        {/* 头部导航 */}
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-          <Button
-            startIcon={<ArrowBackIcon />}
-            onClick={() => router.push('/dashboard')}
-          >
-            返回列表
-          </Button>
-          <ColorModeToggle />
-        </Box>
-
+    <AppFrame
+      eyebrow="项目"
+      title={novel.title}
+      description={novel.description || '在这里管理章节、设定与整本导出；写作本身在工作台完成。'}
+      backHref="/dashboard"
+      backLabel="返回项目列表"
+      actions={lastChapter ? (
+        <Button
+          size="small"
+          variant="contained"
+          onClick={() => router.push(`/workspace?novel=${novelId}&chapter=${lastChapter.id}`)}
+        >
+          继续写第 {lastChapter.chapter_number} 章
+        </Button>
+      ) : (
+        <Button size="small" variant="contained" onClick={handleCreateChapter}>
+          创建第 1 章
+        </Button>
+      )}
+    >
+      <Box>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
             {error}
@@ -421,6 +449,8 @@ export default function NovelDetailPage() {
                 >
                   AI初始化设定
                 </Button>
+                <Button size="small" onClick={() => router.push(`/novels/${novelId}/story-bible`)}>管理设定与伏笔</Button>
+                <Button size="small" disabled={exporting} onClick={() => void handleExport()}>{exporting ? '导出中…' : '导出全书 TXT'}</Button>
               </Box>
             </Box>
 
@@ -591,42 +621,41 @@ export default function NovelDetailPage() {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>
-          新建章节
-        </DialogTitle>
+        <DialogTitle>新建章节</DialogTitle>
         <DialogContent>
           <Alert severity="info" sx={{ mt: 1 }}>
-            章节序号由服务端自动分配。
+            章节就像项目里的一个文件：先建出来，正文稍后在写作台里写，或直接让 AI 续写。
           </Alert>
           <TextField
             fullWidth
-            label="章节标题"
+            label="章节标题（可留空）"
             value={chapterForm.title ?? ''}
             onChange={(e) => setChapterForm({ ...chapterForm, title: e.target.value })}
             margin="normal"
             autoFocus
-            placeholder="可留空，将自动使用章节序号作为标题"
+            placeholder="留空则自动命名为第 N 章"
           />
-          <TextField
-            fullWidth
-            label="章节内容"
-            value={chapterForm.content ?? ''}
-            onChange={(e) => setChapterForm({ ...chapterForm, content: e.target.value })}
-            margin="normal"
-            multiline
-            rows={12}
-            required
-            helperText={`当前字数：${countTextUnits(chapterForm.content || '')}`}
-          />
+          <Accordion elevation={0} sx={{ mt: 2, border: 1, borderColor: 'divider', '&:before': { display: 'none' } }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Typography variant="body2">想先粘贴一段草稿？（可选）</Typography>
+            </AccordionSummary>
+            <AccordionDetails>
+              <TextField
+                fullWidth
+                label="章节正文（可留空）"
+                value={chapterForm.content ?? ''}
+                onChange={(e) => setChapterForm({ ...chapterForm, content: e.target.value })}
+                multiline
+                rows={10}
+                helperText={`当前字数：${countTextUnits(chapterForm.content || '')}`}
+              />
+            </AccordionDetails>
+          </Accordion>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenDialog(false)}>取消</Button>
-          <Button
-            onClick={handleSaveChapter}
-            variant="contained"
-            disabled={!chapterForm.content}
-          >
-            创建
+          <Button onClick={handleSaveChapter} variant="contained">
+            创建并开始写作
           </Button>
         </DialogActions>
       </Dialog>
@@ -715,6 +744,6 @@ export default function NovelDetailPage() {
           </Button>
         </DialogActions>
       </Dialog>
-    </Container>
+    </AppFrame>
   );
 }

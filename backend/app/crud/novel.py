@@ -7,6 +7,8 @@ from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.core.text_stats import count_text_units
+from app.services.chapter_memory import record_chapter_save
+from app.services.projection_jobs import enqueue_projection
 from app.models.novel import Novel, Chapter, StyleSample
 from app.models.schemas import (
     ChapterCreate,
@@ -104,6 +106,9 @@ def create_novel(db: Session, novel: NovelCreate, user_id: int) -> Novel:
         user_id=user_id
     )
     db.add(db_novel)
+    db.flush()
+    if novel.worldview is not None:
+        enqueue_projection(db, db_novel)
     db.commit()
     db.refresh(db_novel)
     return db_novel
@@ -139,8 +144,11 @@ def update_novel(
         .values(**update_data)
         .execution_options(synchronize_session=False)
     )
+    current = db.query(Novel).populate_existing().filter_by(id=novel_id).one()
+    if "worldview" in update_data:
+        enqueue_projection(db, current)
     db.commit()
-    return get_novel_by_id(db, novel_id)
+    return current
 
 
 def delete_novel(db: Session, novel_id: int) -> bool:
@@ -158,6 +166,7 @@ def delete_novel(db: Session, novel_id: int) -> bool:
     if not db_novel:
         return False
 
+    enqueue_projection(db, db_novel, delete=True)
     db.delete(db_novel)
     db.commit()
     return True
@@ -258,12 +267,18 @@ def create_chapter(
     )
     db.add(db_chapter)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as exc:
         db.rollback()
         raise ChapterNumberConflictError(
             f"章节 {chapter.chapter_number} 已存在"
         ) from exc
+    try:
+        record_chapter_save(db, db_chapter)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(db_chapter)
     return db_chapter
 
@@ -273,6 +288,7 @@ def create_next_chapter(
     novel_id: int,
     chapter: ChapterNextCreate,
     max_attempts: int = 3,
+    *, commit: bool = True,
 ) -> Chapter:
     """由服务端分配下一章节号，并在并发冲突时进行有限重试。"""
     for _ in range(max_attempts):
@@ -284,12 +300,27 @@ def create_next_chapter(
             content=chapter.content,
             word_count=count_text_units(chapter.content),
         )
-        db.add(db_chapter)
+        # SQLite legacy事务模式不会为SAVEPOINT自动开启外层事务。
+        connection = db.connection()
+        if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN")
+        attempt = db.begin_nested()
         try:
-            db.commit()
+            db.add(db_chapter)
+            db.flush()
+            attempt.commit()
         except IntegrityError:
-            db.rollback()
+            attempt.rollback()
             continue
+        try:
+            record_chapter_save(db, db_chapter)
+            if commit:
+                db.commit()
+            else:
+                db.flush()
+        except Exception:
+            db.rollback()
+            raise
         db.refresh(db_chapter)
         return db_chapter
 
@@ -299,7 +330,8 @@ def create_next_chapter(
 def update_chapter(
     db: Session,
     chapter_id: int,
-    chapter_update: ChapterUpdate
+    chapter_update: ChapterUpdate,
+    *, commit: bool = True,
 ) -> Optional[Chapter]:
     """
     更新章节
@@ -315,16 +347,22 @@ def update_chapter(
     update_data = chapter_update.model_dump(
         exclude_unset=True,
         exclude_none=True,
-        exclude={"expected_version"},
+        exclude={"expected_version", "expected_novel_lifecycle_id", "expected_chapter_lifecycle_id"},
     )
     if "content" in update_data:
         update_data["word_count"] = count_text_units(update_data["content"])
 
+    conditions = [Chapter.id == chapter_id, Chapter.version == chapter_update.expected_version]
+    if chapter_update.expected_chapter_lifecycle_id is not None:
+        conditions.append(Chapter.rag_lifecycle_id == chapter_update.expected_chapter_lifecycle_id)
+    if chapter_update.expected_novel_lifecycle_id is not None:
+        conditions.append(Chapter.novel_id.in_(db.query(Novel.id).filter(
+            Novel.rag_lifecycle_id == chapter_update.expected_novel_lifecycle_id,
+        )))
     statement = (
         update(Chapter)
         .where(
-            Chapter.id == chapter_id,
-            Chapter.version == chapter_update.expected_version,
+            *conditions,
         )
         .values(**update_data, version=Chapter.version + 1)
         .execution_options(synchronize_session=False)
@@ -338,11 +376,21 @@ def update_chapter(
             if current is None:
                 return None
             raise ChapterVersionConflictError(current.version)
-        db.commit()
     except IntegrityError as exc:
         db.rollback()
         raise ChapterNumberConflictError("目标章节号已存在") from exc
 
+    try:
+        # 条件更新绕过了 ORM 身份缓存，快照必须重新读取数据库中的新版本。
+        current = db.query(Chapter).populate_existing().filter_by(id=chapter_id).one()
+        record_chapter_save(db, current)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+    except Exception:
+        db.rollback()
+        raise
     return get_chapter_by_id(db, chapter_id)
 
 
@@ -362,6 +410,9 @@ def delete_chapter(db: Session, chapter_id: int) -> bool:
         return False
 
     try:
+        from app.services.story_memory import invalidate_chapter_sources
+        invalidate_chapter_sources(db, db_chapter, deleted=True)
+        enqueue_projection(db, db.get(Novel, db_chapter.novel_id), db_chapter, delete=True)
         db.delete(db_chapter)
         db.commit()
         return True

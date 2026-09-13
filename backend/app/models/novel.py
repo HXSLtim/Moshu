@@ -39,9 +39,20 @@ class Novel(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # 关联关系
+    story_memory_head = relationship("StoryMemoryHead", cascade="all, delete-orphan", uselist=False)
+    story_entities = relationship("StoryEntity", cascade="all, delete-orphan")
+    story_outline_nodes = relationship("OutlineNode", cascade="all, delete-orphan")
+    story_state_candidates = relationship("StateCandidate", cascade="all, delete-orphan")
+    story_memory_commands = relationship("StoryMemoryCommand", cascade="all, delete-orphan")
+    story_facts = relationship("StoryFact", cascade="all, delete-orphan")
+    story_events = relationship("StoryEvent", cascade="all, delete-orphan")
+    writing_proposals = relationship("WritingProposal", cascade="all, delete-orphan")
+    writing_adoptions = relationship("WritingAdoption", cascade="all, delete-orphan")
+    writing_turns = relationship("WritingTurn", cascade="all, delete-orphan")
     chapters = relationship("Chapter", back_populates="novel", cascade="all, delete-orphan")
     style_samples = relationship("StyleSample", back_populates="novel", cascade="all, delete-orphan")
     characters = relationship("Character", back_populates="novel", cascade="all, delete-orphan")
+    character_relationships = relationship("CharacterRelationship", back_populates="novel", cascade="all, delete-orphan")
     worldview_settings = relationship("WorldviewSetting", back_populates="novel", cascade="all, delete-orphan")
     plot_elements = relationship("PlotElement", back_populates="novel", cascade="all, delete-orphan")
     story_timelines = relationship("StoryTimeline", back_populates="novel", cascade="all, delete-orphan")
@@ -80,6 +91,8 @@ class Chapter(Base):
 
     # 关联关系
     novel = relationship("Novel", back_populates="chapters")
+    revisions = relationship("ChapterRevision", back_populates="chapter", cascade="all, delete-orphan")
+    character_appearances = relationship("CharacterAppearance", back_populates="chapter", cascade="all, delete-orphan")
 
 
 class StyleSample(Base):

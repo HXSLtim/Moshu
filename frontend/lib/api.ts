@@ -1,3 +1,5 @@
+import type { WritingTurn, WritingTurnCreate } from '@/types/writingChat';
+import { generationJobsApi, isGenerationPending, type GenerationJob } from '@/lib/generationJobs';
 import type {
   LoginRequest,
   RegisterRequest,
@@ -5,6 +7,7 @@ import type {
   User,
   Novel,
   NovelCreate,
+  IdeaParseResult,
   NovelStatistics,
   NovelStatisticsResponse,
   Chapter,
@@ -19,6 +22,7 @@ import type {
   AgentWorkflowTrace,
 } from '@/types';
 import { readSSEFromResponse, SSEEvent } from '@/lib/sse';
+import type { StoryFact, StoryFactCreate, StoryFactUpdate, StoryEvent, StoryEventCreate, StoryEventUpdate } from '@/types/storyBible';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 
@@ -136,13 +140,141 @@ const handleApiResponse = async <T>(response: Response): Promise<T> => {
     throw new ApiError(errorMessage, response.status);
   }
   
+  if (response.status === 204) return undefined as T;
   return response.json();
 };
 
 /**
  * API客户端
  */
+export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  return handleApiResponse<T>(await enhancedFetch(path, options));
+}
+
+function jobTurn(job: GenerationJob<WritingTurn>, fallback?: WritingTurnCreate): WritingTurn {
+  if (job.result) return { ...job.result, job_id: job.id, job_status: job.status };
+  return { id: 0, job_id: job.id, job_status: job.status, request_id: job.request_id,
+    novel_id: job.novel_id, novel_lifecycle_id: job.novel_lifecycle_id,
+    chapter_id: job.chapter_id ?? fallback?.chapter_id ?? 0, chapter_title: job.chapter_title ?? '已保存的创作任务',
+    mode: (job.mode as WritingTurn['mode']) ?? fallback?.mode ?? 'discuss', user_text: job.message ?? fallback?.message ?? '已保存的创作请求',
+    assistant_text: '', base_content_hash: '', status: job.status === 'queued' || job.status === 'running' ? 'pending' : job.status === 'completed' ? 'failed' : job.status,
+    error: job.error ?? (job.status === 'completed' ? '任务未返回有效对话，请重新发送' : job.status === 'cancelled' ? '已停止生成' : null), created_at: job.created_at };
+}
+
+function pauseForGeneration(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new DOMException('已停止等待', 'AbortError')); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, 1000);
+    if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
 export const api = {
+  async listWritingTurns(novelId: number, before?: number, options: RequestOptions = {}): Promise<WritingTurn[]> {
+    const turns: WritingTurn[] = await handleApiResponse(await enhancedFetch(`/writing-chat/${novelId}/turns?limit=30${before ? `&before=${before}` : ''}`, options));
+    if (before) return turns;
+    const jobs = await generationJobsApi.list<WritingTurn>(novelId, 'chat', options.signal);
+    const entries = new Map(turns.map((turn) => [turn.request_id, turn]));
+    for (const job of jobs) {
+      const turn = entries.get(job.request_id);
+      entries.set(job.request_id, turn ? { ...turn, job_id: job.id, job_status: job.status } : jobTurn(job));
+    }
+    return [...entries.values()].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  },
+  async sendWritingTurn(novelId: number, data: WritingTurnCreate, options: RequestOptions = {}): Promise<WritingTurn> {
+    if (!data.expected_novel_lifecycle_id) throw new Error('请先完成作品身份核验再发送');
+    let job = await generationJobsApi.create<WritingTurn>({ request_id: data.request_id, kind: 'chat', novel_id: novelId, expected_novel_lifecycle_id: data.expected_novel_lifecycle_id, payload: data }, options.signal);
+    while (isGenerationPending(job)) {
+      await pauseForGeneration(options.signal);
+      job = await generationJobsApi.get<WritingTurn>(novelId, job.id, options.signal);
+    }
+    return jobTurn(job, data);
+  },
+  /**
+   * 创作对话的流式入口：文本边生成边回调，工具提案单独成事件。
+   * 只有收到 done 才算完成；中途 EOF 会抛出错误，不会伪装成功。
+   */
+  async streamWritingTurn(
+    novelId: number,
+    data: WritingTurnCreate,
+    callbacks: {
+      onTurn?: (turn: Partial<WritingTurn>) => void;
+      onChunk?: (content: string) => void;
+      onTool?: (name: string, payload: Record<string, unknown>) => void;
+      onDone?: (turn: WritingTurn) => void;
+    },
+    options: RequestOptions = {},
+  ): Promise<void> {
+    const res = await enhancedFetch(`/writing-chat/${novelId}/turns/stream`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      signal: options.signal,
+    });
+    if (!res.ok) {
+      let message = `请求失败 (${res.status})`;
+      try { message = extractApiErrorMessage(await res.json(), message); } catch { /* 保持默认信息 */ }
+      throw new ApiError(message, res.status);
+    }
+    await readSSEFromResponse(res, {
+      onEvent: (event) => {
+        if (event.type === 'metadata') {
+          callbacks.onTurn?.((event.data as { turn?: Partial<WritingTurn> } | undefined)?.turn ?? {});
+        } else if (event.type === 'chunk') {
+          callbacks.onChunk?.(typeof event.content === 'string' ? event.content : '');
+        } else if (event.type === 'tool') {
+          callbacks.onTool?.(String(event.name ?? ''), (event.data as Record<string, unknown>) ?? {});
+        } else if (event.type === 'done') {
+          const payload = (event as { data?: { turn?: WritingTurn } }).data;
+          const turn = payload?.turn;
+          if (turn) callbacks.onDone?.(turn);
+        }
+      },
+    }, { signal: options.signal });
+  },
+
+  async stopWritingTurn(novelId: number, requestId: string): Promise<WritingTurn> {
+    const jobs = await generationJobsApi.list<WritingTurn>(novelId, 'chat');
+    const job = jobs.find((item) => item.request_id === requestId);
+    if (job) return jobTurn(await generationJobsApi.stop<WritingTurn>(novelId, job.id));
+    return handleApiResponse(await enhancedFetch(`/writing-chat/${novelId}/turns/${requestId}/stop`, { method: 'POST' }));
+  },
+  async listStoryFacts(novelId: number, skip = 0, limit = 20, options: RequestOptions = {}): Promise<StoryFact[]> {
+    return handleApiResponse(await enhancedFetch(`/story-bible/facts?novel_id=${novelId}&skip=${skip}&limit=${limit}`, options));
+  },
+
+  async createStoryFact(data: StoryFactCreate): Promise<StoryFact> {
+    return handleApiResponse(await enhancedFetch('/story-bible/facts', { method: 'POST', body: JSON.stringify(data) }));
+  },
+
+  async updateStoryFact(id: number, data: StoryFactUpdate): Promise<StoryFact> {
+    return handleApiResponse(await enhancedFetch(`/story-bible/facts/${id}`, { method: 'PUT', body: JSON.stringify(data) }));
+  },
+
+  async deleteStoryFact(id: number): Promise<void> {
+    return handleApiResponse(await enhancedFetch(`/story-bible/facts/${id}`, { method: 'DELETE' }));
+  },
+
+  async listStoryEvents(novelId: number, skip = 0, limit = 20, options: RequestOptions = {}): Promise<StoryEvent[]> {
+    return handleApiResponse(await enhancedFetch(`/story-bible/events?novel_id=${novelId}&skip=${skip}&limit=${limit}`, options));
+  },
+
+  async createStoryEvent(data: StoryEventCreate): Promise<StoryEvent> {
+    return handleApiResponse(await enhancedFetch('/story-bible/events', { method: 'POST', body: JSON.stringify(data) }));
+  },
+
+  async updateStoryEvent(id: number, data: StoryEventUpdate): Promise<StoryEvent> {
+    return handleApiResponse(await enhancedFetch(`/story-bible/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }));
+  },
+
+  async deleteStoryEvent(id: number): Promise<void> {
+    return handleApiResponse(await enhancedFetch(`/story-bible/events/${id}`, { method: 'DELETE' }));
+  },
+
+  async exportNovelText(novelId: number): Promise<Blob> {
+    const response = await enhancedFetch(`/novels/${novelId}/export.txt`);
+    if (!response.ok) await handleApiResponse(response);
+    return response.blob();
+  },
   // ==================== 认证相关 ====================
 
   /**
@@ -670,6 +802,18 @@ export const api = {
     return res.json();
   },
 
+  /** 把作者一段自然语言想法解析为可编辑结构化草案，不创建小说。 */
+  async parseIdea(data: { idea: string; planned_chapters?: number }): Promise<IdeaParseResult> {
+    const res = await fetch(`${API_BASE}/generation/parse-idea`, {
+      method: 'POST', headers: getHeaders(), body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(extractApiErrorMessage(error, 'AI 解析想法失败'));
+    }
+    return res.json();
+  },
+
   /**
    * 生成剧情走向选项
    */
@@ -732,11 +876,12 @@ export const api = {
     rewrite_type?: 'polish' | 'rewrite' | 'shorten' | 'extend';
     style_hint?: string;
     target_length?: number;
-  }): Promise<{ rewritten_text: string }> {
+  }, options: RequestOptions = {}): Promise<{ rewritten_text: string }> {
     const res = await fetch(`${API_BASE}/generation/rewrite`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
+      signal: options.signal,
     });
     if (!res.ok) {
       const error = await res.json();
