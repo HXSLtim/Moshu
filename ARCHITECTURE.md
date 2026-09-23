@@ -107,3 +107,16 @@ ContextPack 的 manifest 包含 scope、实际注入的 L1/L2/L3 sources、中�
 对话在请求落库前冻结 manifest，并随 WritingTurn 持久保存。重复 request_id 返回原来源，后续改稿不改写旧轮清单；旧轮次为 null，不能从当前简介伪造历史。模型返回或候选落库前复核 `memory_head_version`，结构化记忆发生变化就拒绝旧候选。高级生成在 A/B/C 独立变量注入同一简介文本，普通响应、SSE 和工作流追踪透传同一 manifest。前端只读查看来源原文，不把链接当作当前版本或恢复命令。
 
 这是按章就近召回并带 L2/L3 有界状态的当前实现；按人物/关键词检索全书、跨层下钻和原文内容的可信性自动证明仍未实现。现有历史交流仍属于候选上下文；L1 范围过滤不等于所有来源都已具备统一的叙事时点协议。
+
+## 10. 检索实现的当前边界
+
+`rag_service.hybrid_search` 目前是**向量检索 + 元数据过滤**(按 `novel_id`、`_owner_id`、
+`_novel_lifecycle`、`max_chapter`),返回的 `retrieval_method` 即 `vector_metadata`;
+**没有 BM25 或关键词分支**。`schemas.py` 里 `retrieval_method` 枚举中的 `bm25`
+只是取值定义,不代表已实现 —— 对外描述能力时应按实现口径说明。
+
+向量库为 Chroma(`chromadb.PersistentClient` + llama_index `ChromaVectorStore`),
+其本身不提供 BM25,这是"hybrid"名不副实的根因。若后续补关键词分支,注意中文的两个坑:
+SQLite FTS5 的 `trigram`/`unicode61` 分词器对**两个汉字**的查询是 0 命中,
+必须在**写入时**把中文预分词为汉字 bigram,查询端无法补救;融合排序则应引入独立 BM25 实现,
+不要指望向量库自带。

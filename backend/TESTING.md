@@ -52,11 +52,27 @@ cd backend
 
 - `client`:覆盖 `get_db` 与用户依赖,隔离真实数据库;测试用 `SECRET_KEY` 由 conftest 显式注入。
 - `mock_openai_response`:模型调用打桩,不访问 LM Studio/DeepSeek。
-- **本机代理坑**:若环境设置了 `all_proxy=socks5://...`(如 Clash),openai/httpx 会在导入阶段抛 `ImportError: socksio`。运行测试前执行:
+- **本机代理坑**:优先用 `./run_tests.sh`(它统一清理全部 8 个代理变量)。手工命令与完整原因见
+  [AGENTS.md](../AGENTS.md) 的「验证」节 —— 只 `unset ALL_PROXY all_proxy` **不够**:
+  `NO_PROXY` 里的 `[::1]` 会让 httpx 在**导入期**抛 `InvalidURL: Invalid port: ':1]'`,
+  崩在 collection 阶段且报错看起来与代理无关。
+
+## 已知陷阱:测试假绿(`SessionLocal()` 绕过 DI)
+
+夹具用 `app.dependency_overrides[get_db]` 换成隔离库,但业务代码里有直接建会话的地方 ——
+这些读写**落到真实库**,而断言查的是隔离库,于是测试永远是绿的。
 
 ```bash
-unset ALL_PROXY all_proxy
+grep -rn "SessionLocal()" app --include=*.py | wc -l   # 2026-09 复核:10 处
 ```
+
+集中在 `app/services/agent_tools.py`、`agent_service.py`,以及 `app/db/base.py`、`rag_service.py`。
+怀疑某条断言是假绿时,先确认读写的归属库:当时用于判断的库内基线是 `writing_turns` 8 条、
+`novels` 4 条(重建测试库后会变,重跑取当前值)。归属对不上就是绕过了 DI,不要先改断言。
+
+另注:`conftest.py` 同时覆盖了 `get_db` 与 `get_current_user`,因此 **`security.py` 与
+`/api/auth` 路径是零覆盖** —— 真实 token 解析、过期与越权分支在测试里跑不到,
+需要单独写不注入 override 的用例。
 
 ## 前端测试
 
