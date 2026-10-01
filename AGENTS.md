@@ -4,9 +4,9 @@
 
 ## 项目事实(先读这些,再动手)
 
-- 定位与架构原则:`README.md`、`ARCHITECTURE.md`
-- API 契约:`API对接文档.md`;测试基线:`backend/TESTING.md`
-- 历史归档(不代表现状):`PRIORITY_PLAN.md`、`FEATURE_EXTENSION_TASKS.md`
+- 定位与架构原则:`README.md`、`ARCHITECTURE.md`,文档索引:`docs/README.md`
+- API 契约:`docs/guide/API对接文档.md`;测试基线:`backend/TESTING.md`
+- 历史归档(不代表现状):`docs/plan/PRIORITY_PLAN.md`、`docs/plan/FEATURE_EXTENSION_TASKS.md`
 
 ## 语言规范
 

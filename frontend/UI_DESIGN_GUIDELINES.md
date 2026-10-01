@@ -60,7 +60,7 @@
 - 对话记录使用日志区域，生成和加载提供文本状态；避免重复播报整段历史。
 - 正文撤销与对话/设定输入框的原生撤销互不干扰。
 - 中文输入法组合期间不发送消息或触发工作台快捷键。
-- 快捷键清单与组件职责见 [前端开发指南](../前端开发指南.md)，AI 请求协议见 [AI_STREAMING_GUIDE.md](AI_STREAMING_GUIDE.md)。
+- 快捷键清单与组件职责见 [前端开发指南](../docs/guide/前端开发指南.md)，AI 请求协议见 [AI_STREAMING_GUIDE.md](AI_STREAMING_GUIDE.md)。
 
 ## 交互验收
 

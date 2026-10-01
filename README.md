@@ -55,20 +55,20 @@ PostgreSQL、Qdrant、Redis 和 Neo4j 仍属于可选演进方向。Docker Compo
 
 ## 启动与文档导航
 
-首次安装、模型配置、升级及数据库备份统一见 [QUICKSTART.md](QUICKSTART.md)，避免多处维护启动命令。
+首次安装、模型配置、升级及数据库备份统一见 [QUICKSTART.md](docs/guide/QUICKSTART.md)，避免多处维护启动命令。
 
 | 需要了解什么 | 文档 |
 |---|---|
-| 如何写作、连续交流、处理冲突与导出 | [使用指南](使用指南.md) |
+| 如何写作、连续交流、处理冲突与导出 | [使用指南](docs/guide/使用指南.md) |
 | 当前架构和数据边界 | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| AI 编排、Prompt、记忆、工具与效果评测 | [AI 应用架构评审](AI应用架构评审.md) |
-| 底层问题与分阶段改造 | [底层架构评审](底层架构评审.md)、[架构实施蓝图](架构实施蓝图.md) |
-| 原文、简介、大纲、核心设定四层 | [记忆分层设计](记忆分层设计.md)（L0-L3 当前范围已接通，受有界扫描与预算约束） |
-| 记忆实时性与真实性 | [记忆实时性与真实性改进方案](记忆实时性与真实性改进方案.md)（快照栅栏、来源和后续演进） |
-| 实施状态、验收与待办监督 | [实施监督](实施监督.md) |
-| 当前状态与下一步优先级 | [REQUIREMENTS_ANALYSIS.md](REQUIREMENTS_ANALYSIS.md) |
-| API 字段、状态及错误 | [API 对接文档](API对接文档.md) |
-| 前端模块与交互规范 | [前端开发指南](前端开发指南.md)、[工作区设计规范](frontend/UI_DESIGN_GUIDELINES.md) |
+| AI 编排、Prompt、记忆、工具与效果评测 | [AI 应用架构评审](docs/design/AI应用架构评审.md) |
+| 底层问题与分阶段改造 | [底层架构评审](docs/design/底层架构评审.md)、[架构实施蓝图](docs/design/架构实施蓝图.md) |
+| 原文、简介、大纲、核心设定四层 | [记忆分层设计](docs/design/记忆分层设计.md)（L0-L3 当前范围已接通，受有界扫描与预算约束） |
+| 记忆实时性与真实性 | [记忆实时性与真实性改进方案](docs/design/记忆实时性与真实性改进方案.md)（快照栅栏、来源和后续演进） |
+| 实施状态、验收与待办监督 | [实施监督](docs/plan/实施监督.md) |
+| 当前状态与下一步优先级 | [REQUIREMENTS_ANALYSIS.md](docs/plan/REQUIREMENTS_ANALYSIS.md) |
+| API 字段、状态及错误 | [API 对接文档](docs/guide/API对接文档.md) |
+| 前端模块与交互规范 | [前端开发指南](docs/guide/前端开发指南.md)、[工作区设计规范](frontend/UI_DESIGN_GUIDELINES.md) |
 | 对话与高级工具的传输差异 | [AI 请求指南](frontend/AI_STREAMING_GUIDE.md) |
 | 测试范围与运行方式 | [backend/TESTING.md](backend/TESTING.md) |
 | 固定质量样例与真实效果验收方法 | [evaluations/README.md](evaluations/README.md)（12 例已准备，真实评测未执行） |

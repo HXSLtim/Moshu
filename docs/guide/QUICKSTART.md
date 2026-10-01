@@ -118,12 +118,12 @@ PYBACKUP
 
 ## 检查与常见问题
 
-后端在 `backend` 目录执行 `.venv/bin/python run_tests.py --mode all`。前端在 `frontend` 目录执行 `npm run lint`、`npm run typecheck`、`npm test`、`npm run build`。测试范围与 Node 25/26 的 Web Storage 处理见 [测试指南](backend/TESTING.md)。本机 SOCKS 代理导致 httpx 导入失败时，可用 `env -u ALL_PROXY -u all_proxy` 前缀运行后端测试。
+后端在 `backend` 目录执行 `.venv/bin/python run_tests.py --mode all`。前端在 `frontend` 目录执行 `npm run lint`、`npm run typecheck`、`npm test`、`npm run build`。测试范围与 Node 25/26 的 Web Storage 处理见 [测试指南](../../backend/TESTING.md)。本机 SOCKS 代理导致 httpx 导入失败时，可用 `env -u ALL_PROXY -u all_proxy` 前缀运行后端测试。
 
 - 模型不可用：检查服务、模型标识及对应 `.env` 字段；RAG 还需要独立可用的 Embedding。
 - 保存返回 409：先在冲突弹窗对比并保留草稿，选择覆盖、采纳服务端或另存新章，避免直接刷新丢稿。
 - 对话没有逐字输出：当前对话等待完整回复，这是现有协议；高级续写使用独立 SSE 链路。
-- 旧记录没有被 AI 记住：当前历史注入有预算；有效前章简介已按预算注入对话与高级续写；当前最多最近 3 章，并非读过全书，完整召回见 [四层设计](记忆分层设计.md)。
+- 旧记录没有被 AI 记住：当前历史注入有预算；有效前章简介已按预算注入对话与高级续写；当前最多最近 3 章，并非读过全书，完整召回见 [四层设计](../design/记忆分层设计.md)。
 
 ## 启用章节简介提取
 
