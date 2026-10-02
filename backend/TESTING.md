@@ -32,6 +32,7 @@ cd backend
 | AI 路由守卫 | `test_ai_route_guards.py` | AI 端点鉴权、模型不可用时的明确降级而非崩溃 |
 | AI Prompt 契约 | `test_ai_prompt_contracts.py` | 六维审核的正文/前文花括号原样传递、重试诊断数据边界、首章禁止无界历史检索、六维审核拒绝传输被截断的有效 JSON |
 | 生成契约 | `test_generation_consistency_contract.py`、`test_agent_retry.py` | 生成结果结构、一致性状态、重试上限 |
+| 任务编排器 | `test_orchestrator.py` | 计划严格校验(环/缺生成步/编号)、DAG 顺序执行与资料注入、一致性稿件来源、作用域错误中止、路由提案落库与越权 404 |
 | 共享 L1 上下文 | `test_context_builder.py`、`test_generation_context_pack.py`、`test_writing_context.py` | 章节/版本/配方/来源核验、有界召回、存储降级、真实模型消息与来源清单一致、历史清单不随改稿变动 |
 | 对话来源迁移 | `test_context_manifest_migration.py` | 可空列升级/回退、旧轮次不伪造来源、无迁移历史旧表补列 |
 | 原文与持久任务 | `test_memory_models.py`、`test_chapter_memory_api.py` | 三表迁移/回填、正文保留、整体事务回滚、版本/任务幂等、权限与生命周期、只读来源端到端 |

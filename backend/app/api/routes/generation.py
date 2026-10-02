@@ -42,13 +42,14 @@ from app.services.conversation.tasks import TaskOptions, execute_task
 from app.services.conversation.service import writing_service
 from app.services.conversation.proposals import create_proposal
 from app.models.writing_schemas import ProposalResponse
-from app.services.context.builder import build_context_pack
+from app.services.context.builder import build_context_pack, ContextScopeError
 from types import SimpleNamespace
 from langchain.prompts import ChatPromptTemplate
 from app.core.config import settings
 import json
 import asyncio
 from app.services.context.budget import (
+    MAX_CHAT_INPUT_CHARS,
     MAX_CHAT_OUTPUT_CHARS,
     MAX_CURRENT_CONTENT_CHARS,
     MAX_GENERATION_PROMPT_CHARS,
@@ -58,6 +59,8 @@ from app.services.context.budget import (
     compact_text,
     ensure_generation_prompt_budget,
 )
+from app.services.conversation.tools import AgentScope
+from app.services.generation.orchestrator import run_orchestration
 
 router = APIRouter()
 
@@ -1126,6 +1129,85 @@ async def _continue_chapter_stream_impl(
     except Exception as e:  # noqa: BLE001
         logger.error(f"章节续写流式接口失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"续写失败: {str(e)}")
+
+
+class OrchestrateRequest(BaseModel):
+    """复合任务编排请求:指令由模型分解,正文产出仍走候选提案。"""
+
+    model_config = ConfigDict(extra="forbid")
+    novel_id: int
+    chapter_id: int = Field(gt=0)
+    current_content: str = Field(max_length=MAX_CURRENT_CONTENT_CHARS)
+    instruction: str = Field(min_length=1, max_length=MAX_CHAT_INPUT_CHARS)
+    current_day: int | None = Field(None, gt=0)
+    expected_novel_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
+    expected_chapter_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
+
+
+@router.post("/orchestrate")
+async def orchestrate_task(request: OrchestrateRequest, current_user: User = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    """复合任务编排：模型只做计划分解，执行是既有能力的确定性调度。"""
+    novel = novel_crud.get_novel_by_id(db, request.novel_id)
+    if not novel or novel.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="小说不存在或无权访问")
+    chapter = novel_crud.get_chapter_by_id(db, request.chapter_id)
+    if not chapter or chapter.novel_id != request.novel_id:
+        raise HTTPException(status_code=404, detail="章节不存在或不属于该小说")
+    _validate_source_identity(request, novel, chapter)
+    try:
+        pack = build_context_pack(
+            db, novel_id=novel.id, actor_id=novel.user_id,
+            novel_lifecycle_id=novel.rag_lifecycle_id,
+            target_chapter=chapter.chapter_number, current_day=request.current_day,
+            task='continue')
+    except ContextScopeError as exc:
+        raise HTTPException(404, "小说来源已变化，请重新打开作品") from exc
+    db.commit()
+
+    scope = AgentScope(novel_id=novel.id, actor_id=novel.user_id,
+                       novel_lifecycle_id=novel.rag_lifecycle_id,
+                       target_chapter=chapter.chapter_number,
+                       current_day=request.current_day)
+    try:
+        result = await run_orchestration(
+            llm=writing_service.llm, instruction=request.instruction,
+            context_pack=pack, current_content=request.current_content, scope=scope,
+            novel_id=novel.id, target_chapter=chapter.chapter_number,
+            current_day=request.current_day,
+            project_meta={'genre': novel.genre, 'description': novel.description})
+    except ValueError as exc:
+        # 计划非法、预算耗尽或输出契约失败，都是可向作者展示的明确失败。
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # 发布前复核身份:删除重建期间完成的编排不能落到新书。
+    db.expire_all()
+    current = novel_crud.get_novel_by_id(db, novel.id)
+    if (current is None or current.user_id != novel.user_id
+            or current.rag_lifecycle_id != novel.rag_lifecycle_id):
+        raise HTTPException(409, "小说来源已经改变，请重新生成")
+    proposal = create_proposal(
+        db, novel=SimpleNamespace(id=novel.id, rag_lifecycle_id=novel.rag_lifecycle_id),
+        actor_id=novel.user_id,
+        chapter=SimpleNamespace(id=chapter.id, version=chapter.version,
+                                rag_lifecycle_id=chapter.rag_lifecycle_id),
+        base_content=request.current_content, operation='append', content=result.text,
+        context_manifest=pack.manifest, execution=result.execution)
+    db.commit()
+    workflow_trace = result.workflow_trace.model_dump(mode='json') if result.workflow_trace else None
+    logger.info(f"编排任务完成：小说{request.novel_id}，{len(result.plan['steps'])} 步，"
+                f"产出{len(result.text)}字")
+    return {
+        'proposal_id': str(proposal.id),
+        'content': result.text,
+        'length': len(result.text),
+        'plan': result.plan,
+        'uncertainties': result.uncertainties,
+        'consistency': result.consistency,
+        'context_manifest': pack.manifest,
+        'workflow_trace': workflow_trace,
+        'execution': result.execution,
+    }
 
 
 @router.post("/outline")

@@ -299,6 +299,12 @@
 `metadata.data.context_manifest` 与本轮最终生成使用的共享包一致。上下文检索完成的 Agent 事件也携带 `data.context_manifest`；来源清单不是生成成功信号，客户端仍需等待 `done`。
 
 取消：前端 `AbortSignal` → `reader.cancel()`；服务端 `http_request.is_disconnected()` 中止。HTTP 层错误：`404`、`500`；流内错误以 `error` 事件返回。
+### POST /api/generation/orchestrate — 复合任务编排（200）
+字段：`novel_id`（>0，必填）、`chapter_id`（>0，必填）、`current_content`（当前编辑正文快照，≤50000 字符）、`instruction`（复合指令，1–4000 字符）、`current_day`（可选故事日）、`expected_novel_lifecycle_id`/`expected_chapter_lifecycle_id`（可选来源校验）。
+
+一次模型调用把复合指令分解为至多 6 步计划（`retrieve` 受权检索 / `generate` 预算内生成 / `consistency` 确定性一致性检查），按编号顺序执行；步骤依赖只能指向更小编号。响应：`proposal_id`、`content`、`length`、`plan`（实际执行的步骤计划）、`uncertainties[]`（模型上报的不确定假设）、`consistency`（如含检查步骤）、`context_manifest`、`workflow_trace`（含计划与每步的追踪）、`execution`（整轮模型调用计量，上限 7 次）。
+
+正文产出**只落候选提案**（operation=`append`），不直接改写章节；作者经提案接口采纳。计划解析或输出契约失败返回 `500` 与中文原因；预算耗尽明确失败。六维审核步骤当前不可声明。
 ### POST /api/generation/outline — 生成大纲（200）
 字段：`novel_id`（>0，必填）、`theme`（1–1000，必填）、`target_chapters`（1–80，默认 10）。响应：`{outline, chapters, context_manifest}`。
 ### POST /api/generation/character — 生成角色设定（200）
