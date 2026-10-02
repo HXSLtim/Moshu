@@ -63,4 +63,25 @@ describe('设定账本作者操作', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存设定' }));
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ novel_id: 7, involved_characters: ['林夏', '守将'], chapter: 1, story_day: 2, foreshadowing: '玉佩' })));
   });
+
+  it('批1：账本四态按状态色语义表分流，不再全灰', async () => {
+    const event = (id: number, status: 'planned' | 'occurred') => ({ id, novel_id: 7, title: `事件${id}`, description: '', story_day: 1, chapter: null, involved_characters: [], foreshadowing: null, status, created_at: '', updated_at: null });
+    vi.mocked(api.listStoryFacts).mockResolvedValueOnce([fact(1), { ...fact(2), status: 'retired' }]);
+    vi.mocked(api.listStoryEvents).mockResolvedValueOnce([event(1, 'planned'), event(2, 'occurred')]);
+    render(<StoryBibleManager novelId={7} />);
+    await screen.findByText('人物1 · 身份');
+    const chipOf = (label: string) => screen.getByText(label).closest('.MuiChip-root') as HTMLElement;
+    // 有效=success 实心；已失效=warning 描边
+    expect(chipOf('有效').className).toContain('MuiChip-colorSuccess');
+    expect(chipOf('有效').className).toContain('MuiChip-filled');
+    expect(chipOf('已失效').className).toContain('MuiChip-colorWarning');
+    expect(chipOf('已失效').className).toContain('MuiChip-outlined');
+    fireEvent.click(screen.getByRole('tab', { name: '剧情与伏笔' }));
+    await screen.findByText('事件1');
+    // 计划中=default 灰描边；已发生=success 描边
+    expect(chipOf('计划中').className).toContain('MuiChip-colorDefault');
+    expect(chipOf('计划中').className).toContain('MuiChip-outlined');
+    expect(chipOf('已发生').className).toContain('MuiChip-colorSuccess');
+    expect(chipOf('已发生').className).toContain('MuiChip-outlined');
+  });
 });

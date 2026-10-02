@@ -6,6 +6,7 @@ import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ToolCallBlock, { type ToolCallEvent } from './ToolCallBlock';
+import ReviewModePicker from './ReviewModePicker';
 import { api } from '@/lib/api';
 import { mergeWritingTurns } from '@/lib/writingChat';
 import type { AgentAction, AgentTurnResult, WritingMode, WritingTurn } from '@/types/writingChat';
@@ -272,13 +273,9 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', gap: 1, alignItems: 'center', overflow: 'hidden' }} />
         {queued && <Chip size="small" color="primary" variant="outlined" sx={{ maxWidth: 160, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }} label={`已排队：${queued}`} onDelete={() => setQueued('')} />}
         {reviewMode && (
-          <Tooltip title="AI 稿件候选的审核模式,按本书保存">
-            <Box component="span" sx={{ display: 'flex', gap: 0.25 }}>
-              {([['confirm', '每次确认'], ['auto', '自动应用'], ['none', '全自动']] as const).map(([mode, label]) => (
-                <Chip key={mode} size="small" label={label} variant={reviewMode === mode ? 'filled' : 'outlined'}
-                  color={reviewMode === mode ? 'primary' : 'default'} onClick={() => { void switchReviewMode(mode); }}
-                  sx={{ height: 22, '& .MuiChip-label': { fontSize: 11, px: 0.75 } }} />
-              ))}
+          <Tooltip title="AI 稿件候选的审核模式，按本书保存">
+            <Box component="span">
+              <ReviewModePicker value={reviewMode} onChange={(mode) => { void switchReviewMode(mode); }} />
             </Box>
           </Tooltip>
         )}

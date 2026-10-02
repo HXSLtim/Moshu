@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Alert, Box, Button, Chip, Divider, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, Divider, Stack, Typography } from '@mui/material';
+import { StatusChip } from '@/components/common/primitives';
 import { api } from '@/lib/api';
 import type { AgentAction, WritingTurn } from '@/types/writingChat';
 
@@ -59,7 +60,7 @@ export default function AgentActionsCard({ novelId, turnId, actions, uncertainti
     return <Box sx={{ mt: 1.5 }}>
       {actions.map((action, index) => <Box key={index} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
         <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>
-        <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ mt: 0.25, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />
+        <StatusChip tone={action.decision === 'applied' ? 'achieved' : 'rejected'} label={action.decision === 'applied' ? '已写入' : '已跳过'} />
       </Box>)}
       <Alert severity="info" sx={{ mt: 1 }}>已处理：写入 {appliedCount} 项，跳过 {skippedCount} 项。</Alert>
     </Box>;
@@ -82,7 +83,7 @@ export default function AgentActionsCard({ novelId, turnId, actions, uncertainti
             <Typography variant="body2" fontWeight={700}>{sectionLabel[kind]}</Typography>
             {grouped[kind].map((action, index) => <Box key={index} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>
-              {action.decision && <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ mt: 0.25, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />}
+              {action.decision && <StatusChip tone={action.decision === 'applied' ? 'achieved' : 'rejected'} label={action.decision === 'applied' ? '已写入' : '已跳过'} />}
             </Box>)}
           </Box>
         ))}
@@ -108,5 +109,5 @@ export { describe as describeAgentAction };
 
 /** Chip 形式的摘要，供列表或提示使用。 */
 export function AgentActionChips({ actions }: { actions: AgentAction[] }) {
-  return <Stack direction="row" gap={0.5} flexWrap="wrap">{actions.map((action, index) => <Chip key={index} size="small" variant="outlined" label={describe(action)} />)}</Stack>;
+  return <Stack direction="row" gap={0.5} flexWrap="wrap">{actions.map((action, index) => <StatusChip key={index} size="small" tone="neutral" label={describe(action)} />)}</Stack>;
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { StatusChip } from '@/components/common/primitives';
 import { storyMemoryApi, storyEntityLabel } from '@/lib/storyMemory';
 import { chapterMemoryApi } from '@/lib/chapterMemory';
 import type { ChapterRevision } from '@/types/chapterMemory';
@@ -12,6 +13,8 @@ interface Props { novelId: number; novelLifecycleId: string; chapterId: number |
 const entityLabels = { character: '人物', item: '物品', location: '地点', organization: '组织' };
 const attributeLabels: Record<string, string> = { owner: '所有者', holder: '持有者', quantity: '数量' };
 const candidateLabels = { pending: '待审阅', confirmed: '已确认', rejected: '已拒绝', revoked: '已撤销' };
+/** 批1 状态章语义：待审阅中性实心、已确认绿实心、已拒绝/已撤销灰描边（正常裁决非错误）；来源未确认走琥珀描边。 */
+const candidateTones: Record<string, 'pending' | 'success' | 'rejected'> = { pending: 'pending', confirmed: 'success', rejected: 'rejected', revoked: 'rejected' };
 const sourceLabel = (status: string) => status === 'ready' ? '来源有效' : '原文已变化，待重核';
 
 function MemoryWorkspace({ novelId, novelLifecycleId, chapterId, chapterNumber }: Props) {
@@ -117,7 +120,11 @@ function MemoryWorkspace({ novelId, novelLifecycleId, chapterId, chapterNumber }
               <Typography variant="caption">{node.kind === 'volume' ? '卷' : node.kind === 'chapter' ? '章' : '场景'}{node.chapter_number ? ` · 第 ${node.chapter_number} 章` : ''}{node.parent_id ? ` · 上级：${data.outline_nodes.find((x) => x.id === node.parent_id)?.title ?? '不可用'}` : ''}</Typography>
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>冲突：{node.conflict || '未填写'}</Typography>
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{status === 'planned' ? '预期结果' : '结果'}：{node.outcome || '未填写'}</Typography>
-              <Chip size="small" color={node.source_status === 'ready' ? 'default' : 'warning'} label={`${node.origin === 'ai' ? 'AI 提取参考' : '作者维护'} · ${sourceLabel(node.source_status)}`} />
+              <Stack direction="row" gap={1} flexWrap="wrap">
+                {/* 属性来源与状态语义分章（走查 Top1 连坐拆分）：属性=neutral 描边、来源有效=success 描边、待重核=琥珀描边 */}
+                <StatusChip size="small" tone="neutral" label={node.origin === 'ai' ? 'AI 提取参考' : '作者维护'} />
+                <StatusChip size="small" tone={node.source_status === 'ready' ? 'achieved' : 'stale'} label={sourceLabel(node.source_status)} />
+              </Stack>
               {refs(node.source_refs)}
               <Stack direction="row" gap={1} sx={{ mt: 1 }}><Button size="small" disabled={busy} onClick={() => open({ kind: 'outline', outline: node })}>编辑{node.title}</Button>{node.source_status !== 'ready' && <Button size="small" disabled={busy} onClick={() => open({ kind: 'resolve', outline: node })}>重新核对来源</Button>}</Stack>
             </CardContent></Card>)}
@@ -148,7 +155,7 @@ function MemoryWorkspace({ novelId, novelLifecycleId, chapterId, chapterNumber }
           <Typography variant="subtitle2">{data.entities.find((x) => x.id === state.entity_id) ? storyEntityLabel(data.entities.find((x) => x.id === state.entity_id)) : state.subject} · {attributeLabels[state.attribute] ?? state.attribute}</Typography>
           <Typography sx={{ whiteSpace: 'pre-wrap' }}>{state.value}{state.value_entity_id ? `（关联：${storyEntityLabel(data.entities.find((x) => x.id === state.value_entity_id))}）` : ''}</Typography>
           <Typography variant="caption">{state.chapter_established ? `第 ${state.chapter_established} 章生效` : '全书有效'}{state.retired_chapter ? ` · 第 ${state.retired_chapter} 章起失效` : ''}{state.status === 'revoked' ? ' · 已撤销' : ''}</Typography>
-          <Box><Chip size="small" color={state.source_status === 'ready' ? 'default' : 'warning'} label={sourceLabel(state.source_status)} /></Box>
+          <Box><StatusChip size="small" tone={state.source_status === 'ready' ? 'achieved' : 'stale'} label={sourceLabel(state.source_status)} /></Box>
           {refs(state.source_refs)}
           <Stack direction="row" gap={1}><Button size="small" disabled={busy || state.status === 'revoked'} onClick={() => open({ kind: 'state', state })}>修正状态</Button>{state.source_status !== 'ready' && <Button size="small" disabled={busy || state.status === 'revoked'} onClick={() => open({ kind: 'resolve', state })}>重新核对来源</Button>}</Stack>
         </CardContent></Card>)}
@@ -161,7 +168,7 @@ function MemoryWorkspace({ novelId, novelLifecycleId, chapterId, chapterNumber }
           <Typography variant="subtitle2">{storyEntityLabel(data.entities.find((x) => x.id === candidate.entity_id))} · {attributeLabels[candidate.attribute] ?? candidate.attribute}</Typography>
           <Typography sx={{ whiteSpace: 'pre-wrap' }}>{candidate.value}</Typography>
           <Typography variant="caption">从第 {candidate.effective_chapter} 章生效</Typography>
-          <Stack direction="row" flexWrap="wrap" gap={1}><Chip size="small" label={candidateLabels[candidate.status]} /><Chip size="small" color={candidate.source_status === 'ready' ? 'default' : 'warning'} label={sourceLabel(candidate.source_status)} /></Stack>
+          <Stack direction="row" flexWrap="wrap" gap={1}><StatusChip tone={candidateTones[candidate.status] ?? 'neutral'} label={candidateLabels[candidate.status] ?? candidate.status} /><StatusChip size="small" tone={candidate.source_status === 'ready' ? 'achieved' : 'stale'} label={sourceLabel(candidate.source_status)} /></Stack>
           {candidate.reason && <Typography variant="body2">审阅理由：{candidate.reason}</Typography>}
           {refs(candidate.source_refs)}
           {candidate.status === 'pending' && <Stack direction="row" gap={1} sx={{ mt: 1 }}>
