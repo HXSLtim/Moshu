@@ -35,18 +35,26 @@ export function useWritingProposal(props: WritingScope) {
     try {
       if (decision === 'accept' && !snapshot.canApply) throw new Error('请先保存正文并完成身份核验，再采纳候选');
       const proposal = await writingProposalApi.get(snapshot.novelId, proposalId, controller.signal);
-      if (!sameScope()) return;
+      if (!sameScope()) return; // 读取无副作用；界面上下文已切换时静默放弃，重挂载后经 get 自愈。
       if (proposal.novel_lifecycle_id !== snapshot.novelLifecycleId || proposal.novel_id !== snapshot.novelId) throw new Error('候选作品来源已变化，请重新打开作品');
       if (proposal.status !== 'pending') { setDecisions((old) => ({ ...old, [proposalId]: proposal.status })); return; }
-      if (decision === 'accept' && (proposal.chapter_id !== snapshot.chapterId || proposal.chapter_lifecycle_id !== snapshot.chapterLifecycleId || proposal.base_version !== snapshot.chapterVersion || await contentHash(snapshot.currentContent) !== proposal.base_content_hash || !sameDraft())) {
-        throw new Error('正文、版本或来源已变化，请先保存并重新生成候选');
+      // 位置、版本与来源冲突一律交服务端裁决：expected_version/expected_content_hash 随请求发送，
+      // 409 响应体的拒绝原因直接展示。保留的两项检查均为客户端独有信息、服务端无法误判：
+      // ① hash——编辑器未保存的本地修改服务端不可见，这是唯一能防止「采纳成功但本地新稿被候选覆盖丢失」的闸门；
+      // ② sameDraft——请求发起瞬间的在途编辑与权限竞态，同样只有客户端可见。
+      if (decision === 'accept' && (await contentHash(snapshot.currentContent) !== proposal.base_content_hash || !sameDraft())) {
+        throw new Error('正文已经改动，和这条候选对不上了——请先保存修改，再让 AI 重新生成一稿');
       }
       const key = JSON.stringify([proposalId, decision, candidateContent]);
       const requestId = requestIds.current.get(key) ?? crypto.randomUUID(); requestIds.current.set(key, requestId);
       const result = decision === 'accept'
         ? await writingProposalApi.accept(snapshot.novelId, proposalId, { request_id: requestId, expected_version: proposal.base_version, expected_content_hash: proposal.base_content_hash, ...(candidateContent === undefined ? {} : { candidate_content: candidateContent }) }, controller.signal)
         : await writingProposalApi.reject(snapshot.novelId, proposalId, requestId, controller.signal);
-      if (!sameScope()) return;
+      if (!sameScope()) {
+        // 决定已在服务器落库，不静默吞掉结果；组件若已卸载，重挂载时会经 get 读到最新状态。
+        setError('这条候选已在服务器处理完成，界面上下文已切换；请刷新对话查看结果');
+        return;
+      }
       setDecisions((old) => ({ ...old, [proposalId]: result.proposal.status }));
       if (result.chapter) {
         if (sameDraft()) snapshot.onProposalAccepted?.(result.chapter);

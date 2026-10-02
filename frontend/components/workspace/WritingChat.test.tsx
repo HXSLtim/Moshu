@@ -2,7 +2,7 @@ import React from 'react';
 import { webcrypto } from 'node:crypto';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import { contentHash } from '@/lib/writingChat';
 import { writingProposalApi } from '@/lib/writingProposal';
 import { chapterMemoryApi } from '@/lib/chapterMemory';
@@ -129,14 +129,27 @@ describe('服务端候选确认', () => {
     expect(props.onContentGenerated).not.toHaveBeenCalled();
   });
 
-  it('同整数ID但章节生命周期改变时拒绝采纳', async () => {
+  it('同整数ID但章节生命周期改变时交服务端裁决，展示服务端拒绝原因', async () => {
+    const hash = await contentHash(props.currentContent);
     vi.mocked(api.listWritingTurns).mockResolvedValue([{ ...turn, proposal_id: 'p1', base_version: 2, novel_lifecycle_id: 'n1', chapter_lifecycle_id: '旧章' }]);
-    vi.spyOn(writingProposalApi, 'get').mockResolvedValue({ id: 'p1', novel_id: 1, novel_lifecycle_id: 'n1', chapter_id: 2, chapter_lifecycle_id: '旧章', base_version: 2, base_content_hash: '', operation: 'append', status: 'pending' });
-    const accept = vi.spyOn(writingProposalApi, 'accept');
+    vi.spyOn(writingProposalApi, 'get').mockResolvedValue({ id: 'p1', novel_id: 1, novel_lifecycle_id: 'n1', chapter_id: 2, chapter_lifecycle_id: '旧章', base_version: 2, base_content_hash: hash, operation: 'append', status: 'pending' });
+    const serverReason = '这稿是按当时的章节情况准备的，现在书里的章节有了变化。要不要按最新的章节重新生成一稿？';
+    const accept = vi.spyOn(writingProposalApi, 'accept').mockRejectedValue(new ApiError(serverReason, 409));
     render(<WritingChat {...props} canApply chapterVersion={2} novelLifecycleId="n1" chapterLifecycleId="新章" />);
     await waitFor(() => expect((screen.getByRole('button', { name: '采纳到本章' }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: '采纳到本章' }));
-    await screen.findByText('正文、版本或来源已变化，请先保存并重新生成候选');
+    await screen.findByText(serverReason);
+    expect(accept).toHaveBeenCalledWith(1, 'p1', expect.objectContaining({ expected_version: 2, expected_content_hash: hash }), expect.any(AbortSignal));
+  });
+
+  it('正文与候选基础不一致时提示先保存，不发采纳请求', async () => {
+    vi.mocked(api.listWritingTurns).mockResolvedValue([{ ...turn, proposal_id: 'p1', base_version: 2, novel_lifecycle_id: 'n1', chapter_lifecycle_id: 'c1' }]);
+    vi.spyOn(writingProposalApi, 'get').mockResolvedValue({ id: 'p1', novel_id: 1, novel_lifecycle_id: 'n1', chapter_id: 2, chapter_lifecycle_id: 'c1', base_version: 2, base_content_hash: '过期的哈希', operation: 'append', status: 'pending' });
+    const accept = vi.spyOn(writingProposalApi, 'accept');
+    render(<WritingChat {...props} canApply chapterVersion={2} novelLifecycleId="n1" chapterLifecycleId="c1" />);
+    await waitFor(() => expect((screen.getByRole('button', { name: '采纳到本章' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: '采纳到本章' }));
+    await screen.findByText('正文已经改动，和这条候选对不上了——请先保存修改，再让 AI 重新生成一稿');
     expect(accept).not.toHaveBeenCalled();
   });
 
