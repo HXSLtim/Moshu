@@ -72,8 +72,8 @@ class TestGenerationAPI:
         assert response.status_code == 200
         data = response.json()
         assert "final_content" in data
-        assert "agent_outputs" in data
-        assert len(data["agent_outputs"]) == 3
+        assert "stage_outputs" in data
+        assert len(data["stage_outputs"]) == 3
         assert data["novel_id"] == 1
         assert data["chapter"] == 1
 

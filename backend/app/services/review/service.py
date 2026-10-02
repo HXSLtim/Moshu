@@ -1,4 +1,4 @@
-"""小说审核多Agent服务
+"""小说六维审核工作流
 
 实现小说上线前的完整审核流程，包括：
 1. 章节节奏审核 Agent
@@ -14,7 +14,7 @@ from typing import TypedDict, Dict, Any, List, Optional
 from datetime import datetime
 from app.services.model.provider import create_chat_model
 from app.core.config import settings
-from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
+from app.models.workflow_schemas import WorkflowStep, WorkflowTrace
 from app.services.context.budget import (
     build_previous_chapter_context,
     build_review_content,
@@ -108,7 +108,7 @@ class ComprehensiveReviewResult(TypedDict):
 # ========== 审核 Agent 服务 ==========
 
 class ReviewAgentService:
-    """小说审核多Agent服务"""
+    """小说六维审核工作流"""
 
     def __init__(self):
         """初始化审核服务"""
@@ -215,7 +215,7 @@ class ReviewAgentService:
                 logger.error(f"审核Agent {agent_name} 失败: {result}")
                 failed_at = datetime.utcnow()
                 workflow_steps.append(
-                    AgentWorkflowStep(
+                    WorkflowStep(
                         id=f"{agent_name}_review_failed",
                         parent_id=None,
                         type="agent",
@@ -267,14 +267,14 @@ class ReviewAgentService:
         )
         
         # 构建工作流追踪
-        workflow_trace = AgentWorkflowTrace(
+        workflow_trace = WorkflowTrace(
             run_id=run_id,
             trigger="review.comprehensive",
             novel_id=novel_id,
             chapter_id=chapter_id,
             user_id=None,
             summary=f"小说{novel_id} 第{chapter_number}章 综合审核",
-            steps=[AgentWorkflowStep(**step) for step in workflow_steps],
+            steps=[WorkflowStep(**step) for step in workflow_steps],
         )
         
         review_status = (

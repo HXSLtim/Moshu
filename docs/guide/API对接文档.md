@@ -232,7 +232,7 @@
 | current_day | int/null | 否 | >0，默认 null（未知）；未知时跳过按日检查 |
 | target_length | int | 否 | 100–8000，默认 500 |
 
-响应含 `final_content`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`context_manifest`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的目标章有效事实 / 已发生事件。`context_manifest` 为共享上下文清单对象（schema 默认 `{}`），字段与边界见下文「共享上下文清单」；工作流检索步骤和 A/B/C 的 `data_sources.context_manifest` 保留相同清单。错误：`404`、`422` 提示词超预算、`500`。
+响应含 `final_content`、`stage_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`context_manifest`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的目标章有效事实 / 已发生事件。`context_manifest` 为共享上下文清单对象（schema 默认 `{}`），字段与边界见下文「共享上下文清单」；工作流检索步骤和 A/B/C 的 `data_sources.context_manifest` 保留相同清单。错误：`404`、`422` 提示词超预算、`500`。
 ### POST /api/generation/plot-options — 剧情走向选项（200）
 
 | 字段 | 类型 | 必填 | 约束 |
@@ -284,7 +284,7 @@
 | style_sample_id | int | 否 | 可空 |
 | plot_direction_hint | string | 否 | ≤600 |
 
-响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`context_manifest`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 包含世界观/角色块与 Story Bible 上下文；L1 简介通过独立 Prompt 变量注入，来源清单由 `context_manifest` 返回。错误：`404`、`500`。
+响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`stage_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`context_manifest`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 包含世界观/角色块与 Story Bible 上下文；L1 简介通过独立 Prompt 变量注入，来源清单由 `context_manifest` 返回。错误：`404`、`500`。
 ### POST /api/generation/continue-stream — 章节续写（SSE 流式）
 请求字段同 `/continue`。响应 `Content-Type: text/event-stream`，`data:` 行为 JSON：
 

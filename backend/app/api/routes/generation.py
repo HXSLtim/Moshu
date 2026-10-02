@@ -20,7 +20,7 @@ from app.models.schemas import (
     IdeaParseRequest,
     IdeaParseResponse,
 )
-from app.services.generation.workflow import agent_service
+from app.services.generation.workflow import generation_workflow
 from app.services.rag import rag_service
 from app.db.base import get_db
 from app.crud import novel as novel_crud
@@ -329,7 +329,7 @@ async def generate_content(
             request.chapter,
             len(request.prompt),
         )
-        response = await agent_service.generate_content(
+        response = await generation_workflow.generate_content(
             request, actor_id=novel.user_id, novel_lifecycle_id=novel.rag_lifecycle_id,
         )
         return response
@@ -836,7 +836,7 @@ async def continue_chapter(
             current_day=request.current_day,
             target_length=request.target_length,
         )
-        response = await agent_service.generate_content(
+        response = await generation_workflow.generate_content(
             gen_request, actor_id=novel.user_id, novel_lifecycle_id=novel.rag_lifecycle_id,
         )
 
@@ -845,7 +845,7 @@ async def continue_chapter(
             content=response.final_content, context_manifest=response.context_manifest, execution=response.execution)
         db.commit()
 
-        # 工作流追踪（用于前端可视化多Agent执行过程）
+        # 工作流追踪（用于前端可视化工作流执行过程）
         workflow_trace = (
             response.workflow_trace.model_dump()
             if getattr(response, "workflow_trace", None) is not None
@@ -866,7 +866,7 @@ async def continue_chapter(
             "rag_story_context": response.worldview_context + response.character_context + response.story_bible_context,
             "context_manifest": response.context_manifest,
             "execution": response.execution,
-            "agent_outputs": [output.model_dump() for output in response.agent_outputs],
+            "stage_outputs": [output.model_dump() for output in response.stage_outputs],
             "consistency_checks": [
                 check.model_dump() for check in response.consistency_checks
             ],
@@ -895,7 +895,7 @@ async def _continue_chapter_stream_impl(
 ):
     """章节续写流式接口
     
-    使用与 `/generation/continue` 相同的多Agent工作流，但通过SSE将结果按块推送给前端，
+    使用与 `/generation/continue` 相同的生成工作流，但通过SSE将结果按块推送给前端，
     以便工作台实现真正的流式展示效果。
     """
     try:
@@ -1037,7 +1037,7 @@ async def _continue_chapter_stream_impl(
         async def event_generator():
             """SSE事件生成器"""
             try:
-                async for event in agent_service.generate_content_stream(
+                async for event in generation_workflow.generate_content_stream(
                     gen_request, actor_id=generation_actor_id,
                     novel_lifecycle_id=generation_lifecycle_id,
                 ):
@@ -1070,7 +1070,7 @@ async def _continue_chapter_stream_impl(
                             "rag_story_context": response.worldview_context + response.character_context + response.story_bible_context,
                             "context_manifest": response.context_manifest,
                             "execution": response.execution,
-                            "agent_outputs": [output.model_dump() for output in response.agent_outputs],
+                            "stage_outputs": [output.model_dump() for output in response.stage_outputs],
                             "consistency_checks": [
                                 check.model_dump() for check in response.consistency_checks
                             ],
@@ -1186,7 +1186,7 @@ async def test_generation(
             chapter=1,
             target_length=500
         )
-        response = await agent_service.generate_content(
+        response = await generation_workflow.generate_content(
             request, actor_id=novel.user_id, novel_lifecycle_id=novel.rag_lifecycle_id,
         )
         return {

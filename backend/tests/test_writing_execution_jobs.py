@@ -266,10 +266,10 @@ async def test_sse_disconnect_keeps_persistent_generation(job_db, monkeypatch):
     async def model_stream(*_args, **_kwargs):
         entered.set(); await asyncio.to_thread(release.wait)
         yield {'type': 'final_response', 'data': GenerationResponse(
-            novel_id=1, chapter=1, final_content='灯下的人摘下斗笠。', agent_outputs=[], consistency_checks=[],
+            novel_id=1, chapter=1, final_content='灯下的人摘下斗笠。', stage_outputs=[], consistency_checks=[],
             retry_count=0, final_consistency=FinalConsistencyStatus(status='incomplete', has_conflict=False,
             retry_exhausted=False, is_complete=False, checks_skipped=['未执行'], violations=[]), generated_at=datetime.utcnow())}
-    monkeypatch.setattr(generation.agent_service, 'generate_content_stream', model_stream)
+    monkeypatch.setattr(generation.generation_workflow, 'generate_content_stream', model_stream)
     disconnected = SimpleNamespace(is_disconnected=AsyncMock(return_value=True))
     with job_db() as db:
         response = await generation.continue_chapter_stream(request=generation.ContinueRequest(
@@ -311,11 +311,11 @@ async def test_retry_prompt_contains_previous_candidate_and_specific_problems():
     """真实渲染的修稿请求同时包含旧候选及逐项问题，花括号不二次解释。"""
     from langchain_core.messages import AIMessage
     from langchain_core.runnables import RunnableLambda
-    from app.services.generation.workflow import AgentService
+    from app.services.generation.workflow import GenerationWorkflow
     seen = []
     async def answer(prompt):
         seen.extend(prompt.to_messages()); return AIMessage(content='修正候选')
-    service = AgentService.__new__(AgentService); service.llm_complex = RunnableLambda(answer)
+    service = GenerationWorkflow.__new__(GenerationWorkflow); service.llm_complex = RunnableLambda(answer)
     previous = '他带着{神剑}瞬间横跨千里。'
     problem = '同一天从甲城到乙城违反{"距离":1000}的设定。'
     await service._agent_c_plot(dict(prompt='保持情节继续', worldview_output='世界', character_output='人物',

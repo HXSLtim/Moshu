@@ -15,7 +15,7 @@ from app.models.memory import ChapterDigest, ChapterRevision
 from app.models.novel import Novel
 from app.models.schemas import ChapterCreate, ChapterUpdate, GenerationRequest
 from app.models.user import User
-from app.services.generation.workflow import AgentService
+from app.services.generation.workflow import GenerationWorkflow
 from app.services.context.builder import build_context_pack
 from app.services.memory.config import digest_recipe_version
 
@@ -65,7 +65,7 @@ def _service_with_real_prompts(monkeypatch):
     async def answer(prompt):
         seen.append('\n'.join(message.content for message in prompt.to_messages()))
         return AIMessage(content='候选正文', response_metadata={'finish_reason': 'stop'})
-    service = AgentService.__new__(AgentService)
+    service = GenerationWorkflow.__new__(GenerationWorkflow)
     service.llm_simple = service.llm_complex = RunnableLambda(answer)
     async def consistency(_state):
         return {'consistency_result': {'has_conflict': False, 'is_complete': False, 'checks_skipped': ['knowledge_graph']}}
@@ -137,8 +137,8 @@ async def test_scope_changed_during_rag_cannot_reach_model(generation_memory, mo
 def test_internal_call_resolves_scope_once_without_unbounded_fallback(generation_memory):
     """内部调用允许从真实小说解析作用域，但不存在的小说不能降级为全库召回。"""
     _, expected_pack, _ = generation_memory
-    pack, owner, lifecycle = AgentService._load_context_pack_sync(1, 3, None, None, None)
+    pack, owner, lifecycle = GenerationWorkflow._load_context_pack_sync(1, 3, None, None, None)
     assert (owner, lifecycle) == (1, 'current-life')
     assert pack.manifest == expected_pack.manifest
     with pytest.raises(ValueError, match='不存在'):
-        AgentService._load_context_pack_sync(999, 3, None, None, None)
+        GenerationWorkflow._load_context_pack_sync(999, 3, None, None, None)

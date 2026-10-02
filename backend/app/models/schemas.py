@@ -9,7 +9,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models.workflow_schemas import AgentWorkflowTrace
+from app.models.workflow_schemas import WorkflowTrace
 
 
 # 持久化请求保留比单次模型上下文更宽的容量，但不允许无界输入。
@@ -94,7 +94,7 @@ class Token(BaseModel):
 
 # ========== 枚举类型 ==========
 
-class AgentType(str, Enum):
+class StageType(str, Enum):
     """Agent类型枚举"""
     WORLDVIEW = "worldview"  # 世界观Agent
     CHARACTER = "character"  # 角色Agent
@@ -450,9 +450,9 @@ class InitNovelRequest(StrictWriteModel):
     theme: Optional[str] = Field(None, max_length=1_000, description="故事主题或补充设定提示")
 
 
-class AgentOutput(BaseModel):
+class StageOutput(BaseModel):
     """单个Agent的输出"""
-    agent_type: AgentType
+    agent_type: StageType
     content: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -481,7 +481,7 @@ class GenerationResponse(BaseModel):
     novel_id: int
     chapter: int
     final_content: str
-    agent_outputs: List[AgentOutput]
+    stage_outputs: List[StageOutput]
     consistency_checks: List[ConsistencyCheckResult]
     retry_count: int = 0
     final_consistency: FinalConsistencyStatus
@@ -491,9 +491,9 @@ class GenerationResponse(BaseModel):
     story_bible_context: List[str] = Field(default_factory=list)
     context_manifest: Dict[str, Any] = Field(default_factory=dict, description="本次实际注入的分层记忆来源与省略原因")
     rag_results: List[Dict[str, Any]] = Field(default_factory=list)
-    workflow_trace: Optional[AgentWorkflowTrace] = Field(
+    workflow_trace: Optional[WorkflowTrace] = Field(
         default=None,
-        description="本次多Agent生成流程的工作流追踪信息，供前端可视化展示",
+        description="本次生成工作流的执行追踪信息，供前端可视化展示",
     )
 
 

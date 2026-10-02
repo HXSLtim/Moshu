@@ -183,7 +183,7 @@ async def test_generate_rejects_foreign_novel_before_agent_call():
     agent_call = AsyncMock()
     with (
         patch("app.api.routes.generation.novel_crud.get_novel_by_id", return_value=foreign_novel),
-        patch("app.api.routes.generation.agent_service.generate_content", agent_call),
+        patch("app.api.routes.generation.generation_workflow.generate_content", agent_call),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await generate_content.__wrapped__(

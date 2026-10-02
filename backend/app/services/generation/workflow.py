@@ -1,7 +1,9 @@
-"""多Agent服务
+"""高级生成工作流。
 
-实现基于LangGraph的三Agent协作工作流，并在内部构建Agent工作流追踪，
-便于前端可视化展示各个Agent节点的执行过程和数据流。
+LangGraph 固定流水线：检索上下文 → 世界观/角色/剧情三个专精角色顺序产出 →
+一致性检查，冲突按条件边带反馈重试。流程是固定的，Agent 角色没有自主
+选择下一步的权力；自主工具循环见 conversation/runtime 的单 Agent 运行时。
+每步产出 WorkflowStep 追踪，供前端可视化数据流。
 """
 import asyncio
 from typing import TypedDict, Dict, Any, List
@@ -19,13 +21,13 @@ from app.db.base import SessionLocal
 from app.models.schemas import (
     GenerationRequest,
     GenerationResponse,
-    AgentOutput,
-    AgentType,
+    StageOutput,
+    StageType,
     ConsistencyCheckResult,
     ConsistencyCheckType,
     FinalConsistencyStatus,
 )
-from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
+from app.models.workflow_schemas import WorkflowStep, WorkflowTrace
 from app.services.rag import rag_service
 from app.services.review.consistency import consistency_service
 from app.services.context.budget import (
@@ -170,14 +172,14 @@ class NovelGenerationState(TypedDict):
     # 重试次数
     retry_count: int
 
-    # 工作流步骤（序列化后的AgentWorkflowStep字典列表）
+    # 工作流步骤（序列化后的WorkflowStep字典列表）
     workflow_steps: List[Dict[str, Any]]
 
 
 # ========== Agent服务类 ==========
 
-class AgentService:
-    """多Agent服务类"""
+class GenerationWorkflow:
+    """高级生成工作流：固定步骤的编排，不是自主多 Agent 协作。"""
 
     def __init__(self):
         """初始化Agent服务"""
@@ -323,7 +325,7 @@ class AgentService:
 
         # 记录工作流步骤
         steps = list(state.get("workflow_steps", []))
-        retrieve_step = AgentWorkflowStep(
+        retrieve_step = WorkflowStep(
             id="retrieve_context",
             parent_id=None,
             type="rag",
@@ -419,7 +421,7 @@ class AgentService:
         logger.info(f"Agent A输出：{worldview_output[:50]}...")
 
         steps = list(state.get("workflow_steps", []))
-        step = AgentWorkflowStep(
+        step = WorkflowStep(
             id="agent_a_worldview",
             parent_id="retrieve_context",
             type="llm",
@@ -510,7 +512,7 @@ class AgentService:
         logger.info(f"Agent B输出：{character_output[:50]}...")
 
         steps = list(state.get("workflow_steps", []))
-        step = AgentWorkflowStep(
+        step = WorkflowStep(
             id="agent_b_character",
             parent_id="agent_a_worldview",
             type="llm",
@@ -637,7 +639,7 @@ class AgentService:
         logger.info(f"Agent C输出：{plot_output[:50]}...（共{len(plot_output)}字）")
 
         steps = list(state.get("workflow_steps", []))
-        step = AgentWorkflowStep(
+        step = WorkflowStep(
             id=f"agent_c_plot_{retry_count}",
             parent_id=(
                 "agent_b_character"
@@ -697,7 +699,7 @@ class AgentService:
 
         steps = list(state.get("workflow_steps", []))
         retry_count = state.get("retry_count", 0)
-        consistency_step = AgentWorkflowStep(
+        consistency_step = WorkflowStep(
             id=f"consistency_check_{retry_count}",
             parent_id=f"agent_c_plot_{retry_count}",
             type="consistency",
@@ -825,22 +827,22 @@ class AgentService:
 
         # 构建Agent工作流追踪
         steps_data = final_state.get("workflow_steps", []) or []
-        steps: List[AgentWorkflowStep] = []
+        steps: List[WorkflowStep] = []
         for item in steps_data:
             try:
-                steps.append(AgentWorkflowStep(**item))
+                steps.append(WorkflowStep(**item))
             except Exception:
                 # 忽略单个步骤解析错误，避免影响整体响应
-                logger.warning("解析AgentWorkflowStep失败，已跳过一条步骤数据")
+                logger.warning("解析WorkflowStep失败，已跳过一条步骤数据")
                 continue
 
-        workflow_trace = AgentWorkflowTrace(
+        workflow_trace = WorkflowTrace(
             run_id=f"agent-generate-{request.novel_id}-{request.chapter}-{int(datetime.utcnow().timestamp() * 1000)}",
             trigger="generation.generate_content",
             novel_id=request.novel_id,
             chapter_id=request.chapter,
             user_id=final_state.get("actor_id"),
-            summary=f"小说{request.novel_id} 第{request.chapter}章的多Agent内容生成",
+            summary=f"小说{request.novel_id} 第{request.chapter}章的生成工作流内容生成",
             steps=steps,
         )
 
@@ -849,17 +851,17 @@ class AgentService:
             novel_id=request.novel_id,
             chapter=request.chapter,
             final_content=final_state["plot_output"],
-            agent_outputs=[
-                AgentOutput(
-                    agent_type=AgentType.WORLDVIEW,
+            stage_outputs=[
+                StageOutput(
+                    agent_type=StageType.WORLDVIEW,
                     content=final_state["worldview_output"],
                 ),
-                AgentOutput(
-                    agent_type=AgentType.CHARACTER,
+                StageOutput(
+                    agent_type=StageType.CHARACTER,
                     content=final_state["character_output"],
                 ),
-                AgentOutput(
-                    agent_type=AgentType.PLOT,
+                StageOutput(
+                    agent_type=StageType.PLOT,
                     content=final_state["plot_output"],
                 ),
             ],
@@ -1002,21 +1004,21 @@ class AgentService:
 
         # 构建Agent工作流追踪
         steps_data = final_state.get("workflow_steps", []) or []
-        steps: List[AgentWorkflowStep] = []
+        steps: List[WorkflowStep] = []
         for item in steps_data:
             try:
-                steps.append(AgentWorkflowStep(**item))
+                steps.append(WorkflowStep(**item))
             except Exception:
-                logger.warning("解析AgentWorkflowStep失败，已跳过一条步骤数据")
+                logger.warning("解析WorkflowStep失败，已跳过一条步骤数据")
                 continue
 
-        workflow_trace = AgentWorkflowTrace(
+        workflow_trace = WorkflowTrace(
             run_id=f"agent-generate-{request.novel_id}-{request.chapter}-{int(datetime.utcnow().timestamp() * 1000)}",
             trigger="generation.generate_content_stream",
             novel_id=request.novel_id,
             chapter_id=request.chapter,
             user_id=final_state.get("actor_id"),
-            summary=f"小说{request.novel_id} 第{request.chapter}章的多Agent内容生成",
+            summary=f"小说{request.novel_id} 第{request.chapter}章的生成工作流内容生成",
             steps=steps,
         )
 
@@ -1025,17 +1027,17 @@ class AgentService:
             novel_id=request.novel_id,
             chapter=request.chapter,
             final_content=final_state["plot_output"],
-            agent_outputs=[
-                AgentOutput(
-                    agent_type=AgentType.WORLDVIEW,
+            stage_outputs=[
+                StageOutput(
+                    agent_type=StageType.WORLDVIEW,
                     content=final_state["worldview_output"],
                 ),
-                AgentOutput(
-                    agent_type=AgentType.CHARACTER,
+                StageOutput(
+                    agent_type=StageType.CHARACTER,
                     content=final_state["character_output"],
                 ),
-                AgentOutput(
-                    agent_type=AgentType.PLOT,
+                StageOutput(
+                    agent_type=StageType.PLOT,
                     content=final_state["plot_output"],
                 ),
             ],
@@ -1058,4 +1060,4 @@ class AgentService:
 
 
 # 创建全局实例
-agent_service = AgentService()
+generation_workflow = GenerationWorkflow()

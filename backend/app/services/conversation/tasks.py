@@ -276,10 +276,10 @@ async def execute_task(*, mode: WritingMode, service, context_pack, current_cont
         output = await service.reply(messages)
         return TaskResult(output.text, operation='append')
     if mode == 'advanced_continue':
-        from app.services.generation.workflow import agent_service
+        from app.services.generation.workflow import generation_workflow
         prompt = compact_text('前文末段：\n' + compact_text(current_content, MAX_STORY_CONTEXT_CHARS, keep='tail')
                               + '\n续写要求：\n' + instruction, MAX_GENERATION_PROMPT_CHARS, keep='both')
-        response = await agent_service.generate_content(
+        response = await generation_workflow.generate_content(
             GenerationRequest(novel_id=novel_id, chapter=target_chapter, prompt=prompt,
                               current_day=options.current_day, target_length=options.target_length),
             actor_id=actor_id, novel_lifecycle_id=novel_lifecycle_id,
@@ -323,9 +323,9 @@ async def execute_task(*, mode: WritingMode, service, context_pack, current_cont
     elif mode == 'character':
         text = f'{parsed.name}\n\n外貌：{parsed.appearance}\n性格：{parsed.personality}\n背景：{parsed.background}\n能力：' + '、'.join(parsed.abilities) + f'\n动机：{parsed.motivation}\n关系：' + '、'.join(parsed.relationships)
     elif mode == 'check':
-        from app.services.generation.workflow import AgentService
+        from app.services.generation.workflow import GenerationWorkflow
         from app.services.review.consistency import consistency_service
-        reference = await asyncio.to_thread(AgentService._load_consistency_reference_sync,
+        reference = await asyncio.to_thread(GenerationWorkflow._load_consistency_reference_sync,
             novel_id, actor_id, novel_lifecycle_id, target_chapter, options.current_day)
         payload['consistency'] = await consistency_service.check_content(
             novel_id=novel_id, content=current_content, chapter=target_chapter,

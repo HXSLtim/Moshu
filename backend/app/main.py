@@ -23,7 +23,7 @@ logger.add(
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="基于多Agent协作的智能小说创作平台",
+    description="作者主导的长篇小说创作平台：常驻创作 Agent、固定生成工作流与可编排的复合任务",
     debug=settings.DEBUG
 )
 

@@ -8,7 +8,7 @@ import pytest
 from app.api.routes.consistency import ConsistencyCheckRequest
 from app.api.routes.generation import ContinueRequest
 from app.models.schemas import GenerationRequest
-from app.services.generation.workflow import AgentService
+from app.services.generation.workflow import GenerationWorkflow
 from app.services.model.result import ModelOutputError
 
 
@@ -31,7 +31,7 @@ def test_story_day_is_unknown_by_default_and_positive_when_explicit(request_type
 @pytest.mark.parametrize("finish_reason", ["length", "stop"])
 async def test_generation_nodes_validate_completion_before_emitting_output(node, finish_reason):
     """任一生成节点收到截断响应时，都不能生成 completed 步骤或可采纳正文。"""
-    service = AgentService.__new__(AgentService)
+    service = GenerationWorkflow.__new__(GenerationWorkflow)
     response = AIMessage(
         content="候选内容",
         response_metadata={"finish_reason": finish_reason, "model_name": "实际返回模型"},

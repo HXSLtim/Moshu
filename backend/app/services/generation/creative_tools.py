@@ -1,8 +1,8 @@
 """单次创作工具：角色生成、分析与优化。
 
-独立的单次模型调用，不走多 Agent 工作流；输入输出均经过统一上下文预算，
+独立的单次模型调用，不走生成工作流；输入输出均经过统一上下文预算，
 返回结构化 JSON 供 MCP 能力面(`app.services.mcp.character`)消费。
-提示词文本自 agent_service.py 原样迁移，仅去除方法级缩进。
+提示词文本自 generation_workflow.py 原样迁移，仅去除方法级缩进。
 """
 import json
 from datetime import datetime

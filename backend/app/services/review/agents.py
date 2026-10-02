@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.core.config import settings
-from app.models.workflow_schemas import AgentWorkflowStep
+from app.models.workflow_schemas import WorkflowStep
 from app.services.rag import rag_service
 from app.services.model.result import parse_model_result
 from app.services.context.budget import (
@@ -176,7 +176,7 @@ async def review_pace_agent(
     step_end = datetime.utcnow()
     
     # 记录工作流步骤
-    step = AgentWorkflowStep(
+    step = WorkflowStep(
         id="pace_review",
         parent_id=None,
         type="agent",
@@ -259,7 +259,7 @@ async def review_quality_agent(
     
     step_end = datetime.utcnow()
     
-    step = AgentWorkflowStep(
+    step = WorkflowStep(
         id="quality_review",
         parent_id=None,
         type="agent",
@@ -342,7 +342,7 @@ async def review_plot_coherence_agent(
     
     step_end = datetime.utcnow()
     
-    step = AgentWorkflowStep(
+    step = WorkflowStep(
         id="plot_coherence",
         parent_id=None,
         type="agent",
@@ -435,7 +435,7 @@ async def review_character_consistency_agent(
     
     step_end = datetime.utcnow()
     
-    step = AgentWorkflowStep(
+    step = WorkflowStep(
         id="character_consistency",
         parent_id=None,
         type="agent",
@@ -514,7 +514,7 @@ async def review_style_agent(
     
     step_end = datetime.utcnow()
     
-    step = AgentWorkflowStep(
+    step = WorkflowStep(
         id="style_review",
         parent_id=None,
         type="agent",
@@ -593,7 +593,7 @@ async def review_content_safety_agent(
     
     step_end = datetime.utcnow()
     
-    step = AgentWorkflowStep(
+    step = WorkflowStep(
         id="content_safety",
         parent_id=None,
         type="agent",

@@ -10,7 +10,7 @@ from neo4j import GraphDatabase
 from app.core.config import settings
 from loguru import logger
 
-from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
+from app.models.workflow_schemas import WorkflowStep, WorkflowTrace
 
 
 # ========== 规则引擎 ==========
@@ -487,7 +487,7 @@ class ConsistencyService:
         violations: List[str] = []
         checks_performed: List[str] = []
         checks_skipped: List[str] = []
-        steps: List[AgentWorkflowStep] = []
+        steps: List[WorkflowStep] = []
 
         # 生成本次检查的运行ID
         run_id = f"consistency-{novel_id}-{chapter}-{int(datetime.utcnow().timestamp() * 1000)}"
@@ -509,7 +509,7 @@ class ConsistencyService:
             logger.warning(f"规则引擎检测到{len(rule_result['violations'])}个违规")
 
         steps.append(
-            AgentWorkflowStep(
+            WorkflowStep(
                 id="rule_engine",
                 parent_id=None,
                 type="rule_engine",
@@ -553,7 +553,7 @@ class ConsistencyService:
             logger.warning(f"知识图谱检测到{len(kg_result['violations'])}个角色关系冲突")
 
         steps.append(
-            AgentWorkflowStep(
+            WorkflowStep(
                 id="knowledge_graph",
                 parent_id="rule_engine",
                 type="graph",
@@ -596,7 +596,7 @@ class ConsistencyService:
             logger.warning(f"时间线检测到违规：{timeline_result['reason']}")
 
         steps.append(
-            AgentWorkflowStep(
+            WorkflowStep(
                 id="timeline",
                 parent_id="knowledge_graph",
                 type="timeline",
@@ -629,7 +629,7 @@ class ConsistencyService:
         checks_skipped.append("emotion_state")
 
         steps.append(
-            AgentWorkflowStep(
+            WorkflowStep(
                 id="emotion_state",
                 parent_id="timeline",
                 type="emotion_state",
@@ -648,7 +648,7 @@ class ConsistencyService:
         )
 
         # 构建工作流追踪
-        workflow_trace = AgentWorkflowTrace(
+        workflow_trace = WorkflowTrace(
             run_id=run_id,
             trigger="consistency.check_content",
             novel_id=novel_id,

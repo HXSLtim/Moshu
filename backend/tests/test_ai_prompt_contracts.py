@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
 from app.services.review import agents as review_agents
-from app.services.generation.workflow import AgentService
+from app.services.generation.workflow import GenerationWorkflow
 
 
 REVIEW_CASES = [
@@ -67,7 +67,7 @@ async def test_retry_diagnostics_are_data_not_prompt_variables():
         seen.extend(prompt.to_messages())
         return AIMessage(content="已修正的候选正文")
 
-    service = AgentService.__new__(AgentService)
+    service = GenerationWorkflow.__new__(GenerationWorkflow)
     service.llm_complex = RunnableLambda(answer)
     violation = '状态{持有物}与设定冲突，原文为{"宝剑": 0}。'
     state = dict(prompt="请继续", worldview_output="环境", character_output="人物", story_bible_context=[],
