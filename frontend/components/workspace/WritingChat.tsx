@@ -254,7 +254,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
     </Box>
     <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <TextField fullWidth multiline minRows={2} maxRows={5} label={pending ? '排队下一条消息' : '和 Nai 聊聊'} value={draft}
-        placeholder={!chapterId ? '正在准备第 1 章,稍等…'
+        placeholder={!chapterId ? '先在左侧选一章（或新建），就能开始对话'
           : pending ? '正在处理上一条,Enter 加入队列'
           : '例如:接着往下写 / 他为什么要隐瞒身份(Enter 发送,Shift+Enter 换行)'}
         slotProps={{ htmlInput: { maxLength: 4000 } }} onChange={(event) => setDraft(event.target.value)}
