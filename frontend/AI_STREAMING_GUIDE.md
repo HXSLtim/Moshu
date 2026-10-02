@@ -9,6 +9,7 @@
 | 常驻对话 | `POST /generation/jobs`，kind 为 chat；历史合并 WritingTurn 与尚未建立轮次的真实任务 | 讨论、规划和检查只供参考；正文类任务返回 proposal，作者确认后保存 |
 | 高级续写 | kind 为 continue，保留文风、节奏、目标长度；按作品和章节恢复最近任务 | 服务器验证原文版本、哈希和生命周期后追加正文 |
 | 局部改写 | kind 为 rewrite；选区下标从 UTF-16 转为 Unicode 码点 | 原选区和可编辑候选对照，`candidate_content` 随确认命令提交 |
+| 复合编排 | kind 为 `orchestrate`；模型把复合指令分解为至多 6 步计划(检索/生成/一致性)，按编号执行 | 响应含计划、不确定点与一致性摘要；候选走 `proposal_id` 采纳 |
 | 审核与其他已有流接口 | 原 SSE 协议继续可用 | 按业务结构展示，不当作创作任务已经完成 |
 
 公共客户端为 `lib/generationJobs.ts`，高级续写和改写共用 `hooks/useGenerationTask.ts`。任务的状态为 queued、running、completed、failed、cancelled；HTTP 200/202 不代表模型完成。失败或取消时不得展示为可采纳成功结果。

@@ -14,6 +14,7 @@ import {
   ListItemIcon,
   Tooltip,
 } from '@mui/material';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import TimelineIcon from '@mui/icons-material/Timeline';
 import StorageIcon from '@mui/icons-material/Storage';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -41,6 +42,8 @@ export default function WorkflowPanel({ workflowTrace }: WorkflowPanelProps) {
 
   const getStepIcon = (step: AgentWorkflowStep) => {
     switch (step.type) {
+      case 'plan':
+        return <AccountTreeIcon fontSize="small" />;
       case 'rag':
         return <StorageIcon fontSize="small" />;
       case 'llm':

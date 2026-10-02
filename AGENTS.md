@@ -34,6 +34,9 @@
 - 后端:`cd backend && ./run_tests.sh --mode all`(或 `bash run_tests.sh --mode all`),退出码必须为 0。
   该脚本自动清理代理变量,等价于下方的手工命令。
 - 前端:`npm run lint && npm run typecheck && npm run test`。
+- 契约:改过任何后端 response_model 时,`cd backend && .venv/bin/python export_openapi.py`
+  重新导出并在前端 `npm run codegen` 后一并提交;`export_openapi.py --check` 用于漂移自检
+  (直接调 python 须带 8 个代理变量清理,见上文环境坑)。
 - 真实模型冒烟(按需手动,不进入 pytest 基线,会真实调用并计费):
   `cd backend && ./run_smoke.sh`。验证对话 Agent 的工具调用参数链路端到端完好。
 - 验证失败禁止提交;无法验证的部分必须在交付说明中列为风险并给出补验计划。
