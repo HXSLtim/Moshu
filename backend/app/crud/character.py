@@ -227,10 +227,14 @@ def delete_character_relationship(db: Session, relationship_id: int) -> bool:
 # ========== 角色出场记录CRUD ==========
 
 def create_character_appearance(
-    db: Session, 
-    appearance: CharacterAppearanceCreate
+    db: Session,
+    appearance: CharacterAppearanceCreate,
+    commit: bool = True,
 ) -> CharacterAppearance:
-    """创建角色出场记录"""
+    """创建角色出场记录。
+
+    调用方需要把出场与后续写入绑成同一事务时传 commit=False(自行负责提交)。
+    """
     db_appearance = CharacterAppearance(
         character_id=appearance.character_id,
         chapter_id=appearance.chapter_id,
@@ -240,8 +244,11 @@ def create_character_appearance(
         status_changes=appearance.status_changes or {}
     )
     db.add(db_appearance)
-    db.commit()
-    db.refresh(db_appearance)
+    if commit:
+        db.commit()
+        db.refresh(db_appearance)
+    else:
+        db.flush()
     return db_appearance
 
 
@@ -267,19 +274,23 @@ def get_chapter_characters(db: Session, chapter_id: int) -> List[CharacterAppear
 
 
 def update_character_last_appearance(
-    db: Session, 
-    character_id: int, 
-    chapter_number: int
+    db: Session,
+    character_id: int,
+    chapter_number: int,
+    commit: bool = True,
 ) -> Optional[Character]:
-    """更新角色最后出现章节"""
+    """更新角色最后出现章节(与出场记录绑成同一事务时传 commit=False)"""
     db_character = get_character(db, character_id)
     if not db_character:
         return None
-    
+
     db_character.last_appearance_chapter = chapter_number
     db_character.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_character)
+    if commit:
+        db.commit()
+        db.refresh(db_character)
+    else:
+        db.flush()
     return db_character
 
 

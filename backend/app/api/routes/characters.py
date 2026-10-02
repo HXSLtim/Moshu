@@ -505,19 +505,28 @@ async def create_character_appearance(
             detail="章节不存在或不属于同一小说"
         )
     
-    db_appearance = character_crud.create_character_appearance(db, appearance)
-    
-    # 更新角色最后出现章节
+    # 出场记录与最后出现章节同事务提交:任一步失败都不留半提交
+    db_appearance = character_crud.create_character_appearance(db, appearance, commit=False)
+    character_name = character.name
+    chapter_number = chapter.chapter_number
     character_crud.update_character_last_appearance(
-        db, character.id, chapter.chapter_number
+        db, character.id, chapter_number, commit=False
     )
-    
-    # 构建响应
-    response_data = db_appearance.__dict__.copy()
-    response_data["character_name"] = character.name
-    response_data["chapter_number"] = chapter.chapter_number
-    
-    return CharacterAppearanceResponse(**response_data)
+    db.commit()
+    db.refresh(db_appearance)
+
+    return CharacterAppearanceResponse(
+        id=db_appearance.id,
+        character_id=db_appearance.character_id,
+        chapter_id=db_appearance.chapter_id,
+        appearance_type=db_appearance.appearance_type,
+        description=db_appearance.description,
+        importance_in_chapter=db_appearance.importance_in_chapter,
+        status_changes=db_appearance.status_changes or {},
+        created_at=db_appearance.created_at,
+        character_name=character_name,
+        chapter_number=chapter_number,
+    )
 
 
 @router.get("/{character_id}/timeline", response_model=CharacterTimelineResponse)
@@ -544,13 +553,22 @@ async def get_character_timeline(
     
     appearances = character_crud.get_character_appearances(db, character_id)
     
-    # 构建出场记录响应
-    appearance_responses = []
-    for app in appearances:
-        response_data = app.__dict__.copy()
-        response_data["character_name"] = character.name
-        response_data["chapter_number"] = app.chapter.chapter_number
-        appearance_responses.append(CharacterAppearanceResponse(**response_data))
+    # 构建出场记录响应(joinedload 已预载章节,显式构造补齐非列字段)
+    appearance_responses = [
+        CharacterAppearanceResponse(
+            id=app.id,
+            character_id=app.character_id,
+            chapter_id=app.chapter_id,
+            appearance_type=app.appearance_type,
+            description=app.description,
+            importance_in_chapter=app.importance_in_chapter,
+            status_changes=app.status_changes or {},
+            created_at=app.created_at,
+            character_name=character.name,
+            chapter_number=app.chapter.chapter_number,
+        )
+        for app in appearances
+    ]
     
     return CharacterTimelineResponse(
         character_id=character_id,
