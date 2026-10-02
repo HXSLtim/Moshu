@@ -173,6 +173,9 @@ class ScriptedLLM:
     def bind_tools(self, tools):
         return self
 
+    async def ainvoke(self, payload):
+        return self.responses.pop(0)
+
     async def astream(self, payload):
         self.seen_payloads.append(payload)
         yield self.responses.pop(0)
@@ -321,3 +324,26 @@ async def test_write_manuscript_uncertainties_are_bounded_and_cleaned():
         'write_manuscript',
         {'operation': 'append', 'content': '正文', 'uncertainties': ['有效假设', '']})
     assert clean['uncertainties'] == ['有效假设']
+
+
+@pytest.mark.asyncio
+async def test_capability_tool_runs_and_emits_running_then_completed():
+    """能力工具先发 running 事件再回结果,摘要回传模型;选区缺失诚实提示。"""
+    from types import SimpleNamespace as NS
+    from app.services.conversation.capability_tools import CapabilityContext, execute_capability_tool
+
+    context = CapabilityContext(novel_id=1, actor_id=1, novel_lifecycle_id='l' * 32,
+                                chapter_id=1, chapter_number=2, chapter_version=1,
+                                chapter_lifecycle_id='c' * 32, current_content='原文',
+                                current_day=None)
+    no_selection = await execute_capability_tool(context, 'rewrite_selection', {'instruction': '更紧凑'})
+    assert '没有选中文字' in no_selection
+
+    llm = ScriptedLLM([_text_chunk('改写后的正文。')])
+    context = CapabilityContext(novel_id=1, actor_id=1, novel_lifecycle_id='l' * 32,
+                                chapter_id=1, chapter_number=2, chapter_version=1,
+                                chapter_lifecycle_id='c' * 32, current_content='原文',
+                                current_day=None, selection_text='原文', selection_start=0, selection_end=2,
+                                llm=llm)
+    summary = await execute_capability_tool(context, 'plot_options', {})
+    assert '剧情走向选项已生成' in summary

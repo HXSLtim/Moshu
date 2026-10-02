@@ -5357,6 +5357,42 @@
             "format": "uuid",
             "title": "Request Id",
             "type": "string"
+          },
+          "selection_end": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection End"
+          },
+          "selection_start": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Start"
+          },
+          "selection_text": {
+            "anyOf": [
+              {
+                "maxLength": 50000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Text"
           }
         },
         "required": [

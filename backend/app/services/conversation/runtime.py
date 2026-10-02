@@ -26,6 +26,7 @@ from langgraph.prebuilt import ToolNode as _LangGraphToolNode
 from loguru import logger
 
 from app.services.conversation.tools import CHECK_TOOL_NAME, READ_TOOL_NAMES, READ_TOOL_SPECS
+from app.services.conversation.capability_tools import CAPABILITY_TOOL_NAMES, CAPABILITY_TOOL_SPECS
 from app.services.context.budget import MAX_CHAT_OUTPUT_CHARS, MAX_TRACE_PREVIEW_CHARS, compact_text
 from app.services.context.builder import ContextScopeError
 from app.services.model.result import parse_model_result
@@ -120,7 +121,7 @@ PROPOSE_TOOLS: list[dict] = [
     },
 ]
 
-AGENT_TOOLS: list[dict] = PROPOSE_TOOLS + READ_TOOL_SPECS
+AGENT_TOOLS: list[dict] = PROPOSE_TOOLS + READ_TOOL_SPECS + CAPABILITY_TOOL_SPECS
 
 SETTING_TOOLS = {'propose_project_info', 'propose_entity', 'propose_fact', 'propose_outline'}
 _OPERATION = {'append': 'append', 'rewrite': 'replace', 'create': 'create'}
@@ -200,7 +201,8 @@ class AgentTrace:
         self.manuscript: dict | None = None
 
 
-async def _execute_tool(name: str, raw_args, *, read_tool_executor, seen: set[str], trace: AgentTrace):
+async def _execute_tool(name: str, raw_args, *, read_tool_executor, capability_tool_executor,
+                        seen: set[str], trace: AgentTrace):
     """执行一次工具调用。
 
     返回 ``(ack, event)``：ack 是回填给模型的确认文本，event 是给前端的观察事件。
@@ -224,6 +226,22 @@ async def _execute_tool(name: str, raw_args, *, read_tool_executor, seen: set[st
             result = '检索工具暂时不可用，请基于已有上下文回答，并说明该信息未能核实。'
         status = 'checked' if name == CHECK_TOOL_NAME else 'read'
         return result, {'type': 'tool', 'name': name, 'status': status,
+                        'data': {'summary': compact_text(result, MAX_TRACE_PREVIEW_CHARS, keep='head')}}
+    if name in CAPABILITY_TOOL_NAMES:
+        if capability_tool_executor is None:
+            return TOOLS_UNAVAILABLE_ACK, None
+        # 能力工具先发 running 事件,长任务(编排/续写)期间前端有可感知进度。
+        await publish({'type': 'tool', 'name': name, 'status': 'running',
+                       'data': {'summary': compact_text(_args(raw_args).get('instruction')
+                                                        or _args(raw_args).get('query') or '', 60, keep='head')}})
+        try:
+            result = await capability_tool_executor(name, _args(raw_args))
+        except ContextScopeError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Agent 能力工具 {} 执行失败：{}', name, exc)
+            result = f'工具 {name} 执行失败,请向作者说明。'
+        return result, {'type': 'tool', 'name': name, 'status': 'completed',
                         'data': {'summary': compact_text(result, MAX_TRACE_PREVIEW_CHARS, keep='head')}}
 
     action, draft, ack = execute_agent_tool(name, raw_args)
@@ -265,7 +283,7 @@ def _params_model(name: str, parameters: dict):
     return create_model(f'{name}_args', **fields)
 
 
-def _recording_tools(*, read_tool_executor, seen: set[str], trace: AgentTrace, publish):
+def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish):
     """构造 LangGraph 工具节点：执行工具、回填 ToolMessage，并把观察事件推给前端。
 
     提案工具仍然只登记提案，不触碰数据库；工具节点只把结果交回模型。
@@ -275,6 +293,7 @@ def _recording_tools(*, read_tool_executor, seen: set[str], trace: AgentTrace, p
     def make_runner(name: str):
         async def _run(**kwargs) -> str:
             ack, event = await _execute_tool(name, kwargs, read_tool_executor=read_tool_executor,
+                                             capability_tool_executor=capability_tool_executor,
                                              seen=seen, trace=trace)
             if event is not None:
                 await publish(event)
@@ -289,12 +308,12 @@ def _recording_tools(*, read_tool_executor, seen: set[str], trace: AgentTrace, p
             description=spec['function'].get('description', ''),
             args_schema=_params_model(spec['function']['name'],
                                       spec['function'].get('parameters') or {}))
-        for spec in READ_TOOL_SPECS + PROPOSE_TOOLS
+        for spec in READ_TOOL_SPECS + PROPOSE_TOOLS + CAPABILITY_TOOL_SPECS
     ]
     return _LangGraphToolNode(tools, handle_tool_errors=True)
 
 
-def _build_graph(llm, *, read_tool_executor, seen: set[str], trace: AgentTrace, publish):
+def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish):
     """装配 LangGraph：agent 流式调用模型，tools 执行工具，条件边决定是否继续。"""
     bound = llm.bind_tools(AGENT_TOOLS)
 
@@ -327,7 +346,8 @@ def _build_graph(llm, *, read_tool_executor, seen: set[str], trace: AgentTrace, 
     workflow = StateGraph(_AgentState)
     workflow.add_node('agent', agent)
     workflow.add_node('tools', _recording_tools(
-        read_tool_executor=read_tool_executor, seen=seen, trace=trace, publish=publish))
+        read_tool_executor=read_tool_executor, capability_tool_executor=capability_tool_executor,
+        seen=seen, trace=trace, publish=publish))
     workflow.set_entry_point('agent')
     workflow.add_conditional_edges('agent', should_continue, {'tools': 'tools', END: END})
     workflow.add_edge('tools', 'agent')
@@ -347,7 +367,7 @@ async def _forward_events(graph, payload, config, emit) -> None:
 
 
 async def run_agent(llm, messages: list, *, read_tool_executor=None,
-                    max_rounds: int = 6) -> AsyncIterator[dict]:
+                    capability_tool_executor=None, max_rounds: int = 8) -> AsyncIterator[dict]:
     """跑一轮 Agent：模型可以多次调用工具，最后给出自然语言回复。
 
     ``read_tool_executor`` 是 ``(name, args) -> awaitable[str]`` 的受权只读
@@ -361,7 +381,8 @@ async def run_agent(llm, messages: list, *, read_tool_executor=None,
     async def publish(event) -> None:
         await queue.put(event)
 
-    graph = _build_graph(llm, read_tool_executor=read_tool_executor, seen=seen,
+    graph = _build_graph(llm, read_tool_executor=read_tool_executor,
+                         capability_tool_executor=capability_tool_executor, seen=seen,
                          trace=trace, publish=publish)
     # 一轮 = 一次 agent 步再加一次 tools 步；预算用尽由转发任务收尾。
     # 模型一直请求工具时，图在第 max_rounds 次模型调用后越界并收尾。

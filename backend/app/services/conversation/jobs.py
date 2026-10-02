@@ -37,7 +37,7 @@ def _job_model_budget(kind: str, payload: dict) -> int:
     """
     from app.services.generation.orchestrator import MAX_ORCHESTRATION_MODEL_CALLS
     if kind == 'chat':
-        return 8
+        return 20  # Agent 多轮工具循环 + 能力工具(编排至多 7 次)嵌套共享
     if kind == 'orchestrate':
         return MAX_ORCHESTRATION_MODEL_CALLS
     if kind in {'continue', 'continue_stream', 'generate'} or payload.get('mode') == 'advanced_continue':
@@ -276,16 +276,17 @@ async def _run_job(sessions, job_id):
                 db.query(WritingTurn).filter_by(novel_id=novel_id, request_id=payload['request_id']).update(
                     {'execution': meter.snapshot()}, synchronize_session=False)
             db.commit()
-            if job.status == 'completed':
-                # 审核模式自动采纳必须等任务标记完成后执行(采纳命令校验任务终态);
-                # 钩子是尽力而为,任何异常都不改变任务终态,候选保留待作者确认。
-                from loguru import logger as _logger
-                try:
-                    from app.services.conversation.proposals import auto_apply_pending
-                    bind = sessions.kw.get('bind') or sessions().get_bind()
-                    await asyncio.to_thread(auto_apply_pending, bind, novel_id, actor_id, job_id)
-                except BaseException as hook_exc:  # noqa: BLE001
-                    _logger.warning('审核模式自动采纳钩子未执行完成,候选保留待确认: {}', hook_exc)
+            auto_apply_needed = job.status == 'completed'
+        # 钩子在主 Session 关闭后执行(采纳命令校验任务终态),独立会话避免与
+        # 主连接并发;尽力而为,任何异常都不改变任务终态,候选保留待作者确认。
+        if auto_apply_needed:
+            from loguru import logger as _logger
+            try:
+                from app.services.conversation.proposals import auto_apply_pending
+                bind = sessions.kw.get('bind') or sessions().get_bind()
+                await asyncio.to_thread(auto_apply_pending, bind, novel_id, actor_id, job_id)
+            except BaseException as hook_exc:  # noqa: BLE001
+                _logger.warning('审核模式自动采纳钩子未执行完成,候选保留待确认: {}', hook_exc)
     except BaseException as exc:
         with sessions() as db:
             job = db.get(WritingGenerationJob, job_id)
