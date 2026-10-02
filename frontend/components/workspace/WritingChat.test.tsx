@@ -148,9 +148,19 @@ describe('服务端候选确认', () => {
     const accept = vi.spyOn(writingProposalApi, 'accept');
     render(<WritingChat {...props} canApply chapterVersion={2} novelLifecycleId="n1" chapterLifecycleId="c1" />);
     await waitFor(() => expect((screen.getByRole('button', { name: '采纳到本章' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.queryByText(/将写入：/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '采纳到本章' }));
     await screen.findByText('正文已经改动，和这条候选对不上了——请先保存修改，再让 AI 重新生成一稿');
     expect(accept).not.toHaveBeenCalled();
+  });
+
+  it('候选卡在确认前显示服务端落点说明', async () => {
+    const hash = await contentHash(props.currentContent);
+    vi.mocked(api.listWritingTurns).mockResolvedValue([{ ...turn, proposal_id: 'p1', base_version: 2, novel_lifecycle_id: 'n1', chapter_lifecycle_id: 'c1', result: { reply: '', actions: [], uncertainties: [], landing: '第 2 章的新章' } }]);
+    vi.spyOn(writingProposalApi, 'get').mockResolvedValue({ id: 'p1', novel_id: 1, novel_lifecycle_id: 'n1', chapter_id: 2, chapter_lifecycle_id: 'c1', base_version: 2, base_content_hash: hash, operation: 'append', status: 'pending' });
+    render(<WritingChat {...props} canApply chapterVersion={2} novelLifecycleId="n1" chapterLifecycleId="c1" />);
+    await screen.findByText('将写入：第 2 章的新章');
+    expect(screen.getByRole('button', { name: '采纳到本章' })).toBeTruthy();
   });
 
   it('确认在途继续编辑时保留新草稿，不用服务端回包覆盖', async () => {

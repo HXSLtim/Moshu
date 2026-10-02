@@ -298,7 +298,8 @@ async def execute_task(*, mode: WritingMode, service, context_pack, current_cont
         'outline': f'生成恰好 {options.target_chapters} 章的结构化大纲。只返回 JSON：{{"chapters":[{{"chapter_number":1,"title":"标题","plot_points":["情节点"]}}]}}。章号从1连续递增。',
         'character': f'设计一个{options.character_type}。只返回 JSON，字段必须为 name、appearance、personality、background、abilities（字符串数组）、motivation、relationships（字符串数组）。',
         'check': '审阅正文并给出可核对的问题。只返回 JSON：{"summary":"审核说明","issues":[{"category":"剧情或人物或世界观或语言或时间线","message":"问题","quote":"正文逐字引用"}],"suggestions":["建议"]}。不要捏造引用；没有发现问题时 issues 为空。这只是模型建议，不是自动发布许可。',
-        'new_chapter': f'创作下一章约{options.target_length}字的初稿。只返回 JSON：{{"title":"章节标题","content":"章节正文"}}。这是待作者确认的候选，不代表已经写入小说。',
+        'new_chapter': f'创作下一章约{options.target_length}字的初稿。只返回 JSON：{{"title":"章节标题","content":"章节正文"}}。这是待作者确认的候选，不代表已经写入小说。'
+                       f'本章是全书第 {target_chapter} 章；标题与正文叙述中的章号必须与之一致，不要沿用大纲计划或历史草稿里出现的章号。',
     }
     messages = service.prepare_messages(context_pack=context_pack, current_content='', turns=[],
                                         instruction=instruction, mode='discuss')

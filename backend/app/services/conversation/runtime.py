@@ -102,7 +102,8 @@ PROPOSE_TOOLS: list[dict] = [
         'type': 'function',
         'function': {
             'name': 'write_manuscript',
-            'description': '作者让你接着写、改写本章或开新章时，提交完整正文稿件。不要用它回答普通问题。',
+            'description': '作者让你接着写、改写本章或开新章时，提交完整正文稿件。不要用它回答普通问题。'
+                           '正文的唯一交付通道：不要把草稿写进对话回复。',
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -202,11 +203,13 @@ class AgentTrace:
 
 
 async def _execute_tool(name: str, raw_args, *, read_tool_executor, capability_tool_executor,
-                        seen: set[str], trace: AgentTrace, publish: object):
+                        seen: set[str], trace: AgentTrace, publish: object, manuscript_ack=None):
     """执行一次工具调用。
 
     返回 ``(ack, event)``：ack 是回填给模型的确认文本，event 是给前端的观察事件。
     作者身份或生命周期错误必须向上抛出，不能降级为无界检索。
+    ``manuscript_ack`` 是 ``(manuscript) -> str`` 的稿件回执生成器,由调用方
+    提供真实落点(章号)说明;缺失时退回不含章号的通用回执。
     """
     name = name or ''
     signature = f'{name}:{json.dumps(_args(raw_args), ensure_ascii=False, sort_keys=True)}'
@@ -250,6 +253,12 @@ async def _execute_tool(name: str, raw_args, *, read_tool_executor, capability_t
         return ack, {'type': 'tool', 'name': name, 'status': 'proposed', 'data': action}
     if draft is not None:
         trace.manuscript = draft
+        if manuscript_ack is not None:
+            # 回执明示真实落点(章号),让模型的章号自我认知与章节表对齐。
+            try:
+                ack = manuscript_ack(draft)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('稿件回执生成失败,退回通用回执: {}', exc)
         return ack, {'type': 'tool', 'name': name, 'status': 'drafted', 'data': draft}
     return ack, None
 
@@ -283,7 +292,8 @@ def _params_model(name: str, parameters: dict):
     return create_model(f'{name}_args', **fields)
 
 
-def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish):
+def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish,
+                     manuscript_ack=None):
     """构造 LangGraph 工具节点：执行工具、回填 ToolMessage，并把观察事件推给前端。
 
     提案工具仍然只登记提案，不触碰数据库；工具节点只把结果交回模型。
@@ -294,7 +304,8 @@ def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[
         async def _run(**kwargs) -> str:
             ack, event = await _execute_tool(name, kwargs, read_tool_executor=read_tool_executor,
                                              capability_tool_executor=capability_tool_executor,
-                                             seen=seen, trace=trace, publish=publish)
+                                             seen=seen, trace=trace, publish=publish,
+                                             manuscript_ack=manuscript_ack)
             if event is not None:
                 await publish(event)
             return ack
@@ -313,7 +324,8 @@ def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[
     return _LangGraphToolNode(tools, handle_tool_errors=True)
 
 
-def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish):
+def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish,
+                 manuscript_ack=None):
     """装配 LangGraph：agent 流式调用模型，tools 执行工具，条件边决定是否继续。"""
     bound = llm.bind_tools(AGENT_TOOLS)
 
@@ -347,7 +359,7 @@ def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set
     workflow.add_node('agent', agent)
     workflow.add_node('tools', _recording_tools(
         read_tool_executor=read_tool_executor, capability_tool_executor=capability_tool_executor,
-        seen=seen, trace=trace, publish=publish))
+        seen=seen, trace=trace, publish=publish, manuscript_ack=manuscript_ack))
     workflow.set_entry_point('agent')
     workflow.add_conditional_edges('agent', should_continue, {'tools': 'tools', END: END})
     workflow.add_edge('tools', 'agent')
@@ -367,7 +379,8 @@ async def _forward_events(graph, payload, config, emit) -> None:
 
 
 async def run_agent(llm, messages: list, *, read_tool_executor=None,
-                    capability_tool_executor=None, max_rounds: int = 8) -> AsyncIterator[dict]:
+                    capability_tool_executor=None, manuscript_ack=None,
+                    max_rounds: int = 8) -> AsyncIterator[dict]:
     """跑一轮 Agent：模型可以多次调用工具，最后给出自然语言回复。
 
     ``read_tool_executor`` 是 ``(name, args) -> awaitable[str]`` 的受权只读
@@ -383,7 +396,7 @@ async def run_agent(llm, messages: list, *, read_tool_executor=None,
 
     graph = _build_graph(llm, read_tool_executor=read_tool_executor,
                          capability_tool_executor=capability_tool_executor, seen=seen,
-                         trace=trace, publish=publish)
+                         trace=trace, publish=publish, manuscript_ack=manuscript_ack)
     # 一轮 = 一次 agent 步再加一次 tools 步；预算用尽由转发任务收尾。
     # 模型一直请求工具时，图在第 max_rounds 次模型调用后越界并收尾。
     config = {'recursion_limit': max(1, max_rounds) * 2}

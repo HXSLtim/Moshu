@@ -2,7 +2,7 @@
 
 ## 测试基线
 
-- 位置:`backend/tests/`,当前最终全量为 573 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
+- 位置:`backend/tests/`,当前最终全量为 580 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
 - 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
 - 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
