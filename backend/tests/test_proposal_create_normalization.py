@@ -20,7 +20,7 @@ from app.api.routes import writing_chat
 from app.db.base import Base, get_db
 from app.models.novel import Chapter, Novel
 from app.models.user import User
-from app.models.writing_chat import WritingProposal
+from app.models.writing_chat import WritingAdoption, WritingProposal
 
 
 class ScriptedAgent:
@@ -162,3 +162,22 @@ def test_few_words_last_chapter_is_not_blank(normalize_api):
     proposal = db.query(WritingProposal).one()
     assert proposal.operation == 'create'
     assert proposal.target_chapter_number == 2
+
+
+def test_auto_apply_adopts_normalized_blank_chapter(normalize_api):
+    """none 档自动采纳走归一化路径:空白末章直接填上,不再因基线问题静默留 pending。"""
+    client, db, model = normalize_api
+    db.add(Chapter(id=1, novel_id=1, chapter_number=1, title='第一章', content=''))
+    db.query(Novel).update({'review_mode': 'none'})
+    db.commit()
+    _agent_new_chapter_script(model)
+
+    _send_create_turn(client, '')
+    db.expire_all()
+    proposal = db.query(WritingProposal).one()
+    assert proposal.status == 'accepted', '自动采纳应成功,不得静默留 pending'
+    chapter = db.get(Chapter, 1)
+    assert chapter.content == '新章正文:灯下的人推开了门。'
+    assert db.query(Chapter).count() == 1
+    audit = db.query(WritingAdoption).one()
+    assert audit.request_id == f'auto:{proposal.id}'
