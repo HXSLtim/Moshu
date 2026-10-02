@@ -208,6 +208,10 @@ def auto_apply_pending(bind, novel_id: int, actor_id: int, job_id: str) -> None:
                 return
             for proposal in db.query(WritingProposal).filter_by(
                     execution_job_id=job_id, status='pending').all():
+                # 建章类候选(新建章节)任何档位都不自动采纳:
+                # 「将写入:第 N 章的新章」的落点声明须作者确认后才建章。
+                if proposal.operation == 'create':
+                    continue
                 if novel.review_mode == 'auto' and _consistency_conflict(db, proposal, novel):
                     continue
                 try:

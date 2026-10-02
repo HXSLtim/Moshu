@@ -99,3 +99,29 @@ def test_version_drift_falls_back_to_pending(db):
     db.commit()
     proposals.auto_apply_pending(db.get_bind(), 1, 1, 'job-1')
     assert db.query(WritingProposal).one().status == 'pending'
+
+
+@pytest.mark.parametrize('mode', ['auto', 'none'])
+def test_create_proposal_skips_auto_apply_in_both_modes(db, mode):
+    """建章类候选(新建章节)在任何自动档位都保持待确认:落点由作者点确认。"""
+    db.query(Novel).update({'review_mode': mode})
+    db.commit()
+    _completed_job(db)
+    _proposal(db, id='p-create', operation='create', target_chapter_number=2)
+    with patch.object(proposals, '_consistency_conflict', return_value=False) as gate:
+        proposals.auto_apply_pending(db.get_bind(), 1, 1, 'job-1')
+    assert db.query(WritingProposal).one().status == 'pending'
+    assert db.query(WritingAdoption).count() == 0
+    # 建章候选不进守门,更不该被采纳。
+    gate.assert_not_called()
+    assert db.query(Chapter).count() == 1
+
+
+def test_replace_proposal_still_auto_applies_in_none_mode(db):
+    """闸门只拦建章类:改稿类(replace)在自动档照旧采纳,档位语义不变。"""
+    _completed_job(db)
+    _proposal(db, operation='replace')
+    proposals.auto_apply_pending(db.get_bind(), 1, 1, 'job-1')
+    assert db.query(WritingProposal).one().status == 'accepted'
+    audit = db.query(WritingAdoption).one()
+    assert audit.request_id == 'auto:p1' and audit.decision == 'accept'
