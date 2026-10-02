@@ -739,27 +739,6 @@ export const api = {
   },
 
   /**
-   * AI 自动生成并创建新章节
-   */
-  async autoCreateChapter(data: {
-    novel_id: number;
-    base_chapter_id?: number;
-    target_length?: number;
-    theme?: string;
-  }): Promise<Chapter> {
-    const res = await enhancedFetch(`/generation/auto-chapter`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const error = await res.json();
-      throw new Error(extractApiErrorMessage(error, 'AI自动生成章节失败'));
-    }
-    return res.json();
-  },
-
-  /**
    * 局部文本改写
    */
   async rewriteText(data: {

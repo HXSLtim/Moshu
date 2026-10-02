@@ -41,6 +41,13 @@ describe('常驻对话面板', () => {
     await screen.findByText(turn.assistant_text);
     expect(screen.queryByText('本次参考简介')).toBeNull();
   });
+  it('「让 AI 起草下一章」入口只预填输入框，不自动发送', async () => {
+    const send = vi.spyOn(api, 'streamWritingTurn');
+    render(<WritingChat {...props} entryIntent="next-chapter" />);
+    await screen.findByText(turn.assistant_text);
+    expect((screen.getByLabelText('和 Nai 聊聊') as HTMLTextAreaElement).value).toBe('帮我起草下一章。');
+    expect(send).not.toHaveBeenCalled();
+  });
   it('刷新组件能恢复历史，跨章保留交流并阻止采纳其他章节候选', async () => {
     const { rerender, unmount } = render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
