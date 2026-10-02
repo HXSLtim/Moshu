@@ -244,8 +244,8 @@
 | num_options | int | 否 | 1–6，默认 3 |
 
 响应：`{novel_id, chapter_id, options[]}`，`option` 含 `id`/`title`/`summary`/`impact`/`risk`。错误：`404`、`500`。
-### POST /api/generation/auto-chapter — AI 自动生成并建章（200 → ChapterResponse）
-章节号仍由服务端原子分配，不信任模型预测号。
+### POST /api/generation/auto-chapter — AI 起草下一章（200 → 候选提案）
+返回候选提案（`proposal_id`），作者经提案接口采纳后才创建章节；目标章号按创建时点 `max+1` 由服务端确定，不直接建章。前端入口已收进创作对话（深链预填指令），本端点当前无前端直连调用。
 
 | 字段 | 类型 | 必填 | 约束 |
 |------|------|------|------|
@@ -254,7 +254,7 @@
 | target_length | int | 否 | 100–3000，默认 500 |
 | theme | string | 否 | ≤1000 |
 
-错误：`404`、`409` 章节号冲突、`500`。
+错误：`404`、`409` 章节位置冲突（采纳时书内已有新章）、`500`。
 ### POST /api/generation/rewrite — 局部改写（200 → RewriteResponse）
 
 | 字段 | 类型 | 必填 | 约束 |
@@ -310,6 +310,8 @@
 字段：`novel_id`（>0，必填）、`theme`（1–1000，必填）、`target_chapters`（1–80，默认 10）。响应：`{outline, chapters, context_manifest}`。
 ### POST /api/generation/character — 生成角色设定（200）
 字段：`novel_id`（>0，必填）、`character_type`（1–20，必填）、`character_description`（1–1000，必填）。响应：`{character, type, context_manifest}`。
+### POST /api/generation/parse-idea — 想法解析为结构化建书草案（已实现、悬空）
+端点与 SDK 生成物在位，但**无前端调用方**（建书实际走 `POST /api/novels` 表单直建 + `POST /api/generation/init` 初始化 + 对话 Agent 提案工具）；是否废弃属后端决策，如实标注现状。
 ### GET /api/generation/test — 生成测试（仅 DEBUG）
 非 DEBUG 返回 `404`。仍校验示例小说的作者归属；响应含 `final_content`、`length`、`context_manifest`。
 ## 七、审核（/api/review）
@@ -550,7 +552,7 @@
 
 9. **明确 501 语义**：MCP 未实现能力（`ai-takeover`、`ai-autopilot`）明确返回 `501`，不再提供占位成功结果。
 
-10. **新增 Story Bible 基础接口**：`/api/story-bible/facts` 与 `/api/story-bible/events` CRUD 已上线，写入预算与小说归属校验已补齐；角色已有独立管理，地点、大纲等其余结构化模型仍不在当前能力范围。
+10. **新增 Story Bible 基础接口**：`/api/story-bible/facts` 与 `/api/story-bible/events` CRUD 已上线，写入预算与小说归属校验已补齐；角色后端域已就绪（API 层面，前端界面未露出），地点等其余结构化模型仍不在当前能力范围。
 
 
 ## 十六、创作对话（/api/writing-chat）

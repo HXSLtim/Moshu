@@ -34,9 +34,16 @@
 - 后端:`cd backend && ./run_tests.sh --mode all`(或 `bash run_tests.sh --mode all`),退出码必须为 0。
   该脚本自动清理代理变量,等价于下方的手工命令。
 - 前端:`npm run lint && npm run typecheck && npm run test`。
+- `npm run build` 与运行中的 `next dev` 共用 `frontend/.next`:build 会置换 dev 的
+  chunk,导致页面 JS 404、hydration 失效(症状:页面看得到点不动)。跑 build 前先停
+  dev 服务器,或与正在走查的 ux 协调窗口;build 后如需继续走查,重启 dev 并确认
+  3000 端口恢复。
 - 契约:改过任何后端 response_model 时,`cd backend && .venv/bin/python export_openapi.py`
   重新导出并在前端 `npm run codegen` 后一并提交;`export_openapi.py --check` 用于漂移自检
-  (直接调 python 须带 8 个代理变量清理,见上文环境坑)。
+  (直接调 python 须带 8 个代理变量清理,见上文环境坑)。注意 `--check` 只覆盖
+  response_model 生成层;`frontend/lib/api.ts` 手写门面的返回类型不受其保护,改门面时
+  须人工比对实际响应结构(曾实例:autoCreateChapter 声明 `Promise<Chapter>` 实返
+  ProposalResponse)。
 - 真实模型冒烟(按需手动,不进入 pytest 基线,会真实调用并计费):
   `cd backend && ./run_smoke.sh`。验证对话 Agent 的工具调用参数链路端到端完好。
 - 验证失败禁止提交;无法验证的部分必须在交付说明中列为风险并给出补验计划。

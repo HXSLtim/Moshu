@@ -32,6 +32,7 @@ cd backend
 | AI 路由守卫 | `test_ai_route_guards.py` | AI 端点鉴权、模型不可用时的明确降级而非崩溃 |
 | AI Prompt 契约 | `test_ai_prompt_contracts.py` | 六维审核的正文/前文花括号原样传递、重试诊断数据边界、首章禁止无界历史检索、六维审核拒绝传输被截断的有效 JSON |
 | 生成契约 | `test_generation_consistency_contract.py`、`test_agent_retry.py` | 生成结果结构、一致性状态、重试上限 |
+| Agent 工具与回复契约 | `test_agent_tools.py`、`test_agent_reply_contract.py` | 能力工具提案流与受权边界、回复动作解析与截断保护 |
 | 任务编排器 | `test_orchestrator.py` | 计划严格校验(环/缺生成步/编号)、DAG 顺序执行与资料注入、一致性稿件来源、作用域错误中止、路由提案落库与越权 404 |
 | 共享 L1 上下文 | `test_context_builder.py`、`test_generation_context_pack.py`、`test_writing_context.py` | 章节/版本/配方/来源核验、有界召回、存储降级、真实模型消息与来源清单一致、历史清单不随改稿变动 |
 | 对话来源迁移 | `test_context_manifest_migration.py` | 可空列升级/回退、旧轮次不伪造来源、无迁移历史旧表补列 |
@@ -83,7 +84,7 @@ npm run lint        # eslint .
 npm run typecheck   # tsc --noEmit
 ```
 
-当前 25 个测试文件、115 项通过(2026-10-02「对话框唯一形态」重构后:七个旧工具面板组件与对应测试已删,能力并入 WritingChat、新增 ToolCallBlock 内联渲染),覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端、工作台导航、设定账本表单与分页,新保存失败时保留草稿备份,以及改写快照、持久对话恢复、网络失败草稿保留和迟到响应保护。Node 25/26 使用 `NODE_OPTIONS=--no-experimental-webstorage npm test` 避免原生 Web Storage 与 jsdom 冲突。
+当前 25 个测试文件、123 项通过(2026-10-02「对话框唯一形态」重构后:七个旧工具面板组件与对应测试已删,能力并入 WritingChat、新增 ToolCallBlock 内联渲染;其后快赢包、P0 入口收编、N2 章号锚定与设定提案状态批次各补充测试),覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端、工作台导航、设定账本表单与分页,新保存失败时保留草稿备份,以及改写快照、持久对话恢复、网络失败草稿保留和迟到响应保护。Node 25/26 使用 `NODE_OPTIONS=--no-experimental-webstorage npm test` 避免原生 Web Storage 与 jsdom 冲突。
 
 M1 采用隔离 SQLite 与模型替身验证；真实 Embedding/Chroma 链路另有隔离 smoke，不访问作者真实数据库或真实模型。真实库启用、长篇提取质量及共享召回为单独验收项。前端新增章节记忆的展开请求、保存版本刷新、切章取消与迟到响应保护、只读历史及来源查看回归。
 
