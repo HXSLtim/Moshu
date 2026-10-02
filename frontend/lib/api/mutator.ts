@@ -86,9 +86,9 @@ const enhancedFetch = async (url: string, options: RequestInit = {}): Promise<Re
     console.error('网络请求失败：', error);
 
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new Error(
-        `无法连接到服务器 (${fullUrl})。请检查：\n1. 服务器是否运行\n2. 网络连接是否正常\n3. 防火墙设置`,
-      );
+      // 真断连与 500 未带 CORS 头被浏览器吞成 Failed to fetch 都会走到这里，
+      // 无法区分，统一给作者语言；自建服务的深度排查走登录页调试面板。
+      throw new Error('暂时连不上服务器，请稍后再试');
     }
 
     throw error;
@@ -110,6 +110,13 @@ const handleApiResponse = async <T>(response: Response): Promise<T> => {
       } else if (response.status === 0) {
         errorMessage = '网络连接失败，请检查CORS设置';
       }
+    }
+
+    // 5xx 一律按状态码分流给作者语言：服务端 detail/堆栈是工程语言，不透传。
+    if (response.status >= 500) {
+      errorMessage = response.status >= 502
+        ? '服务器暂时不可用，请稍后再试'
+        : '服务器开小差了，请稍后再试';
     }
 
     throw new ApiError(errorMessage, response.status);
