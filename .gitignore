@@ -207,3 +207,5 @@ docker-compose.override.yml
 .claude/
 .Codex/
 .playwright-mcp/
+/ux-*.png
+frontend/tsconfig.tsbuildinfo
