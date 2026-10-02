@@ -11,7 +11,7 @@ from unittest.mock import patch
 from app.db.base import Base
 from app.models.novel import Novel, Chapter
 from app.models.user import User
-from app.models.writing_chat import WritingProposal, WritingAdoption, WritingGenerationJob
+from app.models.writing_chat import WritingProposal, WritingAdoption, WritingGenerationJob, WritingTurn
 from app.services.conversation import proposals
 
 
@@ -125,3 +125,49 @@ def test_replace_proposal_still_auto_applies_in_none_mode(db):
     assert db.query(WritingProposal).one().status == 'accepted'
     audit = db.query(WritingAdoption).one()
     assert audit.request_id == 'auto:p1' and audit.decision == 'accept'
+
+
+def _turn(db):
+    db.add(WritingTurn(id=7, request_id='req-turn-7', novel_id=1, chapter_id=1,
+                       chapter_title='第1章', mode='continue', user_text='接着写',
+                       base_content_hash=proposals.content_hash('原文')))
+    db.commit()
+
+
+def test_auto_apply_by_turn_id_adopts_append_in_none_mode(db):
+    """直发轮候选按 turn_id 触发自动采纳:与任务轮同一档位语义。"""
+    _turn(db)
+    _proposal(db, id='p-turn', operation='append', execution_job_id=None, turn_id=7)
+    proposals.auto_apply_pending(db.get_bind(), 1, 1, turn_id=7)
+    assert db.query(WritingProposal).one().status == 'accepted'
+    audit = db.query(WritingAdoption).one()
+    assert audit.request_id == 'auto:p-turn' and audit.decision == 'accept'
+    chapter = db.get(Chapter, 1)
+    assert '新段落' in chapter.content and chapter.version == 2
+
+
+def test_auto_apply_by_turn_id_keeps_confirm_pending(db):
+    """确认档在 turn_id 支下同样不自动,等待作者点确认。"""
+    db.query(Novel).update({'review_mode': 'confirm'})
+    db.commit()
+    _turn(db)
+    _proposal(db, id='p-turn', operation='append', execution_job_id=None, turn_id=7)
+    proposals.auto_apply_pending(db.get_bind(), 1, 1, turn_id=7)
+    assert db.query(WritingProposal).one().status == 'pending'
+    assert db.query(WritingAdoption).count() == 0
+
+
+@pytest.mark.parametrize('mode', ['auto', 'none'])
+def test_auto_apply_by_turn_id_gates_create_in_both_modes(db, mode):
+    """create 闸门在直发路径(turn_id 支)同样生效:建章候选两档都停待确认。"""
+    db.query(Novel).update({'review_mode': mode})
+    db.commit()
+    _turn(db)
+    _proposal(db, id='p-turn', operation='create', execution_job_id=None, turn_id=7,
+              target_chapter_number=2)
+    with patch.object(proposals, '_consistency_conflict', return_value=False) as gate:
+        proposals.auto_apply_pending(db.get_bind(), 1, 1, turn_id=7)
+    assert db.query(WritingProposal).one().status == 'pending'
+    assert db.query(WritingAdoption).count() == 0
+    gate.assert_not_called()
+    assert db.query(Chapter).count() == 1

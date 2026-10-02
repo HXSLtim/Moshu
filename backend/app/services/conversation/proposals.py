@@ -192,9 +192,11 @@ def _consistency_conflict(db, proposal, novel) -> bool:
     return bool(result.get('has_conflict'))
 
 
-def auto_apply_pending(bind, novel_id: int, actor_id: int, job_id: str) -> None:
-    """任务完成后按作品审核模式自动采纳稿件候选。
+def auto_apply_pending(bind, novel_id: int, actor_id: int, job_id: str = None, *, turn_id: int = None) -> None:
+    """任务或直发轮完成后按作品审核模式自动采纳稿件候选。
 
+    候选定位二选一:任务轮按 ``execution_job_id=job_id``,直发对话轮(不经
+    durable job)按 ``turn_id``——两条路径共用下方全部闸门与采纳语义。
     自动采纳复用同一条 decide_proposal 命令:版本 CAS、幂等与采纳审计全部
     保持,审计 request_id 带 ``auto:`` 前缀标识决策来自模式而非人工点击。
     任何失败(守门冲突、版本漂移、校验不通过)都静默留 pending 待作者确认,
@@ -206,8 +208,14 @@ def auto_apply_pending(bind, novel_id: int, actor_id: int, job_id: str) -> None:
             novel = db.get(Novel, novel_id)
             if novel is None or novel.user_id != actor_id or novel.review_mode not in {'auto', 'none'}:
                 return
-            for proposal in db.query(WritingProposal).filter_by(
-                    execution_job_id=job_id, status='pending').all():
+            query = db.query(WritingProposal).filter_by(status='pending')
+            if turn_id is not None:
+                query = query.filter_by(turn_id=turn_id)
+            elif job_id is not None:
+                query = query.filter_by(execution_job_id=job_id)
+            else:
+                return
+            for proposal in query.all():
                 # 建章类候选(新建章节)任何档位都不自动采纳:
                 # 「将写入:第 N 章的新章」的落点声明须作者确认后才建章。
                 if proposal.operation == 'create':

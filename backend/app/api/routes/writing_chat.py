@@ -186,6 +186,14 @@ async def stream_turn(novel_id: int, data: TurnCreate, http_request: Request,
                 raise ValueError('先保存正文，再让我起草；当前还有未保存的修改。')
             saved = _finish_agent_turn(db, turn, text, final_data, chapter, data,
                                        execution=meter.snapshot())
+            # 直发轮与任务轮同样兑现审核模式:auto/none 自动采纳,create 闸门
+            # 与一致性守门都在钩子内;尽力而为,失败留待确认不影响完成态。
+            try:
+                from app.services.conversation.proposals import auto_apply_pending
+                await asyncio.to_thread(auto_apply_pending, db.get_bind(),
+                                        turn.novel_id, novel.user_id, turn_id=turn.id)
+            except BaseException as hook_exc:  # noqa: BLE001
+                logger.warning('直发轮自动采纳钩子未执行完成,候选保留待确认: {}', hook_exc)
             payload = _turn_payload(saved)
             yield _sse({'type': 'done', 'data': {'turn': payload}})
         except asyncio.CancelledError:

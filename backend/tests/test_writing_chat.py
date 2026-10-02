@@ -262,6 +262,25 @@ def test_stream_done_event_carries_usage_without_page_refresh(chat_api):
     assert turn['execution']['execution_id'] == saved.execution['execution_id']
 
 
+def test_stream_turn_triggers_auto_apply_hook_with_turn_id(chat_api, monkeypatch):
+    """直发轮完成后触发审核模式自动采纳钩子(按 turn_id),与任务轮同语义。"""
+    client, db, model = chat_api
+    calls = []
+
+    def record_auto_apply(bind, novel_id, actor_id, job_id=None, *, turn_id=None):
+        calls.append({'novel_id': novel_id, 'actor_id': actor_id, 'job_id': job_id, 'turn_id': turn_id})
+
+    monkeypatch.setattr('app.services.conversation.proposals.auto_apply_pending', record_auto_apply)
+    with client.stream('POST', '/api/writing-chat/1/turns/stream', json=payload()) as response:
+        assert response.status_code == 200
+        for _ in response.iter_lines():
+            pass
+
+    saved = db.query(WritingTurn).filter_by(novel_id=1).first()
+    assert saved is not None
+    assert calls == [{'novel_id': 1, 'actor_id': 1, 'job_id': None, 'turn_id': saved.id}]
+
+
 def test_previous_actions_note_enters_next_context(chat_api):
     """上轮登记的提案与不确定点进入下一轮上下文，Agent 不重复登记。"""
     client, db, model = chat_api
