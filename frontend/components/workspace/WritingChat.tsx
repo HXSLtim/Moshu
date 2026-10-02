@@ -272,7 +272,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1, flexWrap: 'nowrap', minWidth: 0 }}>
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', gap: 1, alignItems: 'center', overflow: 'hidden' }} />
         {queued && <Chip size="small" color="primary" variant="outlined" sx={{ maxWidth: 160, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }} label={`已排队：${queued}`} onDelete={() => setQueued('')} />}
-        {reviewMode && <ReviewModePicker value={reviewMode} onChange={(mode) => { void switchReviewMode(mode); }} />}
+        {reviewMode && <ReviewModePicker value={reviewMode} caption={false} onChange={(mode) => { void switchReviewMode(mode); }} />}
         {pending ? (
           <Button variant="contained" color="error" startIcon={<StopIcon />} onClick={() => {
             void api.stopWritingTurn(novelId, pending.request_id).then((turn) => { if (mounted.current) { merge([turn]); controllerRef.current?.abort(); controllerRef.current = null; sendingRef.current = false; setSending(false); } }).catch(() => { if (mounted.current) setError('暂时无法停止，请稍后重试'); });

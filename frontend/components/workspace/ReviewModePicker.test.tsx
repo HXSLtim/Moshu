@@ -19,6 +19,11 @@ describe('审核模式选择器（批1 归一）', () => {
     expect(await screen.findByText('通过一致性检查的直接写入，有疑问的留给你决定。')).toBeTruthy();
   });
 
+  it('对话栏密度档 caption=false：不渲染常驻说明行，只留档位悬停（pm 裁量）', () => {
+    render(<ReviewModePicker value="confirm" onChange={vi.fn()} caption={false} />);
+    expect(screen.queryByText('审核模式：AI 的改稿怎么入库，按本书保存。')).toBeNull();
+  });
+
   it('点选切档回传值；disabled 整组不可用', () => {
     const onChange = vi.fn();
     render(<ReviewModePicker value="confirm" onChange={onChange} />);
