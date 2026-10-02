@@ -370,3 +370,15 @@ async def test_sqlite_write_lock_does_not_block_http_event_loop(job_db, monkeypa
         assert model_threads and model_threads[0] != main_thread
     finally:
         release.set(); fallback.cancel(); await asyncio.to_thread(locker.join)
+
+
+def test_job_budget_matches_runtime_loop_requirements():
+    """任务级预算必须覆盖内层循环:chat 工具循环 8 次,编排 1+6 次,不被嵌套共享截断。"""
+    from app.services.conversation.jobs import _job_model_budget
+    from app.services.generation.orchestrator import MAX_ORCHESTRATION_MODEL_CALLS
+
+    assert _job_model_budget('chat', {}) == 8
+    assert _job_model_budget('orchestrate', {}) == MAX_ORCHESTRATION_MODEL_CALLS
+    assert _job_model_budget('continue', {}) == 5
+    assert _job_model_budget('generate', {}) == 5
+    assert _job_model_budget('outline', {}) == 1

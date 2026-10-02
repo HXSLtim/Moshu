@@ -27,6 +27,23 @@ _worker_loop = None
 _worker_lock = Lock()
 _dispatch_lock = Lock()
 _handlers = {}
+
+
+def _job_model_budget(kind: str, payload: dict) -> int:
+    """任务级模型调用上限;嵌套 scope 共享此总额,必须覆盖内层工作流的真实需求。
+
+    chat 是多轮工具循环(路由层 8 次);orchestrate 是规划 1 + 生成至多 6 次;
+    高级续写走三角色工作流 5 次;其余为单次调用的显式任务。
+    """
+    from app.services.generation.orchestrator import MAX_ORCHESTRATION_MODEL_CALLS
+    if kind == 'chat':
+        return 8
+    if kind == 'orchestrate':
+        return MAX_ORCHESTRATION_MODEL_CALLS
+    if kind in {'continue', 'continue_stream', 'generate'} or payload.get('mode') == 'advanced_continue':
+        return 5
+    return 1
+
 TERMINAL = {'completed', 'failed', 'cancelled'}
 
 
@@ -220,7 +237,7 @@ async def _run_job(sessions, job_id):
             payload, kind, actor_id, novel_id = job.payload, job.kind, job.actor_id, job.novel_id
             remaining = max(0.01, (job.deadline_at - datetime.utcnow()).total_seconds())
             db.commit()
-            async with execution_scope(max_model_calls=5 if kind in {'continue', 'continue_stream', 'generate'} or payload.get('mode') == 'advanced_continue' else 1,
+            async with execution_scope(max_model_calls=_job_model_budget(kind, payload),
                                        timeout_seconds=remaining, execution_id=job_id) as meter:
                 result = await _handlers[kind](payload, novel_id, SimpleNamespace(id=actor_id), db)
                 from fastapi.responses import StreamingResponse
