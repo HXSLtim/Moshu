@@ -108,6 +108,11 @@ PROPOSE_TOOLS: list[dict] = [
                     'operation': {'type': 'string', 'enum': ['append', 'rewrite', 'create']},
                     'content': {'type': 'string', 'description': '完整可用的正文，不要写占位或省略'},
                     'title': {'type': 'string', 'description': '仅开新章时给出章节标题'},
+                    'uncertainties': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'description': '本次创作中你不确定、替作者做过的假设，最多 12 条；没有就省略',
+                    },
                 },
                 'required': ['operation', 'content'],
             },
@@ -172,8 +177,11 @@ def execute_agent_tool(name: str, raw_args) -> tuple[dict | None, dict | None, s
     if name == 'write_manuscript':
         if args.get('operation') not in _OPERATION or not str(args.get('content') or '').strip():
             return None, None, '稿件不完整，未登记。'
+        uncertainties = [str(item).strip()[:500] for item in (args.get('uncertainties') or [])
+                         if isinstance(item, str) and item.strip()][:12]
         manuscript = {'operation': args['operation'], 'content': str(args['content']).strip(),
-                      'title': str(args['title']).strip() if args.get('title') else None}
+                      'title': str(args['title']).strip() if args.get('title') else None,
+                      'uncertainties': uncertainties}
         return None, manuscript, '已收到正文稿件，等待作者采纳。'
     return None, None, f'未实现的工具：{name}'
 
@@ -237,11 +245,18 @@ def _params_model(name: str, parameters: dict):
     from pydantic import create_model
 
     types = {'string': str, 'integer': int, 'number': float, 'boolean': bool}
+
+    def _annotation(spec: dict):
+        # 数组参数必须显式映射，否则实参会被参数表校验静默丢弃。
+        if spec.get('type') == 'array':
+            return list[str] if (spec.get('items') or {}).get('type') == 'string' else list
+        return types.get(spec.get('type'), str)
+
     properties = parameters.get('properties') or {}
     required = set(parameters.get('required') or [])
     fields = {}
     for key, spec in properties.items():
-        annotation = types.get(spec.get('type'), str)
+        annotation = _annotation(spec)
         description = spec.get('description')
         if key in required:
             fields[key] = (annotation, ...)
@@ -365,7 +380,9 @@ async def run_agent(llm, messages: list, *, read_tool_executor=None,
         with suppress(asyncio.CancelledError):
             await runner
 
-    final: dict = {'actions': trace.actions, 'uncertainties': []}
+    # 不确定点只随稿件上报：纯讨论轮次没有可采纳载体，不伪造不确定点。
+    final: dict = {'actions': trace.actions,
+                   'uncertainties': (trace.manuscript or {}).get('uncertainties', [])}
     operation = None
     decided = 'discuss'
     if trace.manuscript is not None:

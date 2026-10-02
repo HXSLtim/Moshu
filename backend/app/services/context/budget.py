@@ -248,7 +248,11 @@ def budget_structured_context(entries: list[tuple[dict, str]]) -> tuple[str, lis
 def build_writing_chat_messages(*, worldview: str, current_content: str, story_context: str,
                                 turns: Iterable[object], instruction: str, mode: str,
                                 digest_context: str = "", structured_context: str = "") -> list[tuple[str, str]]:
-    """对话历史与正文分别限额，保留最近的完整对话轮次和本轮指令。"""
+    """对话历史与正文分别限额，保留最近的完整对话轮次和本轮指令。
+
+    轮次可带 ``actions_note``（上轮登记的提案摘要），追加在该轮回复之后，
+    计入同一历史预算；无该属性的旧轮次行为不变。
+    """
     if not isinstance(digest_context, str) or len(digest_context) > MAX_DIGEST_CONTEXT_CHARS:
         raise ValueError("简介上下文必须先经过共享预算，不能在注入时改变来源对应文本")
     if not isinstance(structured_context, str) or len(structured_context) > MAX_STRUCTURED_CONTEXT_CHARS:
@@ -267,6 +271,9 @@ def build_writing_chat_messages(*, worldview: str, current_content: str, story_c
     for turn in reversed(list(turns)):
         user = f"[当时章节：{turn.chapter_title}] {turn.user_text}"
         answer = str(turn.assistant_text)
+        note = str(getattr(turn, 'actions_note', '') or '')
+        if note:
+            answer = f"{answer}\n{note}"
         cost = len(user) + len(answer)
         if cost > remaining:
             if not history:

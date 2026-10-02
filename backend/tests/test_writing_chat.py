@@ -260,3 +260,23 @@ def test_stream_done_event_carries_usage_without_page_refresh(chat_api):
     assert saved.execution['usage'] is None
     # 流式轮次的 execution 必须落库，而不是只在响应里出现。
     assert turn['execution']['execution_id'] == saved.execution['execution_id']
+
+
+def test_previous_actions_note_enters_next_context(chat_api):
+    """上轮登记的提案与不确定点进入下一轮上下文，Agent 不重复登记。"""
+    client, db, model = chat_api
+    db.add(WritingTurn(novel_id=1, chapter_id=1, chapter_title='第一章', mode='discuss',
+                       request_id=str(uuid4()), user_text='给主角配一把佩剑',
+                       assistant_text='我提议登记实体：青霜剑。',
+                       base_content_hash='0' * 64, status='completed',
+                       result={'actions': [{'kind': 'entity', 'name': '青霜剑',
+                                            'entity_kind': 'item', 'description': '佩剑'}],
+                               'uncertainties': ['剑的来历未确认'], 'decided_mode': 'discuss'}))
+    db.commit()
+    second = client.post('/api/writing-chat/1/turns', json=payload(message='继续聊这把剑')).json()
+    assert second['status'] == 'completed'
+    sent = model.call_args.args[0]
+    joined = ' '.join(message.content if hasattr(message, 'content') else str(message)
+                      for message in sent)
+    assert '上轮已登记提案' in joined and '青霜剑' in joined
+    assert '未确认点:剑的来历未确认' in joined
