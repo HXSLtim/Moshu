@@ -330,6 +330,30 @@ describe('对话框唯一形态(能力工具化)', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: '复制回复' })).toHaveLength(2));
     expect(screen.queryByText('正在继续写…')).toBeNull();
   });
+
+  it('工具块终态在流式结束后保留（含能力工具）', async () => {
+    let release: (() => void) | undefined;
+    vi.spyOn(api, 'streamWritingTurn').mockImplementation((_id, data, callbacks) => new Promise((resolve) => {
+      callbacks.onTool?.('read_chapter', { status: 'running' });
+      callbacks.onTool?.('read_chapter', { status: 'read' });
+      callbacks.onTool?.('workflow_continue', { status: 'completed' });
+      release = () => {
+        callbacks.onDone?.({ ...turn, id: 2, request_id: data.request_id, user_text: data.message, assistant_text: '读完就写。' });
+        resolve();
+      };
+    }));
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '先读再写' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    expect(await screen.findByText('已阅读正文')).toBeTruthy();
+    expect(screen.getByText('已执行高级续写')).toBeTruthy();
+    release?.();
+    // 完成态操作行出现后，终态工具 chip 不随 pending 态一起消失（原病根）。
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '复制回复' })).toHaveLength(2));
+    expect(screen.getByText('已阅读正文')).toBeTruthy();
+    expect(screen.getByText('已执行高级续写')).toBeTruthy();
+  });
 });
 
 describe('auto 档入库跟手', () => {
