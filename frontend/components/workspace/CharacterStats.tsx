@@ -437,17 +437,6 @@ export default function CharacterStats({
             </Box>
           )}
 
-          {activeCharacters.length > 0 && (
-            <Alert severity="info">
-              <Typography variant="body2">
-                <strong>写作建议：</strong>
-                {activeCharacters.length === 1 && '当前章节主要围绕一个角色展开，考虑增加其他角色的互动。'}
-                {activeCharacters.length >= 2 && activeCharacters.length <= 3 && '角色分布较为均衡，适合推进剧情发展。'}
-                {activeCharacters.length > 3 && '角色较多，注意保持每个角色的独特性和必要性。'}
-                {inactiveCharacters.length > 0 && `还有 ${inactiveCharacters.length} 个角色未在当前章节出现。`}
-              </Typography>
-            </Alert>
-          )}
         </Collapse>
       </CardContent>
     </Card>
