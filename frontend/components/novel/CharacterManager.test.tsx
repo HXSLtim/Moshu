@@ -57,4 +57,19 @@ describe('人物档案管理区（样板）', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(remove).not.toHaveBeenCalled();
   });
+
+  it('区块头提供新增入口，点击打开空白表单', async () => {
+    render(<CharacterManager {...props} />);
+    await screen.findByText('林昭');
+    fireEvent.click(screen.getByRole('button', { name: '新增人物' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('新增人物档案');
+  });
+
+  it('档案卡提供编辑入口，表单回显当前人物', async () => {
+    render(<CharacterManager {...props} />);
+    fireEvent.click(await screen.findByRole('button', { name: '编辑林昭' }));
+    await screen.findByRole('dialog');
+    expect(screen.getByDisplayValue('林昭')).toBeTruthy();
+  });
 });
