@@ -6,7 +6,7 @@
 
 | 入口 | 请求与恢复 | 正文采纳 |
 |---|---|---|
-| 常驻对话 | `POST /generation/jobs`，kind 为 chat；历史合并 WritingTurn 与尚未建立轮次的真实任务 | 讨论、规划和检查只供参考；正文类任务返回 proposal，作者确认后保存 |
+| 常驻对话 | `POST /writing-chat/{novel_id}/turns/stream` 直发（不经 `/generation/jobs` 中转；jobs 表保留历史 kind=chat 记录仅供展示）；历史合并 WritingTurn 与尚未建立轮次的真实任务 | 讨论、规划和检查只供参考；正文类任务返回 proposal，作者确认后保存 |
 | 高级续写 | kind 为 continue，保留文风、节奏、目标长度；按作品和章节恢复最近任务 | 服务器验证原文版本、哈希和生命周期后追加正文 |
 | 局部改写 | kind 为 rewrite；选区下标从 UTF-16 转为 Unicode 码点 | 原选区和可编辑候选对照，`candidate_content` 随确认命令提交 |
 | 复合编排 | kind 为 `orchestrate`；模型把复合指令分解为至多 6 步计划(检索/生成/一致性)，按编号执行 | 响应含计划、不确定点与一致性摘要；候选走 `proposal_id` 采纳 |

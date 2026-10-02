@@ -118,7 +118,7 @@ PYBACKUP
 
 ## 检查与常见问题
 
-后端在 `backend` 目录执行 `.venv/bin/python run_tests.py --mode all`。前端在 `frontend` 目录执行 `npm run lint`、`npm run typecheck`、`npm test`、`npm run build`。测试范围与 Node 25/26 的 Web Storage 处理见 [测试指南](../../backend/TESTING.md)。本机 SOCKS 代理导致 httpx 导入失败时，可用 `env -u ALL_PROXY -u all_proxy` 前缀运行后端测试。
+后端在 `backend` 目录执行 `./run_tests.sh --mode all`（脚本自动清理全部代理变量）。前端在 `frontend` 目录执行 `npm run lint`、`npm run typecheck`、`npm test`、`npm run build`。测试范围与 Node 25/26 的 Web Storage 处理见 [测试指南](../../backend/TESTING.md)。本机代理导致 httpx 导入失败时，须清理全部 8 个代理变量（只清 `ALL_PROXY`/`all_proxy` 不够，`NO_PROXY` 中的 `[::1]` 会让测试在收集阶段崩溃），完整命令见 [AGENTS.md](../../AGENTS.md)「验证」节，或直接用 `run_tests.sh` 免于此坑。
 
 - 模型不可用：检查服务、模型标识及对应 `.env` 字段；RAG 还需要独立可用的 Embedding。
 - 保存返回 409：先在冲突弹窗对比并保留草稿，选择覆盖、采纳服务端或另存新章，避免直接刷新丢稿。
@@ -129,7 +129,7 @@ PYBACKUP
 
 1. 按上文停止写入、备份，然后在 backend 执行 `.venv/bin/python init_db.py`，升级到当前 Alembic head `e2b6c8d0f345`。此过程不调用模型、不创建旧章批量提取任务。
 2. 默认 `MEMORY_WORKER_ENABLED=false`：新的非空正文保存会写入任务，但不执行模型。确认简单模型可用后，在有效的 `.env` 设置 `MEMORY_WORKER_ENABLED=true` 并重启后端，才会处理积压任务。关闭时改回 false 并重启；正在运行的租约留待再次启用后恢复。
-3. 工作区右侧「工具 → 章节记忆」可查看原文历史、简介和出处。旧章需要点击「重建简介」，只处理服务端已保存原文；没有保存的编辑稿不会被暗中提交。
+3. 工作区「设定」页签的「章节记忆」区可查看原文历史、简介和出处。旧章需要点击「重建简介」，只处理服务端已保存原文；没有保存的编辑稿不会被暗中提交。
 4. 默认单 worker 串行运行，轮询 2 秒、租约 420 秒、每轮最多 3 次尝试。网络失败有限退避；作者显式重建失败任务会重置本轮尝试次数。到期旧 worker 不能发布，仍可能发生上游重复调用。
 5. 当前单段提取最多 20000 Unicode 字符；更长章节由有界分段任务合并，单段引用起止必须与原文完全吻合，任一段失败则不发布部分简介。
 
