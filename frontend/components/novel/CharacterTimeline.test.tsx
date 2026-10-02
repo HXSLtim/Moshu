@@ -90,4 +90,13 @@ describe('TA 的经历区', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(await screen.findByText('第 1 章')).toBeTruthy();
   });
+
+  it('refreshKey 递增触发人物列表重取，当前选中保留（热更新）', async () => {
+    const { rerender } = render(<CharacterTimeline novelId={1} />);
+    await screen.findByText('林昭 的出场排线');
+    const callsAfterMount = vi.mocked(charactersApi.list).mock.calls.length;
+    rerender(<CharacterTimeline novelId={1} refreshKey={1} />);
+    await waitFor(() => expect(vi.mocked(charactersApi.list).mock.calls.length).toBeGreaterThan(callsAfterMount));
+    expect(screen.getByText('林昭 的出场排线')).toBeTruthy();
+  });
 });

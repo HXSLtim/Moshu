@@ -20,6 +20,8 @@ export default function StoryBiblePage() {
   const [novel, setNovel] = useState<Novel | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
+  // 人物档案变更计数：Manager 存档后递增，关系区/经历区以此为依赖重取，下拉不再等刷新。
+  const [charactersVersion, setCharactersVersion] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setNovel(null);
@@ -49,7 +51,7 @@ export default function StoryBiblePage() {
     <Box>
       {error ? <Alert severity="error" action={<Button color="inherit" onClick={() => setAttempt((value) => value + 1)}>重试</Button>}>{error}</Alert>
         : !novel ? <Typography role="status">正在读取项目…</Typography>
-        : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /><CharacterManager novelId={novelId} /><CharacterRelationshipEditor novelId={novelId} /><CharacterTimeline novelId={novelId} /></>}
+        : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /><CharacterManager novelId={novelId} onSaved={() => setCharactersVersion((value) => value + 1)} /><CharacterRelationshipEditor novelId={novelId} refreshKey={charactersVersion} /><CharacterTimeline novelId={novelId} refreshKey={charactersVersion} /></>}
     </Box>
   </AppFrame>;
 }

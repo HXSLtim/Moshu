@@ -29,6 +29,8 @@ import type { ChapterSummary } from '@/types';
 
 interface CharacterTimelineProps {
   novelId: number;
+  /** 人物档案变更计数：Manager 增删改后递增，驱动人物下拉与时间线重取热更新。 */
+  refreshKey?: number;
 }
 
 const MAX_CHAPTER_PAGES = 20;
@@ -38,7 +40,7 @@ const MAX_CHAPTER_PAGES = 20;
  * （milestones/relationship_changes 恒空，预检实测），故只做出场时间线，不做占位假区块。
  * 冷启动诚实空态 + 手动补录（章节 + 类型 + 说明）；MCP track_appearance 自动追踪一期不接。
  */
-export default function CharacterTimeline({ novelId }: CharacterTimelineProps) {
+export default function CharacterTimeline({ novelId, refreshKey = 0 }: CharacterTimelineProps) {
   const [characters, setCharacters] = useState<CharacterResponse[]>([]);
   const [charactersLoading, setCharactersLoading] = useState(true);
   const [error, setError] = useState('');
@@ -62,7 +64,11 @@ export default function CharacterTimeline({ novelId }: CharacterTimelineProps) {
       const items = await charactersApi.list(novelId, controller.signal);
       if (!controller.signal.aborted) {
         setCharacters(items);
-        setSelectedId((current) => current || (items.length > 0 ? String(items[0].id) : ''));
+        // 首载选第一位；热更新后保留当前选中，选中项已删除（下拉失配）时回落第一位。
+        setSelectedId((current) => {
+          if (current && items.some((item) => String(item.id) === current)) return current;
+          return items.length > 0 ? String(items[0].id) : '';
+        });
       }
     } catch (failure) {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : '读取人物档案失败');
@@ -74,7 +80,7 @@ export default function CharacterTimeline({ novelId }: CharacterTimelineProps) {
   useEffect(() => {
     void loadCharacters();
     return () => controllerRef.current?.abort();
-  }, [loadCharacters]);
+  }, [loadCharacters, refreshKey]);
 
   useEffect(() => {
     if (!selectedId) {

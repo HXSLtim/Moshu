@@ -102,4 +102,13 @@ describe('人物关系区', () => {
     expect(await screen.findByText('角色关系不存在')).toBeTruthy();
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
+
+  it('refreshKey 递增触发人物/关系重取（热更新，不等整页刷新）', async () => {
+    const { rerender } = render(<CharacterRelationshipEditor novelId={1} />);
+    await screen.findByText('林昭 —— 师徒 —— 沈孤鸿');
+    const callsAfterMount = vi.mocked(charactersApi.network).mock.calls.length;
+    rerender(<CharacterRelationshipEditor novelId={1} refreshKey={1} />);
+    await waitFor(() => expect(vi.mocked(charactersApi.network).mock.calls.length).toBeGreaterThan(callsAfterMount));
+    expect(screen.getByText('林昭 —— 师徒 —— 沈孤鸿')).toBeTruthy();
+  });
 });
