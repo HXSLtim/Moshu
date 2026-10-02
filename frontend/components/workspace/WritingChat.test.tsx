@@ -331,3 +331,45 @@ describe('对话框唯一形态(能力工具化)', () => {
     expect(screen.queryByText('正在继续写…')).toBeNull();
   });
 });
+
+describe('auto 档入库跟手', () => {
+  const autoNovel = { id: 1, title: '墨色长河', user_id: 1, created_at: '2026-10-02T00:00:00', review_mode: 'auto' as const };
+  const sendCompletedWithProposal = () => vi.spyOn(api, 'streamWritingTurn').mockImplementation(async (_id, data, callbacks) => {
+    callbacks.onDone?.({ ...turn, id: 2, request_id: data.request_id, mode: 'discuss', assistant_text: '续写好了。', proposal_id: 'p-auto' });
+  });
+
+  it('auto 档完成带提案的轮次，通知页面做三态跟随', async () => {
+    const autoApplied = vi.fn();
+    sendCompletedWithProposal();
+    render(<WritingChat {...props} novel={autoNovel} onManuscriptAutoApplied={autoApplied} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '接着写' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('续写好了。');
+    expect(autoApplied).toHaveBeenCalledWith(expect.objectContaining({ proposal_id: 'p-auto' }));
+  });
+
+  it('confirm 档同一轮次不触发自动跟手信号（走手动采纳链）', async () => {
+    const autoApplied = vi.fn();
+    sendCompletedWithProposal();
+    render(<WritingChat {...props} onManuscriptAutoApplied={autoApplied} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '接着写' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('续写好了。');
+    expect(autoApplied).not.toHaveBeenCalled();
+  });
+
+  it('none 档纯交流轮（无提案）同样静默', async () => {
+    const autoApplied = vi.fn();
+    vi.spyOn(api, 'streamWritingTurn').mockImplementation(async (_id, data, callbacks) => {
+      callbacks.onDone?.({ ...turn, id: 2, request_id: data.request_id, mode: 'discuss', assistant_text: '只是聊聊天。' });
+    });
+    render(<WritingChat {...props} novel={{ ...autoNovel, review_mode: 'none' as const }} onManuscriptAutoApplied={autoApplied} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '聊聊剧情' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('只是聊聊天。');
+    expect(autoApplied).not.toHaveBeenCalled();
+  });
+});

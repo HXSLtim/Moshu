@@ -1,6 +1,6 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appendWritingCandidate, contentHash, mergeWritingTurns } from './writingChat';
+import { appendWritingCandidate, contentHash, mergeWritingTurns, resolveAutoApplyAction } from './writingChat';
 import type { WritingTurn } from '@/types/writingChat';
 
 export const sampleTurn: WritingTurn = { id: 1, request_id: 'request-one', novel_id: 1, chapter_id: 2, chapter_title: '第一章', mode: 'continue', user_text: '接着写', assistant_text: '新的候选', base_content_hash: '', status: 'completed', error: null, created_at: '2026-09-08T00:00:00' };
@@ -30,5 +30,17 @@ describe('持久创作对话', () => {
   });
   it('讨论回复不能当作续写自动采纳', async () => {
     await expect(appendWritingCandidate('', 1, 2, { ...sampleTurn, mode: 'discuss' })).rejects.toThrow('不是可采纳');
+  });
+});
+describe('auto 档编辑器三态', () => {
+  it('同章无本地稿→自动载服务端新稿', () => {
+    expect(resolveAutoApplyAction(2, 2, false)).toBe('reload');
+  });
+  it('同章有本地稿→守卫：编辑器不动，双稿提示', () => {
+    expect(resolveAutoApplyAction(2, 2, true)).toBe('guard');
+  });
+  it('落点非当前章或缺失→仅后台刷新，编辑器无感', () => {
+    expect(resolveAutoApplyAction(3, 2, false)).toBe('background');
+    expect(resolveAutoApplyAction(null, 2, false)).toBe('background');
   });
 });

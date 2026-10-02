@@ -22,6 +22,8 @@ export interface Novel {
   user_id: number;
   created_at: string;
   updated_at?: string;
+  /** 审核档位：AI 的改稿怎么入库（服务端下发；缺省按 confirm 处理）。 */
+  review_mode?: 'confirm' | 'auto' | 'none';
 }
 
 export interface StyleSample {
