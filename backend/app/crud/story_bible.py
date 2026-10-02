@@ -13,10 +13,25 @@ from app.models.novel import Novel
 # ========== 故事事实 CRUD ==========
 
 def create_fact(db: Session, fact: FactCreate, *, commit: bool = True) -> StoryFact:
-    """创建故事事实,状态固定从 active 开始。"""
+    """创建故事事实,状态固定从 active 开始。
+
+    同书同主体同属性同取值的 active 事实视为同一条:重复应用设定提案
+    (卡片复活、换请求标识重放)返回已有行;取值不同则照常新建,交由
+    作者用退役流程显式更替。
+    """
     novel = db.get(Novel, fact.novel_id)
     if novel is None or not novel.rag_lifecycle_id:
         raise ValueError("事实所属小说不存在或生命周期不可用")
+    existing = db.query(StoryFact).filter(
+        StoryFact.novel_id == fact.novel_id,
+        StoryFact.novel_lifecycle_id == novel.rag_lifecycle_id,
+        StoryFact.subject == fact.subject,
+        StoryFact.attribute == fact.attribute,
+        StoryFact.value == fact.value,
+        StoryFact.status == "active",
+    ).first()
+    if existing is not None:
+        return existing
     db_fact = StoryFact(
         novel_id=fact.novel_id,
         novel_lifecycle_id=novel.rag_lifecycle_id,
