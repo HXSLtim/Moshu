@@ -19,6 +19,7 @@ from app.models.memory import ChapterDigest, ChapterRevision
 from app.models.novel import Chapter, Novel
 from app.models.story_bible import StoryEvent, StoryFact
 from app.services.context.budget import (
+    MAX_READ_CHAPTER_CHARS,
     MAX_REVIEW_CONTENT_CHARS,
     MAX_TOOL_QUERY_CHARS,
     MAX_TOOL_RESULT_CHARS,
@@ -60,6 +61,18 @@ READ_TOOL_SPECS: list[dict] = [
         'function': {
             'name': 'read_chapter_digest',
             'description': '读指定章节的当前版本简介；只能查目标章之前的章节，当前章正文已经在上下文中。',
+            'parameters': {
+                'type': 'object',
+                'properties': {'chapter_number': {'type': 'integer', 'description': '章节号'}},
+                'required': ['chapter_number'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'read_chapter',
+            'description': '读指定章节的当前版本原文(单次一章,超长自动截到开头)。需要引用或核对前面章节的具体文字与细节时使用;只要概要时改用 read_chapter_digest。',
             'parameters': {
                 'type': 'object',
                 'properties': {'chapter_number': {'type': 'integer', 'description': '章节号'}},
@@ -234,6 +247,35 @@ def _read_chapter_digest_sync(scope: AgentScope, chapter_number) -> str:
     return f'第{row["chapter_number"]}章《{row["title"]}》简介（自动提取，仅供参考）：\n{row["summary"].strip()}'
 
 
+def _read_chapter_sync(scope: AgentScope, chapter_number) -> str:
+    if type(chapter_number) is not int or chapter_number < 1:
+        return '章节号不合法，未执行查询。'
+    if chapter_number >= scope.target_chapter:
+        return (f'只能阅读目标章（第{scope.target_chapter}章）之前的原文；'
+                '当前章正文已经在上下文中，未来章节对本轮不可见。')
+    with SessionLocal() as db:
+        _assert_scope(db, scope)
+        chapter = db.query(Chapter).filter(
+            Chapter.novel_id == scope.novel_id,
+            Chapter.chapter_number == chapter_number,
+        ).first()
+        if chapter is None:
+            return f'没有找到第{chapter_number}章。'
+        content = (chapter.content or '').strip()
+        title = chapter.title or '无题'
+    if not content:
+        return f'第{chapter_number}章《{title}》还没有正文。'
+    header = f'第{chapter_number}章《{title}》原文：\n'
+    if len(header) + len(content) > MAX_READ_CHAPTER_CHARS:
+        body = compact_text(content, MAX_READ_CHAPTER_CHARS - len(header) - 400, keep='head')
+        note = (f'\n\n（本章共 {len(content)} 字符，超过单次阅读上限 {MAX_READ_CHAPTER_CHARS} 字符，'
+                '以上仅为开头部分；需要中后段的具体内容时，请用 search_manuscript 按关键词检索，'
+                '或请作者直接提供相关段落。）')
+    else:
+        body, note = content, ''
+    return header + body + note
+
+
 def _get_outline_sync(scope: AgentScope) -> str:
     from app.services.memory.story import get_outline_for_generation
     with SessionLocal() as db:
@@ -324,6 +366,10 @@ async def execute_read_tool(scope: AgentScope, name: str, args: dict) -> str:
         number = args.get('chapter_number')
         text = await asyncio.to_thread(_read_chapter_digest_sync, scope,
                                        number if type(number) is int else 0)
+    elif name == 'read_chapter':
+        number = args.get('chapter_number')
+        text = await asyncio.to_thread(_read_chapter_sync, scope,
+                                       number if type(number) is int else 0)
     elif name == 'get_outline':
         text = await asyncio.to_thread(_get_outline_sync, scope)
     elif name == 'search_manuscript':
@@ -332,4 +378,7 @@ async def execute_read_tool(scope: AgentScope, name: str, args: dict) -> str:
         text = await _check_manuscript(scope, str(args.get('content') or ''))
     else:
         return f'未实现的工具：{name}'
-    return compact_text(text, MAX_TOOL_RESULT_CHARS, keep='both') + '\n' + _DATA_NOTICE
+    # read_chapter 的单章原文预算(上限 2 万字符)是统一结果预算的特例口:
+    # 单次一章、目标章后拒读,有界,不构成绕过上下文预算读入整本书。
+    budget = MAX_READ_CHAPTER_CHARS if name == 'read_chapter' else MAX_TOOL_RESULT_CHARS
+    return compact_text(text, budget, keep='both') + '\n' + _DATA_NOTICE

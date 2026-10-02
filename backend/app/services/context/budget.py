@@ -34,6 +34,8 @@ MAX_CONTEXT_DIGESTS = 3
 
 MAX_TOOL_RESULTS = 8
 MAX_TOOL_RESULT_CHARS = 3_000
+# 稿件原文单章阅读上限:read_chapter 在统一结果预算外的特例口,单章有界。
+MAX_READ_CHAPTER_CHARS = 20_000
 MAX_TOOL_QUERY_CHARS = 200
 
 _OMISSION_MARKER = "\n……（上下文已按预算裁剪）……\n"
