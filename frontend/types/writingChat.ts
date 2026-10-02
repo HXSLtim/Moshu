@@ -6,12 +6,15 @@ export type WritingMode = 'discuss' | 'continue' | 'advanced_continue' | 'rewrit
 /**
  * Agent 在交流中自己判断需要写入的设定动作。
  * 作者不必选模式；模型只负责提议，确认后才落库。
+ * decision/decided_at 由服务端在决策端点写回；缺失表示尚未决策（待确认）。
  */
+type AgentActionBase = { decision?: 'applied' | 'skipped'; decided_at?: string | null };
+
 export type AgentAction =
-  | { kind: 'project_info'; genre: string | null; description: string | null; worldview: string | null }
-  | { kind: 'entity'; name: string; entity_kind: 'character' | 'item' | 'location' | 'organization'; description: string }
-  | { kind: 'fact'; subject: string; attribute: string; value: string }
-  | { kind: 'outline'; node_kind: 'volume' | 'chapter'; title: string; chapter_number: number | null; summary: string };
+  | AgentActionBase & { kind: 'project_info'; genre: string | null; description: string | null; worldview: string | null }
+  | AgentActionBase & { kind: 'entity'; name: string; entity_kind: 'character' | 'item' | 'location' | 'organization'; description: string }
+  | AgentActionBase & { kind: 'fact'; subject: string; attribute: string; value: string }
+  | AgentActionBase & { kind: 'outline'; node_kind: 'volume' | 'chapter'; title: string; chapter_number: number | null; summary: string };
 
 export interface AgentTurnResult {
   reply: string;

@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  ActionDecisionCreate,
   AiTakeoverNovelApiMcpAiTakeoverNovelIdPostParams,
   AutoChapterRequest,
   ChapterCreate,
@@ -5829,6 +5830,72 @@ export const stopTurnApiWritingChatNovelIdTurnsRequestIdStopPost = async (novelI
     method: 'POST'
 
 
+  }
+);}
+
+
+
+export type decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse200 = {
+  data: TurnResponse
+  status: 200
+}
+
+export type decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse422 = {
+  data: HTTPValidationError
+  status: 422
+}
+
+export type decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponseSuccess = (decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse200) & {
+  headers: Headers;
+};
+export type decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponseError = (decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse422) & {
+  headers: Headers;
+};
+
+export type decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse = (decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponseSuccess | decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponseError)
+
+export const getDecideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostUrl = (novelId: number,
+    turnId: number,) => {
+
+
+
+
+  return `/api/writing-chat/${novelId}/turns/${turnId}/actions/decision`
+}
+
+/**
+ * 登记设定提案决策;applied 在服务端恰一次执行写入并持久标记。
+ *
+ * 刷新后卡片按终态渲染不再复活;重复提交同一决策幂等,不重复执行、
+ * 不刷新原决策时间。已写入的设定不能改口为跳过。写入路径自带幂等
+ * (命令层确定性请求标识+事实全键去重),中途失败后重试会收敛而不是
+ * 产生重复行。
+ * @summary Decide Turn Actions
+ */
+export const decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPost = async (novelId: number,
+    turnId: number,
+    actionDecisionCreate: ActionDecisionCreate, options?: Parameters<typeof customFetch>[1]): Promise<decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<decideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostResponse>(getDecideTurnActionsApiWritingChatNovelIdTurnsTurnIdActionsDecisionPostUrl(novelId,turnId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(actionDecisionCreate)
   }
 );}
 
