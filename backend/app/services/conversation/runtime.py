@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from contextlib import suppress
 from typing import Annotated, AsyncIterator, TypedDict
 
@@ -324,6 +325,71 @@ def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[
     return _LangGraphToolNode(tools, handle_tool_errors=True)
 
 
+# 稿件工具的参数即正文本体,只有它从工具参数流里开洞推给作者。
+_MANUSCRIPT_TOOL_NAME = 'write_manuscript'
+_CONTENT_KEY_RE = re.compile(r'"content"\s*:\s*"')
+
+
+class _ManuscriptArgsStreamer:
+    """从流式 tool_call_chunks 中提取 write_manuscript 的 content 明文增量。
+
+    参数按 OpenAI 增量到达(args 是 JSON 文本片段)。每帧对已累积的
+    content 值做前缀式解码:尾部落在转义序列中间时回退到最近的可解码
+    边界,与已推前缀的差值即本次增量。全文量级(数千字)下每帧重解码
+    的成本可忽略(json 为 C 实现),换来无跨界状态的正确性。
+    """
+
+    def __init__(self):
+        self._args: dict[int, str] = {}
+        self._names: dict[int, str] = {}
+        self._content_at: dict[int, int] = {}
+        self._pushed: dict[int, int] = {}
+
+    def feed(self, chunk) -> str:
+        pieces = []
+        for call in getattr(chunk, 'tool_call_chunks', None) or []:
+            index = call.get('index') or 0
+            name = call.get('name') or self._names.get(index)
+            if name is None:
+                continue
+            self._names[index] = name
+            if name != _MANUSCRIPT_TOOL_NAME:
+                continue
+            self._args[index] = self._args.get(index, '') + (call.get('args') or '')
+            piece = self._drain(index)
+            if piece:
+                pieces.append(piece)
+        return ''.join(pieces)
+
+    def _drain(self, index: int) -> str:
+        raw = self._args[index]
+        start = self._content_at.get(index)
+        if start is None:
+            match = _CONTENT_KEY_RE.search(raw)
+            if match is None:
+                return ''
+            start = self._content_at[index] = match.end()
+        decoded = _decode_json_string_prefix(raw[start:])
+        if not decoded:
+            return ''
+        piece = decoded[self._pushed.get(index, 0):]
+        self._pushed[index] = len(decoded)
+        return piece
+
+
+def _decode_json_string_prefix(value: str):
+    """解码 JSON 字符串值的安全前缀;尾部落在转义序列中间时回退。"""
+    for cut in range(len(value), -1, -1):
+        candidate = value[:cut]
+        if candidate.endswith('\\'):
+            continue
+        try:
+            return json.loads('"' + candidate + '"')
+        except ValueError:
+            continue
+    return None
+
+
 def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set[str], trace: AgentTrace, publish,
                  manuscript_ack=None):
     """装配 LangGraph：agent 流式调用模型，tools 执行工具，条件边决定是否继续。"""
@@ -331,6 +397,8 @@ def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set
 
     async def agent(state: _AgentState) -> dict:
         accumulated = None
+        # 每轮新建:同一轮对话内模型可能再次起草,状态不跨轮续接。
+        manuscript_args = _ManuscriptArgsStreamer()
         async for chunk in stream_model(bound, list(state['messages'])):
             accumulated = chunk if accumulated is None else accumulated + chunk
             text = chunk.text()
@@ -338,6 +406,11 @@ def _build_graph(llm, *, read_tool_executor, capability_tool_executor, seen: set
             # 最终答复边生成边推送，保持原有观感。
             if text and not getattr(chunk, 'tool_call_chunks', None):
                 await publish({'type': 'chunk', 'content': text})
+            # 稿件工具的参数就是正文本体：content 值的明文增量同样逐字推给
+            # 作者，长稿不再等到完成才整段回显；其余工具的参数不推。
+            manuscript_delta = manuscript_args.feed(chunk)
+            if manuscript_delta:
+                await publish({'type': 'chunk', 'content': manuscript_delta})
         if accumulated is None:
             return {'messages': []}
         record_stream_usage(accumulated)

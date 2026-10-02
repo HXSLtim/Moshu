@@ -347,3 +347,81 @@ async def test_capability_tool_runs_and_emits_running_then_completed():
                                 llm=llm)
     summary = await execute_capability_tool(context, 'plot_options', {})
     assert '剧情走向选项已生成' in summary
+
+
+def _args_stream_chunks(name, args_json, splits):
+    """把完整 args JSON 按给定切点切成增量 tool_call_chunks 流。
+
+    首 chunk 带工具名,后续按 index 续传,模拟 OpenAI arguments delta。
+    """
+    pieces = []
+    offset = 0
+    for cut in list(splits) + [len(args_json)]:
+        pieces.append(args_json[offset:cut])
+        offset = cut
+    chunks = [
+        AIMessageChunk(content='', tool_call_chunks=[
+            {'name': name if index == 0 else None, 'args': piece,
+             'id': 'call-m-1' if index == 0 else None, 'index': 0}])
+        for index, piece in enumerate(pieces) if piece
+    ]
+    return chunks
+
+
+class _StreamScriptedLLM:
+    """每轮按脚本依次 yield 一串流式 chunk。"""
+
+    def __init__(self, rounds):
+        self.rounds = list(rounds)
+
+    def bind_tools(self, tools):
+        return self
+
+    async def astream(self, payload):
+        for chunk in self.rounds.pop(0):
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_manuscript_args_stream_as_chunks(agent_tool_db):
+    """稿件工具参数即正文本体:content 值的明文增量逐帧推给作者。"""
+    import json as _json
+    manuscript = '夜雨落在青瓦上。\n沈青临推开客栈的门,灯笼在风里晃着,照见檐下一行小字:"青州夜行"。'
+    args_json = _json.dumps({'operation': 'append', 'content': manuscript}, ensure_ascii=False)
+    # 切点落在 JSON 前缀/转义序列中间/值尾部,覆盖跨界解码。
+    splits = [args_json.index('"content"') + 11, args_json.index('客栈') + 1,
+              len(args_json) - 3]
+    llm = _StreamScriptedLLM([
+        _args_stream_chunks('write_manuscript', args_json, splits),
+        [_text_chunk('已登记为候选,确认后并入本章。')],
+    ])
+    events = []
+    async for event in run_agent(llm, [('user', '接着写一段')],
+                                 read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
+        events.append(event)
+
+    chunks = [event['content'] for event in events if event['type'] == 'chunk']
+    streamed = ''.join(chunks)
+    assert manuscript in streamed
+    assert '"operation"' not in streamed and '"content"' not in streamed
+    assert '已登记为候选' in streamed
+    manuscript_frames = [c for c in chunks if c != '已登记为候选,确认后并入本章。']
+    assert len(manuscript_frames) >= 3
+
+
+@pytest.mark.asyncio
+async def test_other_tool_args_are_not_streamed(agent_tool_db):
+    """只有稿件工具开洞:检索工具的参数增量不进 chunk 通道。"""
+    import json as _json
+    args_json = _json.dumps({'query': '林夏的武器是什么青霜剑在哪里'}, ensure_ascii=False)
+    llm = _StreamScriptedLLM([
+        _args_stream_chunks('search_story_bible', args_json, [10, 25]),
+        [_text_chunk('查到了,青霜剑。')],
+    ])
+    events = []
+    async for event in run_agent(llm, [('user', '林夏的武器是什么？')],
+                                 read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
+        events.append(event)
+
+    chunks = [event['content'] for event in events if event['type'] == 'chunk']
+    assert chunks == ['查到了,青霜剑。']
