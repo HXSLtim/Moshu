@@ -94,7 +94,7 @@ describe('常驻对话面板', () => {
     });
     render(<WritingChat {...props} />); await screen.findByText(turn.assistant_text);
     expect(screen.queryByLabelText('意图')).toBeNull();
-    expect(screen.getByText(/Nai 会自己判断该回答、整理设定还是起草正文/)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Enter 发送/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '设计借剑之后的悬念' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('Agent 回复');

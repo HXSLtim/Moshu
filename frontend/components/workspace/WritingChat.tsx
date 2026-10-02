@@ -244,7 +244,9 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
     </Box>
     <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <TextField fullWidth multiline minRows={2} maxRows={5} label={pending ? '排队下一条消息' : '和 Nai 聊聊'} value={draft}
-        placeholder={pending ? 'Nai 正在处理上一条,Enter 把这条加入队列…' : '例如：接着往下写 / 这个世界魔法要付代价 / 他为什么要隐瞒身份'}
+        placeholder={!chapterId ? '正在准备第 1 章,稍等…'
+          : pending ? '正在处理上一条,Enter 加入队列'
+          : '例如:接着往下写 / 他为什么要隐瞒身份(Enter 发送,Shift+Enter 换行)'}
         slotProps={{ htmlInput: { maxLength: 4000 } }} onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
           if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.shiftKey) return;
@@ -252,12 +254,9 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           if (pending && draft.trim()) { setQueued(draft.trim()); setDraft(''); return; }
           void send();
         }} />
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1 }}>
-        <Typography variant="caption" color={chapterId ? 'text.secondary' : 'warning.main'}>
-          {chapterId ? 'Nai 会自己判断该回答、整理设定还是起草正文 · Enter 发送，Shift+Enter 换行' : '正在准备第 1 章，稍等一下就能发送…'}
-        </Typography>
-        <Box sx={{ flex: 1 }} />
-        {queued && <Chip size="small" color="primary" variant="outlined" label={`已排队：${queued.slice(0, 18)}${queued.length > 18 ? '…' : ''}`} onDelete={() => setQueued('')} />}
+      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1, flexWrap: 'nowrap', minWidth: 0 }}>
+        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', gap: 1, alignItems: 'center', overflow: 'hidden' }} />
+        {queued && <Chip size="small" color="primary" variant="outlined" sx={{ maxWidth: 160, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }} label={`已排队：${queued}`} onDelete={() => setQueued('')} />}
         {reviewMode && (
           <Tooltip title="AI 稿件候选的审核模式,按本书保存">
             <Box component="span" sx={{ display: 'flex', gap: 0.25 }}>
