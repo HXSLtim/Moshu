@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from app.crud import novel as novel_crud
 from app.models.novel import Chapter, Novel
@@ -172,3 +173,51 @@ def _validate_replay(previous, proposal, decision, expected_version, expected_co
             or expected_content_hash != previous.base_content_hash
             or content_hash(proposal.content if candidate_content is None else candidate_content) != previous.approved_content_hash):
         raise HTTPException(409, '重复确认请求的原文版本或采纳正文发生变化')
+
+
+def _consistency_conflict(db, proposal, novel) -> bool:
+    """auto 档守门:对采纳后的正文跑确定性一致性检查,零模型调用。"""
+    from app.services.generation.workflow import GenerationWorkflow
+    from app.services.review.consistency import consistency_service
+    chapter = db.get(Chapter, proposal.chapter_id) if proposal.chapter_id else None
+    content = proposal.content
+    if proposal.operation == 'append' and chapter is not None:
+        content = chapter.content + ('\n\n' if chapter.content else '') + proposal.content
+    reference = GenerationWorkflow._load_consistency_reference_sync(
+        db, novel.id, novel.user_id, novel.rag_lifecycle_id, None, None)
+    result = consistency_service.check_content(
+        novel_id=novel.id, content=content,
+        chapter=chapter.chapter_number if chapter is not None else 1,
+        current_day=None, reference=reference)
+    return bool(result.get('has_conflict'))
+
+
+def auto_apply_pending(bind, novel_id: int, actor_id: int, job_id: str) -> None:
+    """任务完成后按作品审核模式自动采纳稿件候选。
+
+    自动采纳复用同一条 decide_proposal 命令:版本 CAS、幂等与采纳审计全部
+    保持,审计 request_id 带 ``auto:`` 前缀标识决策来自模式而非人工点击。
+    任何失败(守门冲突、版本漂移、校验不通过)都静默留 pending 待作者确认,
+    不影响任务本身的完成状态。
+    """
+    from loguru import logger
+    with sessionmaker(bind=bind)() as db:
+        try:
+            novel = db.get(Novel, novel_id)
+            if novel is None or novel.user_id != actor_id or novel.review_mode not in {'auto', 'none'}:
+                return
+            for proposal in db.query(WritingProposal).filter_by(
+                    execution_job_id=job_id, status='pending').all():
+                if novel.review_mode == 'auto' and _consistency_conflict(db, proposal, novel):
+                    continue
+                try:
+                    decide_proposal(db, novel_id=novel_id, proposal_id=proposal.id,
+                                    actor_id=actor_id, decision='accept',
+                                    request_id=f'auto:{proposal.id}',
+                                    expected_version=proposal.base_version,
+                                    expected_content_hash=proposal.base_content_hash)
+                except HTTPException as exc:
+                    logger.warning('审核模式自动采纳未通过校验({}),候选保留待确认: {}',
+                                   exc.status_code, exc.detail)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('审核模式自动采纳检查未完成: {}', exc)

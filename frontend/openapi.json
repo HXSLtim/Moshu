@@ -3737,6 +3737,16 @@
             "title": "Rag Lifecycle Id",
             "type": "string"
           },
+          "review_mode": {
+            "default": "confirm",
+            "enum": [
+              "confirm",
+              "auto",
+              "none"
+            ],
+            "title": "Review Mode",
+            "type": "string"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -3853,6 +3863,23 @@
             ],
             "description": "小说类型",
             "title": "Genre"
+          },
+          "review_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "confirm",
+                  "auto",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "审核模式:confirm=逐条人工确认;auto=确定性一致性通过后自动采纳;none=全部自动采纳",
+            "title": "Review Mode"
           },
           "title": {
             "anyOf": [

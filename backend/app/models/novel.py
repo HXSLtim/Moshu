@@ -30,6 +30,8 @@ class Novel(Base):
         default=_new_rag_lifecycle_id,
     )
     rag_revision = Column(Integer, nullable=False, default=1, server_default="1")
+    # 审核模式:confirm=候选逐条人工确认;auto=确定性一致性通过即自动采纳;none=全部自动采纳。
+    review_mode = Column(String(16), nullable=False, default="confirm", server_default="confirm")
 
     # 外键关联用户
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)

@@ -268,7 +268,7 @@ export const api = {
   /**
    * 更新小说
    */
-  async updateNovel(id: number, data: Partial<NovelCreate>): Promise<Novel> {
+  async updateNovel(id: number, data: Partial<NovelCreate> & { review_mode?: 'confirm' | 'auto' | 'none' }): Promise<Novel> {
     const res = await enhancedFetch(`/novels/${id}`, {
       method: 'PUT',
       headers: getHeaders(),
