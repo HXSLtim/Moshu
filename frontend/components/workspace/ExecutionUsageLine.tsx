@@ -21,7 +21,7 @@ export default function ExecutionUsageLine({ execution }: Props) {
     : '';
   return <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
     {usage
-      ? `本轮真实用量：输入 ${usage.input_tokens} / 输出 ${usage.output_tokens} tokens（提供方返回）${calls}`
+      ? `本轮用量 输入 ${usage.input_tokens} / 输出 ${usage.output_tokens} 字${calls}`
       : `提供方未返回本轮用量，无法展示 token 消耗${calls}`}
   </Typography>;
 }

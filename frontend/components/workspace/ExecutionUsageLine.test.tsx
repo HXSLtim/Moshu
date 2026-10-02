@@ -23,7 +23,7 @@ afterEach(cleanup);
 describe('本轮真实用量展示', () => {
   it('提供方返回用量时展示真实 token 数', () => {
     render(<ExecutionUsageLine execution={snapshot()} />);
-    expect(screen.getByText(/输入 1827 \/ 输出 536 tokens（提供方返回）/)).toBeTruthy();
+    expect(screen.getByText(/输入 1827 \/ 输出 536 字/)).toBeTruthy();
   });
 
   it('用量缺失时说明未返回，不用字符数或耗时推算 token', () => {

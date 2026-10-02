@@ -260,7 +260,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
         {reviewMode && (
           <Tooltip title="AI 稿件候选的审核模式,按本书保存">
             <Box component="span" sx={{ display: 'flex', gap: 0.25 }}>
-              {([['confirm', '确认'], ['auto', '自动'], ['none', '无审核']] as const).map(([mode, label]) => (
+              {([['confirm', '每次确认'], ['auto', '自动应用'], ['none', '全自动']] as const).map(([mode, label]) => (
                 <Chip key={mode} size="small" label={label} variant={reviewMode === mode ? 'filled' : 'outlined'}
                   color={reviewMode === mode ? 'primary' : 'default'} onClick={() => { void switchReviewMode(mode); }}
                   sx={{ height: 22, '& .MuiChip-label': { fontSize: 11, px: 0.75 } }} />
