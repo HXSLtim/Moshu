@@ -48,12 +48,15 @@ interface CharacterStatsProps {
   novel: Novel | null;
   currentContent: string;
   previousContent?: string;
+  /** 是否有选中章节：false 时统计没有对象，给引导而非 0/0 空转。 */
+  hasChapter?: boolean;
 }
 
 export default function CharacterStats({
   novel,
   currentContent,
   previousContent = '',
+  hasChapter = true,
 }: CharacterStatsProps) {
   const novelId = novel?.id;
   const [expanded, setExpanded] = useState(false);
@@ -208,16 +211,6 @@ export default function CharacterStats({
     }
   };
 
-  // 获取活跃度颜色
-  const getActivityColor = (count: number, maxCount: number) => {
-    if (count === 0) return 'default';
-    const ratio = count / maxCount;
-    if (ratio >= 0.7) return 'error';
-    if (ratio >= 0.4) return 'warning';
-    if (ratio >= 0.2) return 'info';
-    return 'success';
-  };
-
   const maxCount = Math.max(...characterStats.map(s => s.count), 1);
 
   if (!novel) return null;
@@ -273,6 +266,28 @@ export default function CharacterStats({
     );
   }
 
+  // 未选章节时统计没有对象：给最近路径引导，不渲染 0/0 空转。
+  if (!hasChapter) {
+    return (
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
+          <Typography variant="subtitle2" gutterBottom>
+            角色统计
+          </Typography>
+          <Divider sx={{ my: 1 }} />
+          {sourceSwitch}
+          <Box sx={{ mt: 2 }}>
+            <EmptyState
+              title="还没有选中的章节。"
+              hint="统计按当前章节正文计数；先在左侧选一章，这里就会显示各角色在本章的出场情况。"
+            />
+          </Box>
+          {characterSourceError}
+        </CardContent>
+      </Card>
+    );
+  }
+
   // 有档案且还在用正则源：一次性引导切源，知道了后按书记忆不再出现。
   const showHint = sourceReady && source === 'worldview' && !hintDismissed && (characters?.length ?? 0) > 0;
 
@@ -291,6 +306,8 @@ export default function CharacterStats({
           <IconButton
             size="small"
             onClick={() => setExpanded(!expanded)}
+            aria-label={expanded ? '收起角色列表' : '展开角色列表'}
+            aria-expanded={expanded}
           >
             {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
           </IconButton>
@@ -359,10 +376,12 @@ export default function CharacterStats({
                           {stat.name}
                         </Typography>
                         {getTrendIcon(stat.trend)}
+                        {/* 次数是属性不是状态：灰描边，红只留真错误；强弱交给下方进度条长度。 */}
                         <Chip
                           label={`${stat.count}次`}
                           size="small"
-                          color={getActivityColor(stat.count, maxCount) as any}
+                          color="default"
+                          variant="outlined"
                         />
                       </Box>
                     }
@@ -372,7 +391,7 @@ export default function CharacterStats({
                           variant="determinate"
                           value={(stat.count / maxCount) * 100}
                           sx={{ height: 4, borderRadius: 2 }}
-                          color={getActivityColor(stat.count, maxCount) as any}
+                          color="primary"
                         />
                         <Typography variant="caption" color="text.secondary">
                           每千字出现 {stat.percentage.toFixed(1)} 次

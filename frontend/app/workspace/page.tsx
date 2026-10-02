@@ -897,7 +897,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
     <Divider sx={{ my: 3 }} />
     <StyleManager novelId={novelId} selectedStyleSampleId={selectedStyleSampleId} onStyleSampleSelected={setSelectedStyleSampleId} onError={setError} />
     <Divider sx={{ my: 3 }} />
-    <CharacterStats novel={novel} currentContent={content} />
+    <CharacterStats novel={novel} currentContent={content} hasChapter={Boolean(currentChapter)} />
   </Box>;
 
 
