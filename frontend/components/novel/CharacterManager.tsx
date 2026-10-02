@@ -11,7 +11,7 @@ import type { CharacterResponse } from '@/lib/api/generated/model';
  * 人物档案管理区（管理密度档样板）：一级卡 + 内嵌条目卡两级封顶，读/增/改/删闭环。
  * 界面零系统词，色只用主题 token。
  */
-export default function CharacterManager({ novelId }: { novelId: number }) {
+export default function CharacterManager({ novelId, onSaved }: { novelId: number; /** 本区人物增删改落库后回调，供同页其他人物区热更新。 */ onSaved?: () => void }) {
   const [characters, setCharacters] = useState<CharacterResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -42,6 +42,12 @@ export default function CharacterManager({ novelId }: { novelId: number }) {
     return () => controllerRef.current?.abort();
   }, [load]);
 
+  /** 变更后的刷新：先自取最新列表，再通知同页人物区重取（热更新）。 */
+  const loadAndNotify = useCallback(async () => {
+    await load();
+    onSaved?.();
+  }, [load, onSaved]);
+
   const remove = async () => {
     if (!deleting || saving) return;
     setSaving(true);
@@ -49,7 +55,7 @@ export default function CharacterManager({ novelId }: { novelId: number }) {
     try {
       await charactersApi.remove(deleting.id);
       setDeleting(null);
-      await load();
+      await loadAndNotify();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '删除失败');
     } finally {
@@ -96,7 +102,7 @@ export default function CharacterManager({ novelId }: { novelId: number }) {
         character={editing}
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        onSaved={load}
+        onSaved={loadAndNotify}
       />
     </CardContent>
   </Card>;

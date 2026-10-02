@@ -30,6 +30,8 @@ const relationshipTypeCandidates = ['亲人', '挚友', '师徒', '恋人', '同
 
 interface CharacterRelationshipEditorProps {
   novelId: number;
+  /** 人物档案变更计数：Manager 增删改后递增，驱动人物/关系下拉重取热更新。 */
+  refreshKey?: number;
 }
 
 /**
@@ -38,7 +40,7 @@ interface CharacterRelationshipEditorProps {
  * 编辑经 MCP update_relationship，服务端对四字段全量覆盖，
  * 未在界面暴露的 development_stage 原样透传防清空。
  */
-export default function CharacterRelationshipEditor({ novelId }: CharacterRelationshipEditorProps) {
+export default function CharacterRelationshipEditor({ novelId, refreshKey = 0 }: CharacterRelationshipEditorProps) {
   const [characters, setCharacters] = useState<CharacterResponse[]>([]);
   const [relationships, setRelationships] = useState<CharacterRelationshipResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,7 +69,7 @@ export default function CharacterRelationshipEditor({ novelId }: CharacterRelati
   useEffect(() => {
     void load();
     return () => controllerRef.current?.abort();
-  }, [load]);
+  }, [load, refreshKey]);
 
   // 建立关系表单（三步入：人物一 → 人物二 → 关系类型，余下可选）。
   const [personA, setPersonA] = useState('');
