@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
 from app.core.config import settings
+from app.core.text_stats import count_text_units
 from app.crud import novel as novel_crud
 from app.db.base import get_db
 from app.models.user import User
@@ -340,6 +341,18 @@ def _finish_agent_turn(db, turn, text, final_data, chapter, data, *, operation=N
     manuscript = final_data.get('manuscript')
     if manuscript and operation is None:
         operation = {'append': 'append', 'rewrite': 'replace', 'create': 'create'}[manuscript['operation']]
+    base_content = data.current_content
+    if manuscript and manuscript['operation'] == 'create':
+        latest = novel_crud.get_latest_chapter(db, turn.novel_id)
+        if latest is not None and count_text_units(latest.content) == 0:
+            # 作者要的「下一章」就是填上这个空白末章:归一为改写本章,
+            # 基线按该章当前正文(空白)记录,采纳卡片显示「采纳到本章」。
+            # 归一化在服务端做,不信任模型的 operation 选择。
+            operation = 'replace'
+            final_data['decided_mode'] = 'rewrite'
+            chapter = SimpleNamespace(id=latest.id, version=latest.version,
+                                      rag_lifecycle_id=latest.rag_lifecycle_id)
+            base_content = latest.content
     changed = db.query(WritingTurn).filter_by(id=turn.id, status='pending').update(
         {'assistant_text': text, 'status': 'completed', 'result': final_data,
          'mode': final_data.get('decided_mode') or turn.mode,
@@ -351,7 +364,7 @@ def _finish_agent_turn(db, turn, text, final_data, chapter, data, *, operation=N
             raise ContextScopeError('小说已删除或来源已变化，请重新打开作品')
         proposal = create_proposal(
             db, novel=SimpleNamespace(id=novel.id, rag_lifecycle_id=novel.rag_lifecycle_id),
-            actor_id=novel.user_id, chapter=chapter, base_content=data.current_content,
+            actor_id=novel.user_id, chapter=chapter, base_content=base_content,
             operation=operation, content=text, title=(manuscript or {}).get('title'),
             turn_id=turn.id, context_manifest=turn.context_manifest, execution=execution)
         db.query(WritingTurn).filter_by(id=turn.id).update({'proposal_id': proposal.id})
