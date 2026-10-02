@@ -223,10 +223,14 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
             {turn.result && Array.isArray((turn.result as unknown as AgentTurnResult).actions)
               && ((turn.result as unknown as AgentTurnResult).actions.length > 0) && <AgentActionsCard
                 novelId={novelId}
-                novelLifecycleId={props.novelLifecycleId}
+                turnId={turn.id}
                 actions={(turn.result as unknown as AgentTurnResult).actions}
                 uncertainties={(turn.result as unknown as AgentTurnResult).uncertainties ?? []}
-                onApplied={() => { setAttempt((value) => value + 1); props.onSettingsApplied?.(); }}
+                onDecided={(updated) => {
+                  merge([updated]);
+                  const decidedActions = (updated.result as unknown as AgentTurnResult | null)?.actions ?? [];
+                  if (decidedActions.some((action) => action.decision === 'applied')) props.onSettingsApplied?.();
+                }}
               />}
           </>}
         <ContextSources novelId={novelId} manifest={turn.context_manifest} />

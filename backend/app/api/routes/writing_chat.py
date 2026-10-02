@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Literal
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.text_stats import count_text_units
 from app.crud import novel as novel_crud
 from app.db.base import get_db
+from app.models.novel import Novel
 from app.models.user import User
 from app.models.writing_chat import WritingTurn, WritingGenerationJob
 from app.services.conversation.jobs import durable_route, stop_job
@@ -472,6 +473,14 @@ class ProposalReject(BaseModel):
     request_id: UUID
 
 
+class ActionDecisionCreate(BaseModel):
+    """设定提案的「确认写入/先不写入」决策;indexes 缺省作用于全部提案。"""
+    model_config = ConfigDict(extra='forbid')
+    request_id: UUID
+    decision: Literal['applied', 'skipped']
+    indexes: list[int] | None = None
+
+
 @router.get('/{novel_id}/proposals/{proposal_id}', response_model=ProposalResponse)
 def get_proposal(novel_id: int, proposal_id: UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     return owned_proposal(db, novel_id, str(proposal_id), user.id)
@@ -495,6 +504,122 @@ def reject_proposal(novel_id: int, proposal_id: UUID, data: ProposalReject,
                     db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     return _decision_response(decide_proposal(db, novel_id=novel_id, proposal_id=str(proposal_id),
         actor_id=user.id, request_id=str(data.request_id), decision='reject'))
+
+
+def _apply_setting_action(db, novel, turn, index, action):
+    """服务端执行一次设定写入;确定性请求标识让换标识重放也收敛。
+
+    实体与大纲走结构化记忆命令层(请求标识唯一约束+同载荷重放返回原
+    结果),事实走全键去重的 CRUD,项目信息是字段覆盖;名字和标题不是
+    身份,不在 CRUD 层猜测去重。
+    """
+    from app.crud import story_bible as story_bible_crud
+    from app.models.story_bible_schemas import FactCreate
+    from app.models.story_memory import StoryMemoryCommand, StoryMemoryHead
+    from app.models.story_memory_schemas import EntityInput, OutlineInput
+    from app.services.memory import story as memory
+
+    kind = action.get('kind')
+    request_id = uuid5(NAMESPACE_URL, f'turn-action:{turn.id}:{index}')
+    if kind == 'project_info':
+        fields = {key: action[key] for key in ('genre', 'description', 'worldview') if action.get(key)}
+        if fields:
+            db.query(Novel).filter_by(id=novel.id, user_id=novel.user_id,
+                                      rag_lifecycle_id=novel.rag_lifecycle_id).update(fields)
+            db.commit()
+        return
+    head = db.get(StoryMemoryHead, novel.id)
+    version = head.version if head is not None else 0
+
+    def _run_command(payload, action_name, operation):
+        try:
+            memory.execute_command(db, novel.id, novel.user_id, payload, action_name, operation)
+        except memory.MemoryConflict:
+            # 重放时 expected_version 已随版本推进变化,载荷哈希对不上;命令
+            # 行已存在即证明这条设定写入执行过,按重放收敛处理。
+            replayed = db.query(StoryMemoryCommand).filter_by(
+                novel_lifecycle_id=novel.rag_lifecycle_id, request_id=str(request_id)).first()
+            if replayed is None:
+                raise
+
+    if kind == 'entity':
+        payload = EntityInput(request_id=request_id, expected_version=version,
+                              novel_lifecycle_id=novel.rag_lifecycle_id, name=action['name'],
+                              kind=action['entity_kind'], description=str(action.get('description') or ''))
+        _run_command(payload, 'create_entity', lambda _novel: memory.create_entity(db, _novel, payload))
+        return
+    if kind == 'outline':
+        payload = OutlineInput(request_id=request_id, expected_version=version,
+                               novel_lifecycle_id=novel.rag_lifecycle_id, parent_id=None,
+                               kind=action['node_kind'], plot_status='planned',
+                               chapter_number=action.get('chapter_number'), title=action['title'],
+                               conflict='', outcome=str(action.get('summary') or ''), source_refs=[])
+        _run_command(payload, 'create_outline', lambda _novel: memory.save_outline(db, _novel, payload))
+        return
+    if kind == 'fact':
+        story_bible_crud.create_fact(db, FactCreate(novel_id=novel.id,
+            subject=action['subject'], attribute=action['attribute'], value=action['value']), commit=False)
+        db.commit()
+        return
+    raise HTTPException(422, f"未知的设定提案类型:{kind}")
+
+
+@router.post('/{novel_id}/turns/{turn_id}/actions/decision', response_model=TurnResponse)
+def decide_turn_actions(novel_id: int, turn_id: int, data: ActionDecisionCreate,
+                        db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """登记设定提案决策;applied 在服务端恰一次执行写入并持久标记。
+
+    刷新后卡片按终态渲染不再复活;重复提交同一决策幂等,不重复执行、
+    不刷新原决策时间。已写入的设定不能改口为跳过。写入路径自带幂等
+    (命令层确定性请求标识+事实全键去重),中途失败后重试会收敛而不是
+    产生重复行。
+    """
+    novel = owned_novel(db, novel_id, user)
+    turn = db.query(WritingTurn).filter_by(id=turn_id, novel_id=novel_id).first()
+    if turn is None or (turn.novel_lifecycle_id and turn.novel_lifecycle_id != novel.rag_lifecycle_id):
+        raise HTTPException(404, "轮次不存在或不属于该小说")
+    if turn.status != 'completed':
+        raise HTTPException(409, "只有完成的轮次才能登记设定决策")
+    result = turn.result if isinstance(turn.result, dict) else None
+    actions = result.get('actions') if result else None
+    if not isinstance(actions, list) or not actions:
+        raise HTTPException(404, "该轮次没有可决策的设定提案")
+    if data.indexes is None:
+        targets = list(range(len(actions)))
+    else:
+        targets = data.indexes
+        if any(not isinstance(index, int) or not 0 <= index < len(actions) for index in targets):
+            raise HTTPException(422, "设定提案序号不合法")
+    # 不能原地改写已加载的 JSON:会污染 ORM 的变更比较基线。先复制动作
+    # 副本,只改副本,最后整体赋新值。
+    updated = [dict(action) if isinstance(action, dict) else action for action in actions]
+    if data.decision == 'skipped':
+        # 已 applied 的提案不能改为 skipped;先整体校验避免半截决策。
+        for index in targets:
+            if updated[index].get('decision') == 'applied':
+                raise HTTPException(409, "这条设定已经写入,不能改为跳过;如需撤销请在项目与设定里手动修改")
+        for index in targets:
+            if updated[index].get('decision') != 'skipped':
+                updated[index]['decision'] = 'skipped'
+                updated[index]['decided_at'] = datetime.utcnow().isoformat()
+    else:
+        try:
+            for index in targets:
+                if updated[index].get('decision') != 'applied':
+                    _apply_setting_action(db, novel, turn, index, updated[index])
+                    updated[index]['decision'] = 'applied'
+                    updated[index]['decided_at'] = datetime.utcnow().isoformat()
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            logger.warning('设定提案写入失败: {}', exc)
+            raise HTTPException(409, f'写入设定失败({type(exc).__name__}),请调整后再试') from exc
+    turn.result = {**result, 'actions': updated}
+    db.commit()
+    db.refresh(turn)
+    return turn
 
 
 async def _chat_job_handler(payload, novel_id, actor, db):

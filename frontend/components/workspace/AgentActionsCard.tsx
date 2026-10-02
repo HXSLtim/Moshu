@@ -3,15 +3,16 @@
 import { useState } from 'react';
 import { Alert, Box, Button, Chip, Divider, Stack, Typography } from '@mui/material';
 import { api } from '@/lib/api';
-import { storyMemoryApi } from '@/lib/storyMemory';
-import type { AgentAction } from '@/types/writingChat';
+import type { AgentAction, WritingTurn } from '@/types/writingChat';
 
 interface Props {
   novelId: number;
-  novelLifecycleId?: string | null;
+  /** 所属对话轮的服务端 id；本地乐观轮为 0，尚不能发起决策。 */
+  turnId: number;
   actions: AgentAction[];
   uncertainties: string[];
-  onApplied: () => void;
+  /** 决策成功后回传整轮，actions 已带服务端写回的 decision/decided_at。 */
+  onDecided: (turn: WritingTurn) => void;
 }
 
 const describe = (action: AgentAction): string => {
@@ -27,65 +28,42 @@ const describe = (action: AgentAction): string => {
   return `${action.node_kind === 'volume' ? '卷' : '章'}「${action.title}」：${action.summary}`;
 };
 
-/** Agent 自己提出的设定写入动作；作者确认后才落库。 */
-export default function AgentActionsCard({ novelId, novelLifecycleId, actions, uncertainties, onApplied }: Props) {
+/** Agent 自己提出的设定写入动作；终态以服务端写回的 decision 为准，刷新后不再复活。 */
+export default function AgentActionsCard({ novelId, turnId, actions, uncertainties, onDecided }: Props) {
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState('');
 
-  if (done) return <Alert severity="success" sx={{ mt: 1 }}>已写入设定。可以在左侧「项目与设定」里查看和修改。</Alert>;
-  if (dismissed || actions.length === 0) return null;
+  if (actions.length === 0) return null;
+  const allDecided = actions.every((action) => action.decision);
 
-  const apply = async () => {
-    if (!novelLifecycleId) { setError('项目身份尚未就绪，请刷新后重试'); return; }
+  const decide = async (decision: 'applied' | 'skipped') => {
+    if (turnId <= 0) return;
     setBusy(true); setError('');
     try {
-      const project = actions.find((action) => action.kind === 'project_info');
-      if (project && project.kind === 'project_info') {
-        await api.updateNovel(novelId, {
-          ...(project.genre ? { genre: project.genre } : {}),
-          ...(project.description ? { description: project.description } : {}),
-          ...(project.worldview ? { worldview: project.worldview } : {}),
-        });
-      }
-      const entities = actions.filter((action) => action.kind === 'entity');
-      if (entities.length > 0) {
-        let memory = await storyMemoryApi.get(novelId);
-        for (const entity of entities) {
-          if (entity.kind !== 'entity') continue;
-          memory = await storyMemoryApi.createEntity(novelId, {
-            request_id: crypto.randomUUID(), expected_version: memory.version,
-            novel_lifecycle_id: novelLifecycleId, name: entity.name,
-            kind: entity.entity_kind, description: entity.description,
-          });
-        }
-      }
-      const outlines = actions.filter((action) => action.kind === 'outline');
-      if (outlines.length > 0) {
-        let memory = await storyMemoryApi.get(novelId);
-        for (const node of outlines) {
-          if (node.kind !== 'outline') continue;
-          memory = await storyMemoryApi.saveOutline(novelId, null, {
-            request_id: crypto.randomUUID(), expected_version: memory.version,
-            novel_lifecycle_id: novelLifecycleId, parent_id: null, kind: node.node_kind,
-            plot_status: 'planned', chapter_number: node.chapter_number,
-            title: node.title, conflict: '', outcome: node.summary, source_refs: [],
-          });
-        }
-      }
-      for (const fact of actions) {
-        if (fact.kind !== 'fact') continue;
-        await api.createStoryFact({
-          novel_id: novelId, subject: fact.subject, attribute: fact.attribute, value: fact.value,
-        });
-      }
-      setDone(true);
-      onApplied();
+      // 只提交尚未决策的条目；已 applied 的条目不可改口，交由服务端裁决兜底。
+      const indexes = actions.map((action, index) => (action.decision ? null : index)).filter((index): index is number => index !== null);
+      if (indexes.length === 0) return;
+      const updated = await api.decideTurnActions(novelId, turnId, decision);
+      onDecided(updated);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '写入失败，请重试');
+      setError(failure instanceof Error ? failure.message : '操作失败，请重试');
     } finally { setBusy(false); }
   };
+
+  if (allDecided) {
+    const appliedCount = actions.filter((action) => action.decision === 'applied').length;
+    const skippedCount = actions.length - appliedCount;
+    if (skippedCount === 0) return <Alert severity="success" sx={{ mt: 1.5 }}>已写入设定。可以在左侧「项目与设定」里查看和修改。</Alert>;
+    if (appliedCount === 0) return <Alert severity="info" sx={{ mt: 1.5 }}>这些设定已按你的选择跳过，没有写入。之后想补写，可以在左侧「项目与设定」里手动添加。</Alert>;
+    // 混合终态（正常界面流程不会产生，仅服务端按条决策时可能出现）：逐条展示状态，不再提供按钮。
+    return <Box sx={{ mt: 1.5 }}>
+      {actions.map((action, index) => <Box key={index} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>
+        <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ mt: 0.25, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />
+      </Box>)}
+      <Alert severity="info" sx={{ mt: 1 }}>已处理：写入 {appliedCount} 项，跳过 {skippedCount} 项。</Alert>
+    </Box>;
+  }
 
   const grouped = {
     project_info: actions.filter((action) => action.kind === 'project_info'),
@@ -102,7 +80,10 @@ export default function AgentActionsCard({ novelId, novelLifecycleId, actions, u
         {(['project_info', 'entity', 'fact', 'outline'] as const).map((kind) => grouped[kind].length > 0 && (
           <Box key={kind}>
             <Typography variant="body2" fontWeight={700}>{sectionLabel[kind]}</Typography>
-            {grouped[kind].map((action, index) => <Typography key={index} variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>)}
+            {grouped[kind].map((action, index) => <Box key={index} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>
+              {action.decision && <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ mt: 0.25, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />}
+            </Box>)}
           </Box>
         ))}
       </Stack>
@@ -113,10 +94,11 @@ export default function AgentActionsCard({ novelId, novelLifecycleId, actions, u
       {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
       <Divider sx={{ my: 1.5 }} />
       <Stack direction="row" gap={1}>
-        <Button size="small" variant="contained" disabled={busy} onClick={() => void apply()}>
+        <Button size="small" variant="contained" disabled={busy || turnId <= 0} onClick={() => void decide('applied')}>
           {busy ? '正在写入…' : '确认写入设定'}
         </Button>
-        <Button size="small" disabled={busy} onClick={() => setDismissed(true)}>先不写入</Button>
+        <Button size="small" disabled={busy || turnId <= 0} onClick={() => void decide('skipped')}>先不写入</Button>
+        {turnId <= 0 && <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>对话保存后才能确认</Typography>}
       </Stack>
     </Box>
   );

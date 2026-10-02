@@ -131,6 +131,17 @@ export const api = {
     if (job) return jobTurn(await generationJobsApi.stop<WritingTurn>(novelId, job.id));
     return handleApiResponse(await enhancedFetch(`/writing-chat/${novelId}/turns/${requestId}/stop`, { method: 'POST' }));
   },
+  /**
+   * 设定提案决策：一次调用由服务端执行写入并落终态（applied 恰一次，幂等）。
+   * 返回整轮，result.actions 已带服务端写回的 decision/decided_at。
+   */
+  async decideTurnActions(novelId: number, turnId: number, decision: 'applied' | 'skipped', options: RequestOptions = {}): Promise<WritingTurn> {
+    return handleApiResponse(await enhancedFetch(`/writing-chat/${novelId}/turns/${turnId}/actions/decision`, {
+      method: 'POST',
+      body: JSON.stringify({ request_id: crypto.randomUUID(), decision }),
+      signal: options.signal,
+    }));
+  },
   async listStoryFacts(novelId: number, skip = 0, limit = 20, options: RequestOptions = {}): Promise<StoryFact[]> {
     return handleApiResponse(await enhancedFetch(`/story-bible/facts?novel_id=${novelId}&skip=${skip}&limit=${limit}`, options));
   },

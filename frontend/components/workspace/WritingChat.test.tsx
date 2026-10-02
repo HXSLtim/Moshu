@@ -7,7 +7,7 @@ import { contentHash } from '@/lib/writingChat';
 import { writingProposalApi } from '@/lib/writingProposal';
 import { chapterMemoryApi } from '@/lib/chapterMemory';
 import type { ContextManifest } from '@/types/context';
-import type { WritingTurn } from '@/types/writingChat';
+import type { AgentAction, WritingTurn } from '@/types/writingChat';
 import WritingChat from './WritingChat';
 
 const turn: WritingTurn = { id: 1, request_id: 'saved-turn', novel_id: 1, chapter_id: 2, chapter_title: '第一章', mode: 'continue', user_text: '请把玉佩作为伏笔', assistant_text: '城门与玉佩的纹路一致。', status: 'completed', base_content_hash: '', error: null, created_at: '2026-09-08T00:00:00' };
@@ -174,8 +174,73 @@ describe('服务端候选确认', () => {
 });
 
 
-describe('输入体验(Claude Code 风格)', () => {
-  it('Enter 直接发送,Shift+Enter 与输入法组合中的 Enter 不发送', async () => {
+describe('设定提案决策', () => {
+  const settingsActions: AgentAction[] = [
+    { kind: 'fact', subject: '林昭', attribute: '随身物品', value: '刻纹玉佩' },
+    { kind: 'entity', name: '守门人', entity_kind: 'character', description: '城门老卒，认得玉佩纹路' },
+  ];
+  const settingsTurn: WritingTurn = { ...turn, id: 9, result: { reply: '', actions: settingsActions, uncertainties: [] } };
+  const decidedAt = '2026-10-02T12:00:00';
+  const settingsProps = { ...props, onSettingsApplied: vi.fn() };
+  const renderSettings = () => { vi.mocked(api.listWritingTurns).mockResolvedValue([settingsTurn]); };
+
+  it('历史轮已写入的设定卡刷新后仍显示已写入，不复活成待确认', async () => {
+    vi.mocked(api.listWritingTurns).mockResolvedValue([{ ...settingsTurn, result: { reply: '', actions: settingsActions.map((action) => ({ ...action, decision: 'applied' as const, decided_at: decidedAt })), uncertainties: [] } }]);
+    render(<WritingChat {...settingsProps} />);
+    await screen.findByText(/已写入设定/);
+    expect(screen.queryByRole('button', { name: '确认写入设定' })).toBeNull();
+    expect(settingsProps.onSettingsApplied).not.toHaveBeenCalled();
+  });
+
+  it('旧轮没有 decision 字段时兼容为待确认，确认后一次调用服务端决策端点', async () => {
+    renderSettings();
+    const decide = vi.spyOn(api, 'decideTurnActions').mockResolvedValue({
+      ...settingsTurn, result: { reply: '', actions: settingsActions.map((action) => ({ ...action, decision: 'applied' as const, decided_at: decidedAt })), uncertainties: [] },
+    });
+    render(<WritingChat {...settingsProps} />);
+    fireEvent.click(await screen.findByRole('button', { name: '确认写入设定' }));
+    await screen.findByText(/已写入设定/);
+    expect(decide).toHaveBeenCalledWith(1, 9, 'applied');
+    expect(settingsProps.onSettingsApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it('「先不写入」也走决策端点落 skipped，终态可见', async () => {
+    renderSettings();
+    const decide = vi.spyOn(api, 'decideTurnActions').mockResolvedValue({
+      ...settingsTurn, result: { reply: '', actions: settingsActions.map((action) => ({ ...action, decision: 'skipped' as const, decided_at: decidedAt })), uncertainties: [] },
+    });
+    render(<WritingChat {...settingsProps} />);
+    fireEvent.click(await screen.findByRole('button', { name: '先不写入' }));
+    await screen.findByText(/已按你的选择跳过/);
+    expect(decide).toHaveBeenCalledWith(1, 9, 'skipped');
+    expect(settingsProps.onSettingsApplied).not.toHaveBeenCalled();
+  });
+
+  it('服务端拒绝（已写入不可改口）时展示拒绝原因，卡片保持可重试', async () => {
+    renderSettings();
+    const serverReason = '这条设定已经写入，不能改为跳过；如需撤销请在项目与设定里手动修改。';
+    vi.spyOn(api, 'decideTurnActions').mockRejectedValue(new ApiError(serverReason, 409));
+    render(<WritingChat {...settingsProps} />);
+    fireEvent.click(await screen.findByRole('button', { name: '先不写入' }));
+    await screen.findByText(serverReason);
+    expect(screen.getByRole('button', { name: '确认写入设定' })).toBeTruthy();
+  });
+
+  it('状态 Chip 不嵌进 Typography（div 不得嵌 p，否则 hydration 报错）', async () => {
+    // 部分已决策（待确认卡带单条 Chip）与全决策混合（终态列表带 Chip）两条渲染路径都验证。
+    vi.mocked(api.listWritingTurns).mockResolvedValue([
+      { ...settingsTurn, result: { reply: '', actions: [{ ...settingsActions[0], decision: 'applied' as const, decided_at: decidedAt }, settingsActions[1]], uncertainties: [] } },
+      { ...settingsTurn, id: 10, request_id: 'saved-turn-2', result: { reply: '', actions: [{ ...settingsActions[0], decision: 'applied' as const, decided_at: decidedAt }, { ...settingsActions[1], decision: 'skipped' as const, decided_at: decidedAt }], uncertainties: [] } },
+    ]);
+    const { container } = render(<WritingChat {...settingsProps} />);
+    await screen.findByText(/已处理：写入 1 项/);
+    expect(container.querySelector('p .MuiChip-root')).toBeNull();
+    expect(container.querySelectorAll('.MuiChip-root').length).toBe(6);
+  });
+});
+
+
+describe('输入体验(Claude Code 风格)', () => {  it('Enter 直接发送,Shift+Enter 与输入法组合中的 Enter 不发送', async () => {
     const send = vi.spyOn(api, 'streamWritingTurn').mockImplementation(async (_id, data, callbacks) => {
       callbacks.onDone?.({ ...turn, id: 3, request_id: data.request_id, user_text: data.message, assistant_text: '好的。' });
     });

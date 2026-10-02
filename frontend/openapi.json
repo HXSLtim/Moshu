@@ -1,6 +1,45 @@
 {
   "components": {
     "schemas": {
+      "ActionDecisionCreate": {
+        "additionalProperties": false,
+        "description": "设定提案的「确认写入/先不写入」决策;indexes 缺省作用于全部提案。",
+        "properties": {
+          "decision": {
+            "enum": [
+              "applied",
+              "skipped"
+            ],
+            "title": "Decision",
+            "type": "string"
+          },
+          "indexes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexes"
+          },
+          "request_id": {
+            "format": "uuid",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "decision"
+        ],
+        "title": "ActionDecisionCreate",
+        "type": "object"
+      },
       "AutoChapterRequest": {
         "additionalProperties": false,
         "properties": {
@@ -11583,6 +11622,73 @@
           }
         ],
         "summary": "Stop Turn",
+        "tags": [
+          "创作对话"
+        ]
+      }
+    },
+    "/api/writing-chat/{novel_id}/turns/{turn_id}/actions/decision": {
+      "post": {
+        "description": "登记设定提案决策;applied 在服务端恰一次执行写入并持久标记。\n\n刷新后卡片按终态渲染不再复活;重复提交同一决策幂等,不重复执行、\n不刷新原决策时间。已写入的设定不能改口为跳过。写入路径自带幂等\n(命令层确定性请求标识+事实全键去重),中途失败后重试会收敛而不是\n产生重复行。",
+        "operationId": "decide_turn_actions_api_writing_chat__novel_id__turns__turn_id__actions_decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "novel_id",
+            "required": true,
+            "schema": {
+              "title": "Novel Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionDecisionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Turn Actions",
         "tags": [
           "创作对话"
         ]
