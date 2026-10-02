@@ -37,7 +37,6 @@ cd backend
 | 原文与持久任务 | `test_memory_models.py`、`test_chapter_memory_api.py` | 三表迁移/回填、正文保留、整体事务回滚、版本/任务幂等、权限与生命周期、只读来源端到端 |
 | 简介执行 | `test_digest_extractor.py`、`test_memory_worker.py` | 严格提取及引用、租约恢复、双线程竞争、旧版本/旧token/取消不发布、有界重试、事件循环公平性 |
 | 模型运行契约 | `test_model_result.py`、`test_model_provider.py`、`test_generation_model_contract.py` | 提供方完成原因冲突、截断/工具输出拒绝、真实用量保留、集中连接参数、生成/续写/一致性默认未知故事日 |
-| 轻量编辑契约 | `test_editor_model_contract.py` | 完整结果、输入预算、严格字段与列表、拒绝空 JSON 和截断结果，不补固定好评 |
 | 上下文预算 | `test_context_budget.py`、`test_schema_input_budgets.py` | 各类输入截断边界、schema 字段上限 |
 | 字数统计 | `test_text_stats.py` | 非空白 Unicode 计数、组合标记与 ZWJ 忽略、章节 CRUD 写入 |
 | 审核 | `test_review_fail_closed.py` | 任一审核失败时不得报告"可发布" |
