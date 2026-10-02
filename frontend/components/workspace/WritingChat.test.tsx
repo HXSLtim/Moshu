@@ -152,3 +152,34 @@ describe('服务端候选确认', () => {
     expect(accepted).not.toHaveBeenCalled();
   });
 });
+
+describe('动作卡片(对话即工作台)', () => {
+  it('「+」菜单列出六种创作工具,选择后卡片进入对话流并可关闭', async () => {
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.click(screen.getByRole('button', { name: '添加创作工具' }));
+    for (const label of ['编排任务', '高级续写', '选区改写', '一致性自查', '剧情走向', '资料检索']) {
+      expect(screen.getByRole('menuitem', { name: new RegExp(label) })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('menuitem', { name: /编排任务/ }));
+    expect(await screen.findByText('复合指令分解为检索、生成与检查')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '添加创作工具' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /资料检索/ }));
+    expect((await screen.findAllByText('搜索历史背景、专业知识...')).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole('button', { name: '关闭卡片' })[0]);
+    expect(screen.queryByText('复合指令分解为检索、生成与检查')).toBeNull();
+    expect(screen.getAllByText('搜索历史背景、专业知识...').length).toBeGreaterThan(0);
+  });
+
+  it('卡片可折叠再展开,折叠后内容隐藏', async () => {
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.click(screen.getByRole('button', { name: '添加创作工具' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /一致性自查/ }));
+    const collapse = await screen.findByRole('button', { name: '折叠卡片' });
+    fireEvent.click(collapse);
+    expect(screen.getByRole('button', { name: '展开卡片' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '展开卡片' }));
+    expect(screen.getByRole('button', { name: '折叠卡片' })).toBeTruthy();
+  });
+});

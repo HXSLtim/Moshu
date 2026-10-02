@@ -73,10 +73,6 @@ export default function OrchestrationPanel(props: OrchestrationPanelProps) {
     <Card variant="outlined">
       <CardContent>
         <Stack spacing={1.5}>
-          <Typography variant="subtitle2">编排任务</Typography>
-          <Typography variant="caption" color="text.secondary">
-            复合指令由模型分解为检索、生成与一致性检查步骤,产出仍为候选,采纳后才写入正文。
-          </Typography>
           <TextField
             fullWidth
             multiline

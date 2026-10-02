@@ -1,10 +1,18 @@
 'use client';
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, IconButton, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, IconButton, ListItemIcon, ListItemText, Menu, MenuItem, TextField, Tooltip, Typography } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import AddIcon from '@mui/icons-material/Add';
+import ActionCard, { ACTION_KINDS, type ActionCardState, type ActionKind } from './ActionCard';
+import AiWritingAssistant from './AiWritingAssistant';
+import TextRewriter from './TextRewriter';
+import OrchestrationPanel from './OrchestrationPanel';
+import ConsistencyChecker from './ConsistencyChecker';
+import PlotOptionsGenerator from './PlotOptionsGenerator';
+import ResearchAssistant from './ResearchAssistant';
 import { api } from '@/lib/api';
 import { mergeWritingTurns } from '@/lib/writingChat';
 import type { AgentAction, AgentTurnResult, WritingMode, WritingTurn } from '@/types/writingChat';
@@ -12,7 +20,9 @@ import ContextSources from './ContextSources';
 import ExecutionUsageLine from './ExecutionUsageLine';
 import WritingProposalActions from './WritingProposalActions';
 import AgentActionsCard from './AgentActionsCard';
-import type { Chapter } from '@/types';
+import type { Chapter, Novel } from '@/types';
+
+export type PlotOptionHint = { id: number; title: string; summary: string; impact?: string | null; risk?: string | null };
 
 interface Props {
   novelId: number;
@@ -27,6 +37,16 @@ interface Props {
   onProposalAccepted?: (chapter: Chapter) => void;
   /** 设定交流写入后通知外层刷新项目信息。 */
   onSettingsApplied?: () => void;
+  /** 动作卡片透传:一致性自查与改写/剧情面板所需的工作区状态。 */
+  novel?: Novel | null;
+  currentChapter?: Chapter | null;
+  selectedText?: string | null;
+  selectionStart?: number | null;
+  selectionEnd?: number | null;
+  plotDirectionHint?: string | null;
+  onPlotSelected?: (option: PlotOptionHint) => void;
+  onPlotSelectedAndContinue?: (option: PlotOptionHint) => void;
+  onError?: (message: string) => void;
 }
 export interface WritingChatRef { triggerContinue: (instruction?: string) => void }
 
@@ -52,6 +72,14 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
   const [error, setError] = useState('');
   const [toolTrail, setToolTrail] = useState<string[]>([]);
   const [attempt, setAttempt] = useState(0);
+  const [actions, setActions] = useState<ActionCardState[]>([]);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const openAction = (kind: ActionKind) => {
+    setMenuAnchor(null);
+    followBottom.current = true;
+    setActions((previous) => [...previous, { id: crypto.randomUUID(), kind, created_at: new Date().toISOString() }]);
+  };
+  const closeAction = (id: string) => setActions((previous) => previous.filter((action) => action.id !== id));
   const mounted = useRef(true);
   const sendingRef = useRef(false);
   const latest = useRef(props);
@@ -177,23 +205,8 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
     finally { if (mounted.current) setLoadingMore(false); }
   };
 
-  return <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-    <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
-      <Typography variant="subtitle2">创作对话</Typography>
-      <Typography variant="caption" color="text.secondary">{chapterTitle ? `当前：${chapterTitle}` : '请先选择章节'} · 本书对话自动保存</Typography>
-    </Box>
-    {error && <Alert severity="warning" sx={{ borderRadius: 0 }} onClose={() => setError('')}
-      action={<Button color="inherit" onClick={() => setAttempt((value) => value + 1)}>刷新对话</Button>}>{error}</Alert>}
-    <Box ref={scrollRef} role="log" aria-label="创作对话记录" aria-live="polite"
-      onScroll={(event) => { const box = event.currentTarget; followBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }}
-      sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 2, py: 2 }}>
-      {loading && <Typography role="status">正在恢复对话…</Typography>}
-      {hasMore && <Button fullWidth disabled={loadingMore} onClick={() => void loadMore()}>加载更早对话</Button>}
-      {!loading && !turns.length && <Box sx={{ py: 3 }}>
-        <Typography variant="h6" gutterBottom>一起把故事写下去</Typography>
-        <Typography variant="body2" color="text.secondary">讨论人物的动机，推敲下一幕，或让 AI 接着写。交流会留在这里。</Typography>
-      </Box>}
-      {turns.map((turn) => <Box key={turn.request_id} sx={{ mb: 3 }}>
+  const renderTurn = (turn: WritingTurn) => <Box key={turn.request_id} sx={{ mb: 3 }}>
+
         <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
           <Typography variant="caption" color="text.secondary">你 · {turn.chapter_title} · {modeLabels[turn.mode]}</Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', mt: 0.5 }}>{turn.user_text}</Typography>
@@ -219,7 +232,56 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           </>}
         <ContextSources novelId={novelId} manifest={turn.context_manifest} />
         <ExecutionUsageLine execution={turn.execution} />
-      </Box>)}
+
+  </Box>;
+
+  const renderAction = (action: ActionCardState) => {
+    switch (action.kind) {
+      case 'orchestrate':
+        return <OrchestrationPanel novelId={novelId} chapterId={chapterId} novelLifecycleId={props.novelLifecycleId}
+          chapterLifecycleId={props.chapterLifecycleId} chapterVersion={props.chapterVersion}
+          currentContent={currentContent} canApply={props.canApply} onProposalAccepted={props.onProposalAccepted} />;
+      case 'continue':
+        return <AiWritingAssistant novelId={novelId} chapterId={chapterId} currentContent={currentContent}
+          onError={props.onError ?? (() => {})} plotDirectionHint={props.plotDirectionHint} chapterVersion={props.chapterVersion}
+          novelLifecycleId={props.novelLifecycleId} chapterLifecycleId={props.chapterLifecycleId}
+          canApply={props.canApply} onProposalAccepted={props.onProposalAccepted} />;
+      case 'rewrite':
+        return <TextRewriter novelId={novelId} chapterId={chapterId} currentContent={currentContent}
+          selectedText={props.selectedText ?? ''} selectionStart={props.selectionStart ?? null} selectionEnd={props.selectionEnd ?? null}
+          onError={props.onError ?? (() => {})} chapterVersion={props.chapterVersion} novelLifecycleId={props.novelLifecycleId}
+          chapterLifecycleId={props.chapterLifecycleId} canApply={props.canApply} onProposalAccepted={props.onProposalAccepted} />;
+      case 'consistency':
+        return <ConsistencyChecker novel={props.novel ?? null} currentChapter={props.currentChapter ?? null}
+          content={currentContent} onError={props.onError ?? (() => {})} />;
+      case 'plot':
+        return <PlotOptionsGenerator novelId={novelId} chapterId={chapterId} currentContent={currentContent}
+          onPlotSelected={props.onPlotSelected ?? (() => {})} onPlotSelectedAndContinue={props.onPlotSelectedAndContinue} onError={props.onError ?? (() => {})} />;
+      case 'research':
+        return <ResearchAssistant novelId={novelId} onError={props.onError ?? (() => {})} />;
+      default:
+        return null;
+    }
+  };
+
+  return <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+      <Typography variant="subtitle2">创作对话</Typography>
+      <Typography variant="caption" color="text.secondary">{chapterTitle ? `当前：${chapterTitle}` : '请先选择章节'} · 本书对话自动保存</Typography>
+    </Box>
+    {error && <Alert severity="warning" sx={{ borderRadius: 0 }} onClose={() => setError('')}
+      action={<Button color="inherit" onClick={() => setAttempt((value) => value + 1)}>刷新对话</Button>}>{error}</Alert>}
+    <Box ref={scrollRef} role="log" aria-label="创作对话记录" aria-live="polite"
+      onScroll={(event) => { const box = event.currentTarget; followBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 80; }}
+      sx={{ flex: 1, minHeight: 0, overflow: 'auto', px: 2, py: 2 }}>
+      {loading && <Typography role="status">正在恢复对话…</Typography>}
+      {hasMore && <Button fullWidth disabled={loadingMore} onClick={() => void loadMore()}>加载更早对话</Button>}
+      {!loading && !turns.length && <Box sx={{ py: 3 }}>
+        <Typography variant="h6" gutterBottom>一起把故事写下去</Typography>
+        <Typography variant="body2" color="text.secondary">讨论人物的动机，推敲下一幕，或让 AI 接着写。交流会留在这里。</Typography>
+      </Box>}
+      {turns.map((turn) => renderTurn(turn))}
+      {actions.map((action) => <ActionCard key={action.id} state={action} onClose={closeAction}>{renderAction(action)}</ActionCard>)}
     </Box>
     <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
       <TextField fullWidth multiline minRows={2} maxRows={5} label="和 Nai 聊聊" value={draft}
@@ -231,6 +293,13 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           {chapterId ? 'Nai 会自己判断该回答、整理设定还是起草正文' : '正在准备第 1 章，稍等一下就能发送…'}
         </Typography>
         <Box sx={{ flex: 1 }} />
+        <IconButton aria-label="添加创作工具" title="创作工具" disabled={!chapterId} onClick={(event) => setMenuAnchor(event.currentTarget)}><AddIcon /></IconButton>
+        <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)} slotProps={{ list: { 'aria-label': '创作工具列表' } }}>
+          {ACTION_KINDS.map((item) => <MenuItem key={item.kind} onClick={() => openAction(item.kind)}>
+            <ListItemIcon>{item.icon}</ListItemIcon>
+            <ListItemText primary={item.label} secondary={item.hint} />
+          </MenuItem>)}
+        </Menu>
         {pending && <IconButton aria-label="停止回复" onClick={() => {
           void api.stopWritingTurn(novelId, pending.request_id).then((turn) => { if (mounted.current) { merge([turn]); controllerRef.current?.abort(); controllerRef.current = null; sendingRef.current = false; setSending(false); } }).catch(() => { if (mounted.current) setError('暂时无法停止，请稍后重试'); });
         }}><StopIcon /></IconButton>}
