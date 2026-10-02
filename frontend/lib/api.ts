@@ -24,8 +24,6 @@ import type {
 import { readSSEFromResponse, SSEEvent } from '@/lib/sse';
 import type { StoryFact, StoryFactCreate, StoryFactUpdate, StoryEvent, StoryEventCreate, StoryEventUpdate } from '@/types/storyBible';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
-
 interface RequestOptions {
   signal?: AbortSignal;
 }

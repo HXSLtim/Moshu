@@ -232,7 +232,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   const { selectionStart, selectionEnd, selectedText, contentInputRef, handleTextSelection, clearSelection } = useTextSelection();
   useEffect(clearSelection, [novelId, requestedChapterId, clearSelection]);
   const [selectedStyleSampleId, setSelectedStyleSampleId] = useState<number | null>(null);
-  const [plotDirectionHint, setPlotDirectionHint] = useState<string | null>(null);
   const aiWritingAssistantRef = useRef<WritingChatRef | null>(null);
 
   const novelRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
@@ -678,42 +677,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
     setContent(newContent);
     addToHistory(newContent, { immediate: true });
   }, [addToHistory]);
-
-  const formatPlotDirection = useCallback((option: {
-    title: string;
-    summary: string;
-    impact?: string | null;
-    risk?: string | null;
-  }) => {
-    return [
-      option.title,
-      option.summary,
-      option.impact ? `影响：${option.impact}` : null,
-      option.risk ? `风险：${option.risk}` : null,
-    ].filter(Boolean).join('；');
-  }, []);
-
-  const handlePlotSelected = useCallback((option: {
-    id: number;
-    title: string;
-    summary: string;
-    impact?: string | null;
-    risk?: string | null;
-  }) => {
-    setPlotDirectionHint(formatPlotDirection(option));
-  }, [formatPlotDirection]);
-
-  const handlePlotSelectedAndContinue = useCallback((option: {
-    id: number;
-    title: string;
-    summary: string;
-    impact?: string | null;
-    risk?: string | null;
-  }) => {
-    const instruction = formatPlotDirection(option);
-    setPlotDirectionHint(instruction);
-    aiWritingAssistantRef.current?.triggerContinue(instruction);
-  }, [formatPlotDirection]);
 
   const handleCreateChapterOpen = useCallback(() => {
     setNewChapterTitle('');
