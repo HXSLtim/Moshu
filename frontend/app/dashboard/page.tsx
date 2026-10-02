@@ -17,7 +17,6 @@ import {
   TextField,
   Alert,
   LinearProgress,
-  Chip,
   Accordion,
   AccordionSummary,
   AccordionDetails,
@@ -31,7 +30,6 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import SearchIcon from '@mui/icons-material/Search';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AppFrame from '@/components/layout/AppFrame';
-import { countTextUnits } from '@/lib/textStats';
 import { api, ApiError } from '@/lib/api';
 import type { Novel, NovelCreate } from '@/types';
 
@@ -52,10 +50,6 @@ export default function DashboardPage() {
   const [quickCreating, setQuickCreating] = useState(false);
   const [lastWorkspace, setLastWorkspace] = useState<{ novelId: number; chapterId: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [autoCreatingNovelId, setAutoCreatingNovelId] = useState<number | null>(null);
-  const [generatedChapter, setGeneratedChapter] = useState<any | null>(null);
-  const [showChapterPreview, setShowChapterPreview] = useState(false);
-  const [generationStep, setGenerationStep] = useState('');
   const [novelStats, setNovelStats] = useState<Record<number, { chapterCount: number; totalWords: number }>>({});
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState('');
@@ -232,38 +226,6 @@ export default function DashboardPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败');
     }
-  };
-
-  const handleAutoCreateNextChapter = async (novelId: number) => {
-    try {
-      setAutoCreatingNovelId(novelId);
-      setGenerationStep('正在生成章节标题和内容...');
-
-      const newChapter = await api.autoCreateChapter({
-        novel_id: novelId,
-      });
-
-      setGenerationStep('');
-      setGeneratedChapter({ ...newChapter, novelId });
-      setShowChapterPreview(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'AI自动生成章节失败');
-      setGenerationStep('');
-    } finally {
-      setAutoCreatingNovelId(null);
-    }
-  };
-
-  const handleGoToEdit = () => {
-    if (!generatedChapter) return;
-    setShowChapterPreview(false);
-    router.push(`/workspace?novel=${generatedChapter.novelId}&chapter=${generatedChapter.id}`);
-  };
-
-  const handleStayInDashboard = () => {
-    setShowChapterPreview(false);
-    setGeneratedChapter(null);
-    loadNovels();
   };
 
   const filteredNovels = novels.filter((novel) => {
@@ -457,23 +419,14 @@ export default function DashboardPage() {
                   <CardActions sx={{ justifyContent: 'space-between', flexDirection: 'column', alignItems: 'stretch' }}>
                     <Button variant="contained" size="small" startIcon={<EditIcon />} sx={{ mb: 1 }}
                       onClick={() => router.push(`/workspace?novel=${novel.id}`)}>进入创作工作区</Button>
-                    {autoCreatingNovelId === novel.id && (
-                      <Box sx={{ mb: 1 }}>
-                        <LinearProgress />
-                        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                          {generationStep}
-                        </Typography>
-                      </Box>
-                    )}
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
                       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}>
                         <Button
                           size="small"
                           startIcon={<AutoFixHighIcon />}
-                          onClick={() => handleAutoCreateNextChapter(novel.id)}
-                          disabled={autoCreatingNovelId === novel.id}
+                          onClick={() => router.push(`/workspace?novel=${novel.id}&intent=next-chapter`)}
                         >
-                          {autoCreatingNovelId === novel.id ? '生成中...' : 'AI生成下一章'}
+                          让 AI 起草下一章
                         </Button>
                         <Button
                           size="small"
@@ -601,65 +554,6 @@ export default function DashboardPage() {
             disabled={!novelForm.title.trim()}
           >
             {editingNovel ? '保存' : '创建并进入工作台'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* 章节预览对话框 */}
-      <Dialog
-        open={showChapterPreview}
-        onClose={handleStayInDashboard}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AutoFixHighIcon color="primary" />
-            <Typography variant="h6">章节生成成功！</Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          {generatedChapter && (
-            <Box>
-              <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
-                <Chip label={`第 ${generatedChapter.chapter_number} 章`} color="primary" size="small" />
-                <Chip label={`${countTextUnits(generatedChapter.content || '').toLocaleString()} 字`} size="small" />
-              </Box>
-              <Typography variant="h6" gutterBottom>
-                {generatedChapter.title}
-              </Typography>
-              <Box
-                sx={{
-                  mt: 2,
-                  p: 2,
-                  bgcolor: 'background.paper',
-                  borderRadius: 1,
-                  border: '1px solid',
-                  borderColor: 'divider',
-                  maxHeight: 300,
-                  overflow: 'auto',
-                }}
-              >
-                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-                  {generatedChapter.content
-                    ? generatedChapter.content.length > 300
-                      ? `${generatedChapter.content.substring(0, 300)}...`
-                      : generatedChapter.content
-                    : '（无内容）'}
-                </Typography>
-              </Box>
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                预览仅显示前300字，完整内容请进入编辑页面查看
-              </Typography>
-            </Box>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleStayInDashboard}>
-            留在Dashboard
-          </Button>
-          <Button onClick={handleGoToEdit} variant="contained" startIcon={<EditIcon />}>
-            进入编辑
           </Button>
         </DialogActions>
       </Dialog>

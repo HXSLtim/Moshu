@@ -188,6 +188,8 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   const searchParams = useSearchParams();
   const novelId = Number(searchParams.get('novel')) || 0;
   const requestedChapterId = Number(searchParams.get('chapter')) || 0;
+  // 外部入口意图（如列表页「让 AI 起草下一章」）：交给对话面板预填，不代作者发送。
+  const entryIntent = searchParams.get('intent') as 'next-chapter' | null;
 
   const [novel, setNovel] = useState<Novel | null>(null);
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
@@ -942,7 +944,8 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
                   canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted}
                   onSettingsApplied={() => { void api.getNovel(novelId).then(setNovel).catch(() => undefined); }}
                   novel={novel} selectedText={selectedText}
-                  selectionStart={selectionStart} selectionEnd={selectionEnd} />}
+                  selectionStart={selectionStart} selectionEnd={selectionEnd}
+                  entryIntent={entryIntent} />}
               </Box>
             </Box>
           </Box>

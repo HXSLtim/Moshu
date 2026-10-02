@@ -33,7 +33,14 @@ interface Props {
   selectedText?: string | null;
   selectionStart?: number | null;
   selectionEnd?: number | null;
+  /** 外部入口意图（如「让 AI 起草下一章」）：只预填输入框，是否发送由作者决定。 */
+  entryIntent?: 'next-chapter' | null;
 }
+
+/** 入口意图对应的预填指令，作者语言，可改可发。 */
+const ENTRY_INTENT_DRAFTS: Record<'next-chapter', string> = {
+  'next-chapter': '帮我起草下一章。',
+};
 export interface WritingChatRef { triggerContinue: (instruction?: string) => void }
 
 const modeLabels: Record<WritingMode, string> = { discuss: '讨论剧情', continue: '续写正文', advanced_continue: '高级续写', rewrite: '改写本章', outline: '规划大纲', character: '设计角色', check: '检查本章', new_chapter: '起草下一章' };
@@ -42,7 +49,10 @@ const manuscriptModes = new Set<WritingMode>(['continue', 'advanced_continue', '
 const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingChatSession(props, ref) {
   const { novelId, chapterId, chapterTitle, currentContent } = props;
   const [turns, setTurns] = useState<WritingTurn[]>([]);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(() => {
+    const intent = props.entryIntent;
+    return intent && intent in ENTRY_INTENT_DRAFTS ? ENTRY_INTENT_DRAFTS[intent] : '';
+  });
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);

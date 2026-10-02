@@ -70,7 +70,6 @@ export default function NovelDetailPage() {
   });
 
   // AI生成状态
-  const [aiGenerating, setAiGenerating] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   // AI初始化设定状态
@@ -192,25 +191,6 @@ export default function NovelDetailPage() {
       content: '',
     });
     setOpenDialog(true);
-  };
-
-  const handleAutoCreateChapter = async () => {
-    try {
-      setAiGenerating(true);
-
-      const newChapter = await api.autoCreateChapter({
-        novel_id: novelId,
-        base_chapter_id: lastChapter?.id,
-        target_length: 500,
-      });
-
-      await loadNovelAndChapters();
-      router.push(`/workspace?novel=${novelId}&chapter=${newChapter.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'AI自动生成章节失败');
-    } finally {
-      setAiGenerating(false);
-    }
   };
 
   const handleSaveChapter = async () => {
@@ -512,11 +492,12 @@ export default function NovelDetailPage() {
                   variant="outlined"
                   size="small"
                   startIcon={<AutoFixHighIcon />}
-                  onClick={handleAutoCreateChapter}
-                  disabled={aiGenerating}
+                  onClick={() => router.push(lastChapter
+                    ? `/workspace?novel=${novelId}&chapter=${lastChapter.id}&intent=next-chapter`
+                    : `/workspace?novel=${novelId}&intent=next-chapter`)}
                   sx={{ mr: 1 }}
                 >
-                  AI 新章节
+                  让 AI 起草下一章
                 </Button>
                 <Button
                   variant="contained"
