@@ -45,7 +45,6 @@ export default function ProjectInfoPanel({ novel, onNovelChange }: Props) {
           <ReviewModePicker
             value={reviewMode as ReviewMode}
             disabled={busy}
-            hint
             onChange={(mode) => {
               setBusy(true); setError(''); setNotice('');
               void api.updateNovel(novel.id, { review_mode: mode }).then((saved) => { onNovelChange(saved); setNotice('审核模式已更新。'); })
