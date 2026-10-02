@@ -177,3 +177,64 @@ def test_prompt_contract_forbids_inline_manuscript():
     from app.services.conversation.runtime import PROPOSE_TOOLS
     spec = next(item for item in PROPOSE_TOOLS if item['function']['name'] == 'write_manuscript')
     assert '唯一交付通道' in spec['function']['description']
+
+
+@pytest.mark.asyncio
+async def test_chapter_anchor_injected_before_drafting(cognition_api):
+    """起草可见的系统上下文含权威章数:历史幻觉(被拒的第三章)带不偏锚点。"""
+    client, db, model = cognition_api
+    db.add(Chapter(id=1, novel_id=1, chapter_number=1, title='第一章', content='已有正文'))
+    novel = db.get(Novel, 1)
+    rejected = WritingTurn(novel_id=1, request_id=str(uuid4()), chapter_id=1, chapter_title='第一章',
+                           mode='new_chapter', user_text='写第三章', assistant_text='第三章正文草稿全文。',
+                           base_content_hash='0' * 64, status='completed',
+                           result={'actions': [], 'uncertainties': [], 'decided_mode': 'new_chapter',
+                                   'manuscript': {'operation': 'create'}, 'landing': '第 3 章的新章'},
+                           novel_lifecycle_id=novel.rag_lifecycle_id)
+    db.add(rejected); db.flush()
+    proposal = WritingProposal(id=str(uuid4()), novel_id=1, actor_id=1, novel_lifecycle_id=novel.rag_lifecycle_id,
+                               turn_id=rejected.id, chapter_id=1, base_version=1, base_content_hash='0' * 64,
+                               operation='create', target_chapter_number=3, content='第三章正文草稿全文。',
+                               status='rejected')
+    db.add(proposal); db.flush()
+    rejected.proposal_id = proposal.id
+    db.commit()
+
+    model.responses = [AIMessageChunk(content='我先看看现有设定。', response_metadata={'finish_reason': 'stop'})]
+    _send_turn(client, '已有正文')
+    system = model.seen_payloads[0][0].content
+    assert '【章节真值】' in system and '现有 1 章' in system and '新建第 2 章' in system
+    assert '不是已存在的章' in system
+
+
+@pytest.mark.asyncio
+async def test_chapter_anchor_blank_tail_states_fill(cognition_api):
+    """空白末章时锚点明示填充语义,与归一器口径一致。"""
+    client, db, model = cognition_api
+    db.add(Chapter(id=1, novel_id=1, chapter_number=1, title='第一章', content=''))
+    db.commit()
+    model.responses = [AIMessageChunk(content='好的。', response_metadata={'finish_reason': 'stop'})]
+    _send_turn(client, '')
+    system = model.seen_payloads[0][0].content
+    assert '现有 1 章' in system and '填充第 1 章' in system
+
+
+@pytest.mark.asyncio
+async def test_new_chapter_task_anchors_landing_number():
+    """new_chapter 显式任务路径:系统描述锚定权威落点章号。"""
+    from unittest.mock import AsyncMock
+    from app.services.conversation.tasks import TaskOptions, execute_task
+    captured = []
+
+    async def ainvoke(messages):
+        captured.append(messages)
+        return SimpleNamespace(content='{"title":"石阶尽头","content":"正文。"}')
+
+    service = SimpleNamespace(prepare_messages=lambda **_: [('system', '共享上下文')],
+                               llm=SimpleNamespace(ainvoke=ainvoke))
+    result = await execute_task(mode='new_chapter', service=service, context_pack=SimpleNamespace(),
+                                current_content='前文。', instruction='写下一章', history=[],
+                                options=TaskOptions(target_length=800), novel_id=1, actor_id=1,
+                                novel_lifecycle_id='a' * 32, target_chapter=7)
+    assert '本章是全书第 7 章' in captured[0][0][1]
+    assert result.operation == 'create'

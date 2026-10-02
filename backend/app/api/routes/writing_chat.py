@@ -166,7 +166,7 @@ async def stream_turn(novel_id: int, data: TurnCreate, http_request: Request,
             async with execution_scope(max_model_calls=20) as meter:
                 async for event in run_agent(
                     writing_service.llm,
-                    list(_agent_messages(context_pack, data, novel, history)),
+                    list(_agent_messages(context_pack, data, novel, history, db, chapter)),
                     read_tool_executor=lambda name, args: execute_read_tool(agent_scope, name, args),
                     capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
                     manuscript_ack=_build_manuscript_ack(db, novel_id, chapter)):
@@ -226,7 +226,23 @@ def _turn_payload(turn) -> dict:
             'proposal_id': turn.proposal_id}
 
 
-def _agent_messages(context_pack, data, novel, history):
+def _chapter_anchor(db, novel_id, chapter):
+    """生成前的权威章数锚定:起草可见的上下文先声明正文真值。
+
+    回执是事后告知,改不了已写进稿件的标题;章号认知必须在生成时就被
+    锚定——历史对话或大纲计划里的章号不是已存在的章。
+    """
+    total = novel_crud.get_max_chapter_number(db, novel_id)
+    latest = novel_crud.get_latest_chapter(db, novel_id)
+    if latest is not None and count_text_units(latest.content) == 0:
+        landing = f"末章第 {latest.chapter_number} 章为空白，「下一章」的落点是填充第 {latest.chapter_number} 章"
+    else:
+        landing = f"「下一章／开新章」的落点是新建第 {total + 1} 章"
+    return (f"\n【章节真值】全书按正文现有 {total} 章；当前编辑的是第 {chapter.chapter_number} 章；{landing}。"
+            f"稿件标题与叙述中的章号必须以此为准；历史对话或大纲计划里出现的其他章号不是已存在的章。")
+
+
+def _agent_messages(context_pack, data, novel, history, db, chapter):
     """Agent 的系统契约、最近交流与作者这一轮的话，按 LangChain 消息对象返回。"""
     from langchain_core.messages import SystemMessage
 
@@ -238,7 +254,7 @@ def _agent_messages(context_pack, data, novel, history):
         structured_context=context_pack.structured_context,
         turns=history, instruction=data.message, mode='discuss',
     )
-    system = (messages[0][1] + '\n\n' + AGENT_SYSTEM_PROMPT
+    system = (messages[0][1] + '\n\n' + AGENT_SYSTEM_PROMPT + _chapter_anchor(db, novel.id, chapter)
               + f"\n当前项目信息（未填写表示暂无）：\n类型：{novel.genre or '未填写'}"
               + f"\n简介：{novel.description or '未填写'}")
     return [SystemMessage(content=system), *messages[1:]]
@@ -458,7 +474,7 @@ async def _run_agent_turn(novel_id, data, db, novel, chapter, context_pack, turn
             async with execution_scope(max_model_calls=20) as meter:
                 async for event in run_agent(
                         writing_service.llm,
-                        list(_agent_messages(context_pack, data, novel, history)),
+                        list(_agent_messages(context_pack, data, novel, history, db, chapter)),
                         read_tool_executor=lambda name, args: execute_read_tool(agent_scope, name, args),
                     capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
                     manuscript_ack=_build_manuscript_ack(db, novel_id, chapter)):
