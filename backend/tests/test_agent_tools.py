@@ -438,30 +438,36 @@ async def test_read_chapter_returns_original_text_details(agent_tool_db):
 
 
 @pytest.mark.asyncio
-async def test_read_chapter_respects_chapter_boundary(agent_tool_db):
-    """目标章与未来章不可读:当前章正文已在上下文,未来章对本轮不可见。"""
-    current = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 2})
-    assert '目标章' in current and '第2章原文' not in current
+async def test_read_chapter_reads_history_and_saved_target(agent_tool_db):
+    """历史章与目标章的已保存版都可读;未来章按阻断家族抛错,不降级。"""
+    history = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 1})
+    assert '第1章原文。' in history and '已保存' in history
 
-    future = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 3})
-    assert '目标章' in future and '第3章原文' not in future
+    target = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 2})
+    # 夹具里章 2 已被作者改稿:读到的正是已保存版,不假装实时
+    assert '作者已经改稿' in target and '已保存' in target  # 讨论本章内容合法
+
+    with pytest.raises(ContextScopeError):
+        await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 3})  # 未来章
 
     invalid = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 'abc'})
     assert '章节号不合法' in invalid
 
-    missing = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 1})
-    assert missing  # 目标章之前可读,前一项断言已覆盖正文
+    # 章号在目标章之内但尚未写到的空洞:诚实报告,不伪装存在
+    missing = await execute_read_tool(_scope(target_chapter=10), 'read_chapter', {'chapter_number': 5})
+    assert '没有找到第5章' in missing
 
 
 @pytest.mark.asyncio
 async def test_read_chapter_truncates_overlong_content(agent_tool_db):
-    """超长章单次截断到上限,回执诚实说明并提供可行策略。"""
+    """超长章截取头+尾双保留,回执明示头 N 尾 M 并给出可行策略。"""
+    marker_mid = '这是中段特征句' + '中' * 200
     marker_tail = '这是第二万四千字附近的结尾特征句'
     sessions = agent_tool_db  # 夹具 yield 的测试库 sessionmaker,不直连真实库
     db = sessions()
     try:
         db.execute(update(Chapter).where(Chapter.novel_id == 1, Chapter.chapter_number == 1)
-                   .values(content='开头特征句。' + '涨' * 24_000 + marker_tail))
+                   .values(content='开头特征句。' + '涨' * 15_000 + marker_mid + '落' * 8_000 + marker_tail))
         db.commit()
     finally:
         db.close()
@@ -469,9 +475,10 @@ async def test_read_chapter_truncates_overlong_content(agent_tool_db):
     result = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 1})
 
     assert '开头特征句' in result
-    assert marker_tail not in result
-    assert '超过' in result  # 说明截断
-    assert 'search_manuscript' in result or '作者' in result  # 给出可行策略
+    assert marker_tail in result  # 尾部保留:结尾伏笔对「参考写法」重要
+    assert marker_mid not in result and '中略' in result
+    assert '已截取开头' in result and '结尾' in result  # 明示头 N 尾 M
+    assert 'search_manuscript' in result or '作者' in result
     assert len(result) <= 20_000 + 200  # 工具自身上限,不被统一层二次放大
 
 
