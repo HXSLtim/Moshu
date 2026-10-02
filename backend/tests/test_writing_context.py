@@ -10,7 +10,7 @@ from app.models.memory import ChapterDigest, ChapterRevision
 from app.models.novel import Chapter
 from app.models.schemas import ChapterCreate, ChapterUpdate
 from app.models.writing_chat import WritingTurn
-from app.services.memory_config import digest_recipe_version
+from app.services.memory.config import digest_recipe_version
 from tests.test_writing_chat import chat_api, payload  # noqa: F401
 
 

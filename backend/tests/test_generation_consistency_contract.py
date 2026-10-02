@@ -9,8 +9,8 @@ import pytest
 
 from app.api.routes import generation as generation_routes
 from app.models.schemas import (
-    AgentOutput,
-    AgentType,
+    StageOutput,
+    StageType,
     ConsistencyCheckResult,
     ConsistencyCheckType,
     FinalConsistencyStatus,
@@ -23,7 +23,7 @@ def _conflicted_response() -> GenerationResponse:
         novel_id=1,
         chapter=3,
         final_content="冲突稿",
-        agent_outputs=[AgentOutput(agent_type=AgentType.PLOT, content="冲突稿")],
+        stage_outputs=[StageOutput(agent_type=StageType.PLOT, content="冲突稿")],
         consistency_checks=[
             ConsistencyCheckResult(
                 check_type=ConsistencyCheckType.TIMELINE,
@@ -74,7 +74,7 @@ async def test_continue_returns_final_consistency(monkeypatch, current_day):
     """非流式续写返回检查列表、重试次数和最终冲突状态。"""
     _patch_owned_chapter(monkeypatch)
     monkeypatch.setattr(
-        generation_routes.agent_service,
+        generation_routes.generation_workflow,
         "generate_content",
         AsyncMock(return_value=_conflicted_response()),
     )
@@ -91,8 +91,8 @@ async def test_continue_returns_final_consistency(monkeypatch, current_day):
         db=MagicMock(),
     )
 
-    assert generation_routes.agent_service.generate_content.await_args.args[0].current_day == current_day
-    assert generation_routes.agent_service.generate_content.await_args.kwargs == {"actor_id": 7, "novel_lifecycle_id": "owned-life"}
+    assert generation_routes.generation_workflow.generate_content.await_args.args[0].current_day == current_day
+    assert generation_routes.generation_workflow.generate_content.await_args.kwargs == {"actor_id": 7, "novel_lifecycle_id": "owned-life"}
     assert result["context_manifest"] == _conflicted_response().context_manifest
     assert result["retry_count"] == 2
     assert result["consistency_checks"][0]["is_valid"] is False
@@ -118,7 +118,7 @@ async def test_continue_stream_metadata_returns_final_consistency(monkeypatch, c
         yield {"type": "final_response", "data": _conflicted_response()}
 
     monkeypatch.setattr(
-        generation_routes.agent_service,
+        generation_routes.generation_workflow,
         "generate_content_stream",
         fake_stream,
     )

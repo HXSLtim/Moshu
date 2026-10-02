@@ -10,7 +10,7 @@ from app.models.schemas import StyleSampleCreate, StyleSampleResponse
 from app.crud import novel as novel_crud
 from app.api.routes.auth import get_current_user
 from app.models.user import User
-from app.services.style_service import style_service
+from app.services.generation.style import style_service
 from loguru import logger
 
 router = APIRouter()

@@ -6,8 +6,8 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 
-from app.services import review_agents
-from app.services.agent_service import AgentService
+from app.services.review import agents as review_agents
+from app.services.generation.workflow import GenerationWorkflow
 
 
 REVIEW_CASES = [
@@ -67,7 +67,7 @@ async def test_retry_diagnostics_are_data_not_prompt_variables():
         seen.extend(prompt.to_messages())
         return AIMessage(content="已修正的候选正文")
 
-    service = AgentService.__new__(AgentService)
+    service = GenerationWorkflow.__new__(GenerationWorkflow)
     service.llm_complex = RunnableLambda(answer)
     violation = '状态{持有物}与设定冲突，原文为{"宝剑": 0}。'
     state = dict(prompt="请继续", worldview_output="环境", character_output="人物", story_bible_context=[],
@@ -82,7 +82,7 @@ async def test_retry_diagnostics_are_data_not_prompt_variables():
 @pytest.mark.parametrize(('agent_name', 'payload'), REVIEW_CASES)
 async def test_review_rejects_valid_json_when_provider_reports_truncation(monkeypatch, agent_name, payload):
     """即使 JSON 语法完整，提供方报告截断也不得产出成功审核分数。"""
-    from app.services.model_result import ModelOutputError
+    from app.services.model.result import ModelOutputError
     monkeypatch.setattr(review_agents.rag_service, 'retrieve_character_info', AsyncMock(return_value=[]))
     model = RunnableLambda(lambda _: AIMessage(content=json.dumps(payload), response_metadata={'finish_reason': 'length'}))
     steps = []

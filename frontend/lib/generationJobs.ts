@@ -1,6 +1,6 @@
 import { apiRequest } from '@/lib/api';
 
-export type GenerationKind = 'chat' | 'generate' | 'continue' | 'rewrite' | 'auto_chapter' | 'outline' | 'character';
+export type GenerationKind = 'chat' | 'generate' | 'continue' | 'rewrite' | 'auto_chapter' | 'outline' | 'character' | 'orchestrate';
 export interface GenerationJob<T = Record<string, unknown>> {
   id: string;
   request_id: string;

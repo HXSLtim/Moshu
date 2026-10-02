@@ -8,7 +8,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class AgentWorkflowStep(BaseModel):
+class WorkflowStep(BaseModel):
     """单个工作流步骤信息
 
     用于描述某一步里由哪个Agent/组件执行了什么操作、使用了哪些数据源、产生了什么结果，
@@ -69,7 +69,7 @@ class AgentWorkflowStep(BaseModel):
     )
 
 
-class AgentWorkflowTrace(BaseModel):
+class WorkflowTrace(BaseModel):
     """一次完整工作流运行的追踪信息
 
     用于描述某次MCP操作/一致性检查/生成调用中，Agent和后端组件的整体协作流程。
@@ -96,7 +96,7 @@ class AgentWorkflowTrace(BaseModel):
         None, description="本次工作流的简要说明，便于前端列表展示"
     )
 
-    steps: List[AgentWorkflowStep] = Field(
+    steps: List[WorkflowStep] = Field(
         default_factory=list, description="按执行顺序或依赖关系排列的步骤列表"
     )
 

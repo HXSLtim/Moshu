@@ -15,15 +15,15 @@ from app.models.schemas import ChapterUpdate
 from app.models.story_bible import StoryEvent, StoryFact
 from app.models.story_memory import StoryMemoryHead
 from app.models.user import User
-from app.services import context_builder
-from app.services.chapter_memory import ensure_revision
-from app.services.context_budget import (
+from app.services.context import builder as context_builder
+from app.services.memory.chapter import ensure_revision
+from app.services.context.budget import (
     MAX_CONTEXT_DIGESTS, MAX_DIGEST_CONTEXT_CHARS, MAX_WORLDVIEW_CONTEXT_CHARS,
     build_writing_chat_messages,
 )
-from app.services.context_builder import ContextScopeError, build_context_pack
-from app.services.digest_extractor import validate_digest
-from app.services.memory_config import digest_recipe_version
+from app.services.context.builder import ContextScopeError, build_context_pack
+from app.services.memory.digest import validate_digest
+from app.services.memory.config import digest_recipe_version
 
 
 @pytest.fixture

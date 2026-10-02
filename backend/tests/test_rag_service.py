@@ -13,8 +13,8 @@ from app.db.base import Base
 from app.models.novel import Chapter, Novel
 from app.models.schemas import RAGQuery
 from app.models.user import User
-from app.services import rag_service as rag_service_module
-from app.services.rag_service import RAGService
+from app.services import rag as rag_service_module
+from app.services.rag import RAGService
 
 
 class FakeCollection:

@@ -15,9 +15,9 @@ from app.db.base import Base
 from app.models.memory import ChapterDigest, ChapterRevision, DerivedJob, utc_now
 from app.models.novel import Chapter, Novel
 from app.models.user import User
-from app.services.digest_extractor import DigestExtractionError
-from app.services.memory_config import digest_recipe_version
-from app.services.memory_worker import MemoryWorker
+from app.services.memory.digest import DigestExtractionError
+from app.services.memory.config import digest_recipe_version
+from app.services.memory.worker import MemoryWorker
 
 
 def result():
@@ -224,7 +224,7 @@ def test_stolen_or_expired_lease_cannot_publish_or_fail_new_owner(memory_db):
 @pytest.mark.asyncio
 async def test_worker_deadline_bounds_a_hanging_extractor(memory_db, monkeypatch):
     """即使适配器忘记实现超时，执行器也会结束本次尝试。"""
-    from app.services.memory_worker import settings
+    from app.services.memory.worker import settings
     monkeypatch.setattr(settings, "LLM_TIMEOUT_SECONDS", 0.01)
     async def blocked(_revision):
         await asyncio.Event().wait()

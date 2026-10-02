@@ -18,7 +18,7 @@ from app.models.memory import ChapterDigest, ChapterRevision, DerivedJob
 from app.models.novel import Chapter, Novel
 from app.models.schemas import ChapterCreate, ChapterNextCreate, ChapterUpdate
 from app.models.user import User
-from app.services.memory_config import digest_recipe_version
+from app.services.memory.config import digest_recipe_version
 
 
 @pytest.fixture
@@ -201,7 +201,7 @@ def test_explicit_rebuild_rejects_empty_or_over_budget_source(memory_api, conten
 
 async def test_save_extract_edit_rebuild_and_read_source_end_to_end(memory_api):
     """真实保存事务与worker发布连接到API，改稿后只发布最新来源简介。"""
-    from app.services.memory_worker import MemoryWorker
+    from app.services.memory.worker import MemoryWorker
     client, db, chapter_id, _ = memory_api
     class Extractor:
         async def extract(self, revision):

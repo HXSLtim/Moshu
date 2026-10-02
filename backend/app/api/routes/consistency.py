@@ -3,9 +3,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from loguru import logger
-from app.services.consistency_service import consistency_service
-from app.services.consistency_reference import load_consistency_reference
-from app.services.context_budget import MAX_CURRENT_CONTENT_CHARS
+from app.services.review.consistency import consistency_service
+from app.services.review.reference import load_consistency_reference
+from app.services.context.budget import MAX_CURRENT_CONTENT_CHARS
 from app.api.dependencies import get_current_user
 from app.crud import novel as novel_crud
 from app.db.base import get_db

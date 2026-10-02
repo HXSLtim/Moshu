@@ -35,8 +35,8 @@ from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import ToolNode
 
 from app.core.config import settings
-from app.services.agent_runtime import run_agent
-from app.services.model_provider import create_chat_model
+from app.services.conversation.runtime import run_agent
+from app.services.model.provider import create_chat_model
 
 # 只有工具返回结果才含有的校验码：模型答复里出现它，才能证明模型看到了检索结果。
 SENTINEL = f'NAI-SMOKE-{secrets.token_hex(4)}'

@@ -30,125 +30,20 @@ interface RequestOptions {
   signal?: AbortSignal;
 }
 
-function isAbortError(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === 'object' &&
-    'name' in error &&
-    error.name === 'AbortError',
-  );
-}
+import {
+  ApiError,
+  customFetch,
+  enhancedFetch,
+  extractApiErrorMessage,
+  getHeaders,
+  handleApiResponse,
+} from './api/mutator';
 
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = 'ApiError';
-  }
-}
+export { ApiError, extractApiErrorMessage } from './api/mutator';
 
-function extractApiErrorMessage(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== 'object') return fallback;
-
-  const record = payload as Record<string, unknown>;
-  const detail = record.detail ?? record.message;
-  if (typeof detail === 'string' && detail.trim()) return detail;
-
-  if (Array.isArray(detail)) {
-    const messages = detail.flatMap((item) => {
-      if (typeof item === 'string') return item.trim() ? [item] : [];
-      if (!item || typeof item !== 'object') return [];
-      const validation = item as Record<string, unknown>;
-      if (typeof validation.msg !== 'string') return [];
-      const location = Array.isArray(validation.loc)
-        ? validation.loc.slice(1).map(String).join('.')
-        : '';
-      return [`${location ? `${location}：` : ''}${validation.msg}`];
-    });
-    if (messages.length > 0) return messages.join('；');
-  }
-
-  return fallback;
-}
-
-/**
- * 获取请求头（包含认证Token）
- */
-const getHeaders = (): HeadersInit => {
-  const token = localStorage.getItem('token');
-  return {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    ...(token && { 'Authorization': `Bearer ${token}` }),
-  };
-};
-
-/**
- * 增强的 fetch 函数，统一处理地址、认证和网络错误。
- */
-const enhancedFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
-  const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
-
-  try {
-    const response = await fetch(fullUrl, {
-      ...options,
-      headers: {
-        ...getHeaders(),
-        ...options.headers,
-      },
-    });
-
-    return response;
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw error;
-    }
-
-    console.error('网络请求失败：', error);
-    
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new Error(`无法连接到服务器 (${fullUrl})。请检查：\n1. 服务器是否运行\n2. 网络连接是否正常\n3. 防火墙设置`);
-    }
-    
-    throw error;
-  }
-};
-
-/**
- * 处理API响应的通用函数
- */
-const handleApiResponse = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) {
-    let errorMessage = `请求失败 (${response.status})`;
-    
-    try {
-      const errorData: unknown = await response.json();
-      errorMessage = extractApiErrorMessage(errorData, errorMessage);
-    } catch {
-      // 如果无法解析JSON，使用默认错误消息
-      if (response.status === 404) {
-        errorMessage = 'API端点不存在';
-      } else if (response.status === 500) {
-        errorMessage = '服务器内部错误';
-      } else if (response.status === 0) {
-        errorMessage = '网络连接失败，请检查CORS设置';
-      }
-    }
-    
-    throw new ApiError(errorMessage, response.status);
-  }
-  
-  if (response.status === 204) return undefined as T;
-  return response.json();
-};
-
-/**
- * API客户端
- */
+/** 统一请求入口:与生成客户端共用同一传输层(鉴权、错误提取、Abort)。 */
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  return handleApiResponse<T>(await enhancedFetch(path, options));
+  return customFetch<T>(path, options);
 }
 
 function jobTurn(job: GenerationJob<WritingTurn>, fallback?: WritingTurnCreate): WritingTurn {
@@ -313,7 +208,7 @@ export const api = {
    * 获取用户的所有小说
    */
   async getNovels(): Promise<Novel[]> {
-    const res = await fetch(`${API_BASE}/novels/`, {
+    const res = await enhancedFetch(`/novels/`, {
       headers: getHeaders(),
     });
     if (!res.ok) {
@@ -358,7 +253,7 @@ export const api = {
    * 创建小说
    */
   async createNovel(data: NovelCreate): Promise<Novel> {
-    const res = await fetch(`${API_BASE}/novels/`, {
+    const res = await enhancedFetch(`/novels/`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -374,7 +269,7 @@ export const api = {
    * 更新小说
    */
   async updateNovel(id: number, data: Partial<NovelCreate>): Promise<Novel> {
-    const res = await fetch(`${API_BASE}/novels/${id}`, {
+    const res = await enhancedFetch(`/novels/${id}`, {
       method: 'PUT',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -390,7 +285,7 @@ export const api = {
    * 删除小说
    */
   async deleteNovel(id: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/novels/${id}`, {
+    const res = await enhancedFetch(`/novels/${id}`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
@@ -524,7 +419,7 @@ export const api = {
    * 创建章节
    */
   async createChapter(novelId: number, data: ChapterCreate): Promise<Chapter> {
-    const res = await fetch(`${API_BASE}/novels/${novelId}/chapters`, {
+    const res = await enhancedFetch(`/novels/${novelId}/chapters`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -573,7 +468,7 @@ export const api = {
    * 删除章节
    */
   async deleteChapter(novelId: number, chapterId: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/novels/${novelId}/chapters/${chapterId}`, {
+    const res = await enhancedFetch(`/novels/${novelId}/chapters/${chapterId}`, {
       method: 'DELETE',
       headers: getHeaders(),
     });
@@ -606,7 +501,7 @@ export const api = {
     style_sample_id?: number | null;
     rag_style_context?: string[];
     rag_story_context?: string[];
-    agent_outputs?: {
+    stage_outputs?: Array<Record<string, unknown>> | {
       agent_type: string;
       content: string;
       metadata?: Record<string, any>;
@@ -621,7 +516,7 @@ export const api = {
       style_strength: number;
     };
   }> {
-    const res = await fetch(`${API_BASE}/generation/continue`, {
+    const res = await enhancedFetch(`/generation/continue`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -664,7 +559,7 @@ export const api = {
     options: RequestOptions = {},
   ): Promise<void> {
     try {
-      const res = await fetch(`${API_BASE}/generation/continue-stream`, {
+      const res = await enhancedFetch(`/generation/continue-stream`, {
         method: 'POST',
         headers: getHeaders(),
         signal: options.signal,
@@ -706,7 +601,7 @@ export const api = {
    * 获取文风样本列表
    */
   async getStyleSamples(novelId: number): Promise<StyleSample[]> {
-    const res = await fetch(`${API_BASE}/style/samples?novel_id=${novelId}`, {
+    const res = await enhancedFetch(`/style/samples?novel_id=${novelId}`, {
       headers: getHeaders(),
     });
     if (!res.ok) {
@@ -724,7 +619,7 @@ export const api = {
     name: string;
     sample_text: string;
   }): Promise<StyleSample> {
-    const res = await fetch(`${API_BASE}/style/samples`, {
+    const res = await enhancedFetch(`/style/samples`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -744,7 +639,7 @@ export const api = {
     theme: string;
     target_chapters?: number;
   }): Promise<{ outline: string; chapters: number }> {
-    const res = await fetch(`${API_BASE}/generation/outline`, {
+    const res = await enhancedFetch(`/generation/outline`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -764,7 +659,7 @@ export const api = {
     character_type: string;
     character_description: string;
   }): Promise<{ character: string; type: string }> {
-    const res = await fetch(`${API_BASE}/generation/character`, {
+    const res = await enhancedFetch(`/generation/character`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -790,7 +685,7 @@ export const api = {
     outline: string;
     plot_hooks: string[];
   }> {
-    const res = await fetch(`${API_BASE}/generation/init`, {
+    const res = await enhancedFetch(`/generation/init`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -804,7 +699,7 @@ export const api = {
 
   /** 把作者一段自然语言想法解析为可编辑结构化草案，不创建小说。 */
   async parseIdea(data: { idea: string; planned_chapters?: number }): Promise<IdeaParseResult> {
-    const res = await fetch(`${API_BASE}/generation/parse-idea`, {
+    const res = await enhancedFetch(`/generation/parse-idea`, {
       method: 'POST', headers: getHeaders(), body: JSON.stringify(data),
     });
     if (!res.ok) {
@@ -833,7 +728,7 @@ export const api = {
       risk?: string | null;
     }[];
   }> {
-    const res = await fetch(`${API_BASE}/generation/plot-options`, {
+    const res = await enhancedFetch(`/generation/plot-options`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -854,7 +749,7 @@ export const api = {
     target_length?: number;
     theme?: string;
   }): Promise<Chapter> {
-    const res = await fetch(`${API_BASE}/generation/auto-chapter`, {
+    const res = await enhancedFetch(`/generation/auto-chapter`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -877,7 +772,7 @@ export const api = {
     style_hint?: string;
     target_length?: number;
   }, options: RequestOptions = {}): Promise<{ rewritten_text: string }> {
-    const res = await fetch(`${API_BASE}/generation/rewrite`, {
+    const res = await enhancedFetch(`/generation/rewrite`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),
@@ -907,7 +802,7 @@ export const api = {
     }
   ): Promise<void> {
     try {
-      const res = await fetch(`${API_BASE}/consistency/check-stream`, {
+      const res = await enhancedFetch(`/consistency/check-stream`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify(data),
@@ -949,7 +844,7 @@ export const api = {
       metadata?: Record<string, any>;
     }[];
   }> {
-    const res = await fetch(`${API_BASE}/research/search`, {
+    const res = await enhancedFetch(`/research/search`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(data),

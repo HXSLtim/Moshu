@@ -232,7 +232,7 @@
 | current_day | int/null | 否 | >0，默认 null（未知）；未知时跳过按日检查 |
 | target_length | int | 否 | 100–8000，默认 500 |
 
-响应含 `final_content`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`context_manifest`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的目标章有效事实 / 已发生事件。`context_manifest` 为共享上下文清单对象（schema 默认 `{}`），字段与边界见下文「共享上下文清单」；工作流检索步骤和 A/B/C 的 `data_sources.context_manifest` 保留相同清单。错误：`404`、`422` 提示词超预算、`500`。
+响应含 `final_content`、`stage_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`worldview_context[]`、`character_context[]`、`story_bible_context[]`、`context_manifest`、`rag_results[]`、`workflow_trace` 等。`story_bible_context` 为生成时实际读取且已裁剪的目标章有效事实 / 已发生事件。`context_manifest` 为共享上下文清单对象（schema 默认 `{}`），字段与边界见下文「共享上下文清单」；工作流检索步骤和 A/B/C 的 `data_sources.context_manifest` 保留相同清单。错误：`404`、`422` 提示词超预算、`500`。
 ### POST /api/generation/plot-options — 剧情走向选项（200）
 
 | 字段 | 类型 | 必填 | 约束 |
@@ -284,7 +284,7 @@
 | style_sample_id | int | 否 | 可空 |
 | plot_direction_hint | string | 否 | ≤600 |
 
-响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`agent_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`context_manifest`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 包含世界观/角色块与 Story Bible 上下文；L1 简介通过独立 Prompt 变量注入，来源清单由 `context_manifest` 返回。错误：`404`、`500`。
+响应 dict：`content`、`length`、`style_features[]`、`style_sample_id`、`rag_style_context[]`、`rag_story_context[]`、`stage_outputs[]`、`consistency_checks[]`、`retry_count`、`final_consistency`、`context_manifest`、`workflow_trace`、`settings{pace,tone,style_strength}`。`rag_story_context` 包含世界观/角色块与 Story Bible 上下文；L1 简介通过独立 Prompt 变量注入，来源清单由 `context_manifest` 返回。错误：`404`、`500`。
 ### POST /api/generation/continue-stream — 章节续写（SSE 流式）
 请求字段同 `/continue`。响应 `Content-Type: text/event-stream`，`data:` 行为 JSON：
 
@@ -299,6 +299,12 @@
 `metadata.data.context_manifest` 与本轮最终生成使用的共享包一致。上下文检索完成的 Agent 事件也携带 `data.context_manifest`；来源清单不是生成成功信号，客户端仍需等待 `done`。
 
 取消：前端 `AbortSignal` → `reader.cancel()`；服务端 `http_request.is_disconnected()` 中止。HTTP 层错误：`404`、`500`；流内错误以 `error` 事件返回。
+### POST /api/generation/orchestrate — 复合任务编排（200）
+字段：`novel_id`（>0，必填）、`chapter_id`（>0，必填）、`current_content`（当前编辑正文快照，≤50000 字符）、`instruction`（复合指令，1–4000 字符）、`current_day`（可选故事日）、`expected_novel_lifecycle_id`/`expected_chapter_lifecycle_id`（可选来源校验）。
+
+一次模型调用把复合指令分解为至多 6 步计划（`retrieve` 受权检索 / `generate` 预算内生成 / `consistency` 确定性一致性检查），按编号顺序执行；步骤依赖只能指向更小编号。响应：`proposal_id`、`content`、`length`、`plan`（实际执行的步骤计划）、`uncertainties[]`（模型上报的不确定假设）、`consistency`（如含检查步骤）、`context_manifest`、`workflow_trace`（含计划与每步的追踪）、`execution`（整轮模型调用计量，上限 7 次）。
+
+正文产出**只落候选提案**（operation=`append`），不直接改写章节；作者经提案接口采纳。计划解析或输出契约失败返回 `500` 与中文原因；预算耗尽明确失败。六维审核步骤当前不可声明。
 ### POST /api/generation/outline — 生成大纲（200）
 字段：`novel_id`（>0，必填）、`theme`（1–1000，必填）、`target_chapters`（1–80，默认 10）。响应：`{outline, chapters, context_manifest}`。
 ### POST /api/generation/character — 生成角色设定（200）
@@ -593,7 +599,7 @@
 
 一致性 HTTP/SSE 遇到未加载可执行规则或已确认时间线时，相关层返回 skipped 和原因，不标记检查通过。此行为不代表数据库账本已自动接入一致性服务，当前接线缺口见架构评审。
 
-模型输出异常：共享解析器拒绝提供方报告的截断/过滤/工具调用、非文本、空文本和超过 20000 字符的回复。创作对话保存 failed 与中文原因，不返回可采纳的半段正文；模型超时也有明确失败原因。高级生成的普通请求走现有错误响应，SSE 走 error 事件；六维审核失败不允许发布，轻量编辑输出结构异常时返回不可用。提供方缺失完成元数据时兼容文本输出，不推测 token 用量。
+模型输出异常：共享解析器拒绝提供方报告的截断/过滤/工具调用、非文本、空文本和超过 20000 字符的回复。创作对话保存 failed 与中文原因，不返回可采纳的半段正文；模型超时也有明确失败原因。高级生成的普通请求走现有错误响应，SSE 走 error 事件；六维审核失败不允许发布。提供方缺失完成元数据时兼容文本输出，不推测 token 用量。
 
 ## 原文版本与章节简介（M1）
 

@@ -16,12 +16,12 @@ from app.models.novel import Novel
 from app.models.schemas import ChapterCreate, ChapterUpdate
 from app.models.story_bible import StoryEvent, StoryFact
 from app.models.user import User
-from app.services.agent_runtime import run_agent
-from app.services.agent_tools import AgentScope, execute_read_tool
-from app.services.context_builder import ContextScopeError
-from app.services.context_budget import MAX_REVIEW_CONTENT_CHARS
-from app.services.memory_config import digest_recipe_version
-from app.services.story_memory import save_outline
+from app.services.conversation.runtime import execute_agent_tool, run_agent
+from app.services.conversation.tools import AgentScope, execute_read_tool
+from app.services.context.builder import ContextScopeError
+from app.services.context.budget import MAX_REVIEW_CONTENT_CHARS
+from app.services.memory.config import digest_recipe_version
+from app.services.memory.story import save_outline
 
 
 def _add_digest(db, chapter, summary):
@@ -82,7 +82,7 @@ def agent_tool_db(monkeypatch):
         _add_digest(db, chapters[0], '主角与导师决裂，离开魔法塔。')
         _add_digest(db, chapters[1], '这一章简介随后会因改稿过期。')
         novel_crud.update_chapter(db, chapters[1].id, ChapterUpdate(expected_version=1, content='作者已经改稿。'))
-    monkeypatch.setattr('app.services.agent_tools.SessionLocal', sessions)
+    monkeypatch.setattr('app.services.conversation.tools.SessionLocal', sessions)
     yield sessions
     engine.dispose()
 
@@ -285,3 +285,39 @@ async def test_run_agent_stops_at_round_budget_without_failing(agent_tool_db):
     assert events[-1]['data']['actions'] == []
     assert len(calls) <= 3
     assert [event['type'] for event in events].count('chunk') == 0
+
+
+@pytest.mark.asyncio
+async def test_write_manuscript_carries_uncertainties_through_tool_args():
+    """数组参数不能被参数表校验静默丢弃，不确定点要随稿件进入 final 事件。"""
+    llm = ScriptedLLM([
+        _tool_call_chunk('write_manuscript', {'operation': 'append',
+                                              'content': '他推开门，风灌了进来。',
+                                              'uncertainties': ['门后是否有人尚未确定']}),
+        _text_chunk('已按你的要求续写这一段。'),
+    ])
+    events = []
+    async for event in run_agent(llm, [('user', '接着写一段')]):
+        events.append(event)
+
+    drafted = [event for event in events if event.get('name') == 'write_manuscript']
+    assert drafted and drafted[0]['data']['uncertainties'] == ['门后是否有人尚未确定']
+    final = next(event for event in events if event['type'] == 'final')
+    assert final['data']['manuscript']['uncertainties'] == ['门后是否有人尚未确定']
+    assert final['data']['uncertainties'] == ['门后是否有人尚未确定']
+
+
+@pytest.mark.asyncio
+async def test_write_manuscript_uncertainties_are_bounded_and_cleaned():
+    """不确定点最多 12 条、每条 500 字符；空白与非法项丢弃。"""
+    items = ['不' * 600 for _ in range(15)] + ['  ']
+    _action, manuscript, _ack = execute_agent_tool(
+        'write_manuscript',
+        {'operation': 'append', 'content': '正文', 'uncertainties': items})
+    assert len(manuscript['uncertainties']) == 12
+    assert all(len(item) == 500 for item in manuscript['uncertainties'])
+
+    _action, clean, _ack = execute_agent_tool(
+        'write_manuscript',
+        {'operation': 'append', 'content': '正文', 'uncertainties': ['有效假设', '']})
+    assert clean['uncertainties'] == ['有效假设']

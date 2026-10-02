@@ -22,7 +22,7 @@ from app.models.schemas import (
 )
 from app.crud import novel as novel_crud
 from app.api.dependencies import get_current_user
-from app.services.rag_service import rag_service
+from app.services.rag import rag_service
 
 router = APIRouter()
 

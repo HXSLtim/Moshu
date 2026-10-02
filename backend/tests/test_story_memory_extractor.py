@@ -7,9 +7,9 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
-from app.services.story_memory_extractor import StoryMemoryExtractor, StoryExtraction
-from app.services.model_result import ModelOutputError
-from app.services.context_budget import MAX_DIGEST_SOURCE_CHARS
+from app.services.memory.story_extractor import StoryMemoryExtractor, StoryExtraction
+from app.services.model.result import ModelOutputError
+from app.services.context.budget import MAX_DIGEST_SOURCE_CHARS
 
 
 class Model:

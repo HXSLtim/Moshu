@@ -182,35 +182,12 @@ export interface ChapterNextCreate {
 }
 
 /**
- * Agent工作流中单个步骤
+ * 工作流追踪类型:自 OpenAPI 契约生成,保留旧名作为别名。
+ * 契约变更时经 `npm run codegen` 同步,手写副本已删除。
  */
-export interface AgentWorkflowStep {
-  id: string;
-  parent_id?: string | null;
-  type: string;
-  agent_name?: string | null;
-  title: string;
-  description?: string | null;
-  input: Record<string, any>;
-  output: Record<string, any>;
-  data_sources: Record<string, any>;
-  llm: Record<string, any>;
-  status: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-  duration_ms?: number | null;
-}
+import type { WorkflowStep } from '@/lib/api/generated/model/workflowStep';
+import type { WorkflowTrace } from '@/lib/api/generated/model/workflowTrace';
 
-/**
- * 单次Agent工作流运行的完整追踪
- */
-export interface AgentWorkflowTrace {
-  run_id: string;
-  trigger: string;
-  novel_id?: number | null;
-  chapter_id?: number | null;
-  user_id?: number | null;
-  summary?: string | null;
-  steps: AgentWorkflowStep[];
-  created_at: string;
-}
+export type AgentWorkflowStep = WorkflowStep;
+export type AgentWorkflowTrace = WorkflowTrace;
+export type { WorkflowStep, WorkflowTrace };

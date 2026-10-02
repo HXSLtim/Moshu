@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.agent_service import (
-    AgentService,
+from app.services.generation.workflow import (
+    GenerationWorkflow,
     _build_consistency_checks,
     _build_final_consistency_status,
 )
@@ -108,7 +108,7 @@ def test_conflict_status_has_priority_but_preserves_incomplete_checks():
     assert status.checks_skipped == ["knowledge_graph"]
 
 
-class ControlledAgentService(AgentService):
+class ControlledAgentService(GenerationWorkflow):
     def __init__(self, conflicts):
         self.conflicts = list(conflicts)
         self.plot_calls = 0
@@ -189,7 +189,7 @@ async def test_final_conflict_status_is_preserved_in_sync_and_stream_responses()
 
 @pytest.mark.asyncio
 async def test_retry_trace_ids_are_unique_and_prompt_is_summarized():
-    service = AgentService.__new__(AgentService)
+    service = GenerationWorkflow.__new__(GenerationWorkflow)
     chain = AsyncMock()
     chain.ainvoke.return_value = SimpleNamespace(content="生成剧情")
     prompt_template = MagicMock()
@@ -210,7 +210,7 @@ async def test_retry_trace_ids_are_unique_and_prompt_is_summarized():
     )
 
     with patch(
-        "app.services.agent_service.ChatPromptTemplate.from_messages",
+        "app.services.generation.workflow.ChatPromptTemplate.from_messages",
         return_value=prompt_template,
     ):
         result = await service._agent_c_plot(state)
@@ -224,7 +224,7 @@ async def test_retry_trace_ids_are_unique_and_prompt_is_summarized():
 
 @pytest.mark.asyncio
 async def test_consistency_trace_id_contains_retry_number():
-    service = AgentService.__new__(AgentService)
+    service = GenerationWorkflow.__new__(GenerationWorkflow)
     state = _initial_state()
     state.update(
         {
@@ -243,7 +243,7 @@ async def test_consistency_trace_id_contains_retry_number():
     }
 
     with patch(
-        "app.services.agent_service.consistency_service.check_content",
+        "app.services.generation.workflow.consistency_service.check_content",
         AsyncMock(return_value=check_result),
     ):
         result = await service._consistency_check(state)

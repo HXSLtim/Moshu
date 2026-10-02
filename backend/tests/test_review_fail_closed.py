@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from app.services.context_budget import (
+from app.services.context.budget import (
     MAX_REVIEW_CONTENT_CHARS,
     MAX_REVIEW_PREVIOUS_TOTAL_CHARS,
 )
-from app.services.review_agent_service import ReviewAgentService
-from app.services.review_agents import (
+from app.services.review.service import ReviewAgentService
+from app.services.review.agents import (
     CharacterConsistencyPayload,
     ContentSafetyPayload,
     PaceReviewPayload,
@@ -44,12 +44,12 @@ def _success_results():
 async def test_failed_safety_review_never_allows_publish():
     values = _success_results()
     patches = [
-        patch("app.services.review_agent_service.review_pace_agent", AsyncMock(return_value=values["pace"])),
-        patch("app.services.review_agent_service.review_quality_agent", AsyncMock(return_value=values["quality"])),
-        patch("app.services.review_agent_service.review_plot_coherence_agent", AsyncMock(return_value=values["plot"])),
-        patch("app.services.review_agent_service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
-        patch("app.services.review_agent_service.review_style_agent", AsyncMock(return_value=values["style"])),
-        patch("app.services.review_agent_service.review_content_safety_agent", AsyncMock(side_effect=RuntimeError("模型不可用"))),
+        patch("app.services.review.service.review_pace_agent", AsyncMock(return_value=values["pace"])),
+        patch("app.services.review.service.review_quality_agent", AsyncMock(return_value=values["quality"])),
+        patch("app.services.review.service.review_plot_coherence_agent", AsyncMock(return_value=values["plot"])),
+        patch("app.services.review.service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
+        patch("app.services.review.service.review_style_agent", AsyncMock(return_value=values["style"])),
+        patch("app.services.review.service.review_content_safety_agent", AsyncMock(side_effect=RuntimeError("模型不可用"))),
     ]
     for item in patches:
         item.start()
@@ -76,12 +76,12 @@ async def test_string_safety_boolean_is_validation_failure_and_fails_closed():
         "suggestions": [],
     }
     with (
-        patch("app.services.review_agent_service.review_pace_agent", AsyncMock(return_value=values["pace"])),
-        patch("app.services.review_agent_service.review_quality_agent", AsyncMock(return_value=values["quality"])),
-        patch("app.services.review_agent_service.review_plot_coherence_agent", AsyncMock(return_value=values["plot"])),
-        patch("app.services.review_agent_service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
-        patch("app.services.review_agent_service.review_style_agent", AsyncMock(return_value=values["style"])),
-        patch("app.services.review_agent_service.review_content_safety_agent", AsyncMock(return_value=values["safety"])),
+        patch("app.services.review.service.review_pace_agent", AsyncMock(return_value=values["pace"])),
+        patch("app.services.review.service.review_quality_agent", AsyncMock(return_value=values["quality"])),
+        patch("app.services.review.service.review_plot_coherence_agent", AsyncMock(return_value=values["plot"])),
+        patch("app.services.review.service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
+        patch("app.services.review.service.review_style_agent", AsyncMock(return_value=values["style"])),
+        patch("app.services.review.service.review_content_safety_agent", AsyncMock(return_value=values["safety"])),
     ):
         result = await _service().review_chapter_comprehensive(1, 1, 1, "正文")
 
@@ -94,12 +94,12 @@ async def test_string_safety_boolean_is_validation_failure_and_fails_closed():
 async def test_publish_flag_is_real_bool_and_only_literal_true_can_pass():
     values = _success_results()
     with (
-        patch("app.services.review_agent_service.review_pace_agent", AsyncMock(return_value=values["pace"])),
-        patch("app.services.review_agent_service.review_quality_agent", AsyncMock(return_value=values["quality"])),
-        patch("app.services.review_agent_service.review_plot_coherence_agent", AsyncMock(return_value=values["plot"])),
-        patch("app.services.review_agent_service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
-        patch("app.services.review_agent_service.review_style_agent", AsyncMock(return_value=values["style"])),
-        patch("app.services.review_agent_service.review_content_safety_agent", AsyncMock(return_value=values["safety"])),
+        patch("app.services.review.service.review_pace_agent", AsyncMock(return_value=values["pace"])),
+        patch("app.services.review.service.review_quality_agent", AsyncMock(return_value=values["quality"])),
+        patch("app.services.review.service.review_plot_coherence_agent", AsyncMock(return_value=values["plot"])),
+        patch("app.services.review.service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
+        patch("app.services.review.service.review_style_agent", AsyncMock(return_value=values["style"])),
+        patch("app.services.review.service.review_content_safety_agent", AsyncMock(return_value=values["safety"])),
     ):
         result = await _service().review_chapter_comprehensive(1, 1, 1, "正文")
 
@@ -159,12 +159,12 @@ async def test_review_context_is_bounded_before_agents_run():
     pace = AsyncMock(return_value=values["pace"])
     plot_agent = AsyncMock(return_value=values["plot"])
     with (
-        patch("app.services.review_agent_service.review_pace_agent", pace),
-        patch("app.services.review_agent_service.review_quality_agent", AsyncMock(return_value=values["quality"])),
-        patch("app.services.review_agent_service.review_plot_coherence_agent", plot_agent),
-        patch("app.services.review_agent_service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
-        patch("app.services.review_agent_service.review_style_agent", AsyncMock(return_value=values["style"])),
-        patch("app.services.review_agent_service.review_content_safety_agent", AsyncMock(return_value=values["safety"])),
+        patch("app.services.review.service.review_pace_agent", pace),
+        patch("app.services.review.service.review_quality_agent", AsyncMock(return_value=values["quality"])),
+        patch("app.services.review.service.review_plot_coherence_agent", plot_agent),
+        patch("app.services.review.service.review_character_consistency_agent", AsyncMock(return_value=values["character"])),
+        patch("app.services.review.service.review_style_agent", AsyncMock(return_value=values["style"])),
+        patch("app.services.review.service.review_content_safety_agent", AsyncMock(return_value=values["safety"])),
     ):
         await _service().review_chapter_comprehensive(
             1,
@@ -206,7 +206,7 @@ async def test_safety_agent_propagates_model_failure():
     prompt_template.__or__.return_value = chain
 
     with patch(
-        "app.services.review_agents.ChatPromptTemplate.from_messages",
+        "app.services.review.agents.ChatPromptTemplate.from_messages",
         return_value=prompt_template,
     ):
         with pytest.raises(RuntimeError, match="审核模型故障"):

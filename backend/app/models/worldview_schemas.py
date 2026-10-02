@@ -6,7 +6,7 @@ from typing import Annotated, List, Optional, Dict, Any, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from datetime import datetime
 
-from app.models.workflow_schemas import AgentWorkflowTrace
+from app.models.workflow_schemas import WorkflowTrace
 
 
 BoundedAnalysisScope = Annotated[str, Field(min_length=1, max_length=50)]
@@ -292,7 +292,7 @@ class UnifiedMCPResponse(BaseModel):
     message: str
     ai_reasoning: Optional[str] = None
     timestamp: datetime
-    workflow_trace: Optional[AgentWorkflowTrace] = Field(
+    workflow_trace: Optional[WorkflowTrace] = Field(
         default=None,
         description="本次MCP操作的Agent工作流追踪信息，供前端可视化展示",
     )
@@ -334,7 +334,7 @@ class NovelAnalysisResponse(BaseModel):
     # 元数据
     analysis_timestamp: datetime
     confidence_score: Optional[float] = None
-    workflow_trace: Optional[AgentWorkflowTrace] = Field(
+    workflow_trace: Optional[WorkflowTrace] = Field(
         default=None,
         description="本次小说分析过程的Agent工作流追踪信息",
     )
@@ -384,7 +384,7 @@ class NovelOptimizationResponse(BaseModel):
     # 元数据
     optimization_timestamp: datetime
     confidence_score: Optional[float] = None
-    workflow_trace: Optional[AgentWorkflowTrace] = Field(
+    workflow_trace: Optional[WorkflowTrace] = Field(
         default=None,
         description="本次小说优化过程的Agent工作流追踪信息",
     )

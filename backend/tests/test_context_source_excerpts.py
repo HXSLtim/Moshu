@@ -1,7 +1,7 @@
 """L0 下钻必须来自本轮已选中的有效来源，遵守既有预算。"""
 from app.crud import novel as crud
 from app.models.schemas import ChapterUpdate
-from app.services.context_budget import MAX_STRUCTURED_CONTEXT_CHARS
+from app.services.context.budget import MAX_STRUCTURED_CONTEXT_CHARS
 from tests.test_context_builder import context_db, add_digest, build
 
 
@@ -30,7 +30,7 @@ def test_excerpt_names_source_chapter_instead_of_state_effective_chapter(context
     from types import SimpleNamespace
     from app.models.novel import Novel
     from app.models.story_memory import StoryEntity
-    from app.services import story_memory
+    from app.services.memory import story as story_memory
     chapter, revision, _ = add_digest(context_db, 1)
     novel = context_db.get(Novel, 1)
     entity = StoryEntity(novel_id=1, novel_lifecycle_id=novel.rag_lifecycle_id, name='青霜剑', kind='item')
@@ -48,7 +48,7 @@ def test_excerpt_names_source_chapter_instead_of_state_effective_chapter(context
 
 def test_excerpt_count_budget_reports_unselected_verified_references(context_db):
     """实际选中简介包含多条不同出处时，原文下钻数量上限须报告省略。"""
-    from app.services.digest_extractor import validate_digest
+    from app.services.memory.digest import validate_digest
     for number in range(1, 4):
         chapter, revision, digest = add_digest(context_db, number)
         payload = dict(summary=digest.summary, participants=[], events=[], state_change_candidates=[], open_threads=[],

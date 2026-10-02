@@ -206,3 +206,4 @@ docker-compose.override.yml
 # AI 会话工作产物（不入库）
 .claude/
 .Codex/
+.playwright-mcp/

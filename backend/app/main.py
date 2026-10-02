@@ -23,7 +23,7 @@ logger.add(
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="基于多Agent协作的智能小说创作平台",
+    description="作者主导的长篇小说创作平台：常驻创作 Agent、固定生成工作流与可编排的复合任务",
     debug=settings.DEBUG
 )
 
@@ -68,7 +68,7 @@ async def startup_event():
     if settings.WRITING_JOB_RECOVERY_ENABLED:
         from sqlalchemy import inspect
         from app.db.base import engine
-        from app.services.writing_jobs import run_recovery
+        from app.services.conversation.jobs import run_recovery
         if "writing_generation_jobs" not in await asyncio.to_thread(lambda: inspect(engine).get_table_names()):
             raise RuntimeError("创作任务表尚未升级，请先备份并执行 python init_db.py")
         app.state.writing_recovery_stop = asyncio.Event()
@@ -77,7 +77,7 @@ async def startup_event():
     if settings.PROJECTION_WORKER_ENABLED:
         from sqlalchemy import inspect
         from app.db.base import engine
-        from app.services.projection_jobs import ProjectionWorker
+        from app.services.memory.projection import ProjectionWorker
         if "projection_jobs" not in inspect(engine).get_table_names():
             raise RuntimeError("投影任务表尚未升级，请先备份并执行 python init_db.py")
         app.state.projection_stop = asyncio.Event()
@@ -86,7 +86,7 @@ async def startup_event():
     if settings.MEMORY_WORKER_ENABLED:
         from sqlalchemy import inspect
         from app.db.base import engine
-        from app.services.memory_worker import MemoryWorker
+        from app.services.memory.worker import MemoryWorker
         required = {"chapter_revisions", "derived_jobs", "chapter_digests"}
         if not required.issubset(inspect(engine).get_table_names()):
             raise RuntimeError("章节记忆表尚未升级，请先备份数据库并执行 python init_db.py")
@@ -98,7 +98,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭事件"""
-    from app.services.writing_jobs import shutdown_writing_jobs
+    from app.services.conversation.jobs import shutdown_writing_jobs
     await shutdown_writing_jobs()
     recovery = getattr(app.state, "writing_recovery_task", None)
     if recovery is not None:

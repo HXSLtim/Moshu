@@ -15,7 +15,7 @@ from app.models.novel import Novel
 from app.models.story_memory import StoryEntity, StoryMemoryCommand, StoryMemoryHead, StateCandidate, OutlineNode
 from app.models.story_memory_schemas import EntityInput
 from app.models.user import User
-from app.services import story_memory as memory
+from app.services.memory import story as memory
 from init_db import _alembic_config
 
 

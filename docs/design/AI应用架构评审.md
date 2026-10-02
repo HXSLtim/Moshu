@@ -20,7 +20,7 @@
 | 六维审核 | 节奏、质量、连贯、人物、文风、安全分别调用；全局并发上限默认 2 | Schema 校验已有，但模型打分没有作者标注集校准 |
 | 角色 MCP | 受权的 CRUD、生成、分析与优化 | 能力清单可用不等于主对话已有工具选择/工具结果回传循环 |
 
-代码依据：[writing_chat.py](backend/app/api/routes/writing_chat.py)、[agent_service.py](backend/app/services/agent_service.py)、[generation.py](backend/app/api/routes/generation.py)、[review_agent_service.py](backend/app/services/review_agent_service.py)。
+代码依据：[writing_chat.py](backend/app/api/routes/writing_chat.py)、[workflow.py](backend/app/services/generation/workflow.py)、[generation.py](backend/app/api/routes/generation.py)、[service.py](backend/app/services/review/service.py)。
 
 现有三阶段图是固定工作流，没有自主决定工具及执行分支的通用 Agent 循环。产品界面应展示作者能理解的创作阶段，不把 Agent 数量当作效果指标。
 
@@ -40,7 +40,7 @@
 
 剧情 Agent 把一致性反馈用 f-string 追加到 system 模板；含花括号的诊断导致纠错轮次在调用前失败。已将反馈作为有预算的变量传入，测试验证诊断完整进入消息且生成成功。
 
-代码：[review_agents.py](backend/app/services/review_agents.py)、[agent_service.py](backend/app/services/agent_service.py)；回归：[test_ai_prompt_contracts.py](backend/tests/test_ai_prompt_contracts.py)。新测试修复前 8 项失败、1 项通过，修复后全部通过。模板数据边界修复解决语法重解释，不代表消除了模型层面的提示注入。
+代码：[agents.py](backend/app/services/review/agents.py)、[workflow.py](backend/app/services/generation/workflow.py)；回归：[test_ai_prompt_contracts.py](backend/tests/test_ai_prompt_contracts.py)。新测试修复前 8 项失败、1 项通过，修复后全部通过。模板数据边界修复解决语法重解释，不代表消除了模型层面的提示注入。
 
 ## 4. AI 架构待办（按优先级）
 

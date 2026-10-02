@@ -8,9 +8,9 @@ from app.api.dependencies import get_current_user
 from app.db.base import get_db
 from app.models.user import User
 from app.models.story_memory_schemas import EntityInput, OutlineInput, StateInput, DecisionInput, ResolveInput, ExtractionInput
-from app.services import story_memory as memory
-from app.services.story_memory_extractor import story_memory_extractor
-from app.services.model_result import ModelOutputError
+from app.services.memory import story as memory
+from app.services.memory.story_extractor import story_memory_extractor
+from app.services.model.result import ModelOutputError
 from app.models.story_memory import StoryEntity, StoryMemoryCommand, StoryMemoryHead
 
 router = APIRouter(prefix="/novels/{novel_id}/story-memory")

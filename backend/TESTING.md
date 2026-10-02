@@ -2,7 +2,7 @@
 
 ## 测试基线
 
-- 位置:`backend/tests/`,当前最终全量为 544 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
+- 位置:`backend/tests/`,当前最终全量为 543 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
 - 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
 - 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
@@ -32,12 +32,12 @@ cd backend
 | AI 路由守卫 | `test_ai_route_guards.py` | AI 端点鉴权、模型不可用时的明确降级而非崩溃 |
 | AI Prompt 契约 | `test_ai_prompt_contracts.py` | 六维审核的正文/前文花括号原样传递、重试诊断数据边界、首章禁止无界历史检索、六维审核拒绝传输被截断的有效 JSON |
 | 生成契约 | `test_generation_consistency_contract.py`、`test_agent_retry.py` | 生成结果结构、一致性状态、重试上限 |
+| 任务编排器 | `test_orchestrator.py` | 计划严格校验(环/缺生成步/编号)、DAG 顺序执行与资料注入、一致性稿件来源、作用域错误中止、路由提案落库与越权 404 |
 | 共享 L1 上下文 | `test_context_builder.py`、`test_generation_context_pack.py`、`test_writing_context.py` | 章节/版本/配方/来源核验、有界召回、存储降级、真实模型消息与来源清单一致、历史清单不随改稿变动 |
 | 对话来源迁移 | `test_context_manifest_migration.py` | 可空列升级/回退、旧轮次不伪造来源、无迁移历史旧表补列 |
 | 原文与持久任务 | `test_memory_models.py`、`test_chapter_memory_api.py` | 三表迁移/回填、正文保留、整体事务回滚、版本/任务幂等、权限与生命周期、只读来源端到端 |
 | 简介执行 | `test_digest_extractor.py`、`test_memory_worker.py` | 严格提取及引用、租约恢复、双线程竞争、旧版本/旧token/取消不发布、有界重试、事件循环公平性 |
 | 模型运行契约 | `test_model_result.py`、`test_model_provider.py`、`test_generation_model_contract.py` | 提供方完成原因冲突、截断/工具输出拒绝、真实用量保留、集中连接参数、生成/续写/一致性默认未知故事日 |
-| 轻量编辑契约 | `test_editor_model_contract.py` | 完整结果、输入预算、严格字段与列表、拒绝空 JSON 和截断结果，不补固定好评 |
 | 上下文预算 | `test_context_budget.py`、`test_schema_input_budgets.py` | 各类输入截断边界、schema 字段上限 |
 | 字数统计 | `test_text_stats.py` | 非空白 Unicode 计数、组合标记与 ZWJ 忽略、章节 CRUD 写入 |
 | 审核 | `test_review_fail_closed.py` | 任一审核失败时不得报告"可发布" |
@@ -66,7 +66,7 @@ cd backend
 grep -rn "SessionLocal()" app --include=*.py | wc -l   # 2026-09 复核:10 处
 ```
 
-集中在 `app/services/agent_tools.py`、`agent_service.py`,以及 `app/db/base.py`、`rag_service.py`。
+集中在 `app/services/conversation/tools.py`、`generation/workflow.py`,以及 `app/db/base.py`、`app/services/rag.py`。
 怀疑某条断言是假绿时,先确认读写的归属库:当时用于判断的库内基线是 `writing_turns` 8 条、
 `novels` 4 条(重建测试库后会变,重跑取当前值)。归属对不上就是绕过了 DI,不要先改断言。
 

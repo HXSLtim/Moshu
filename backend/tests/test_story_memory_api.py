@@ -20,8 +20,8 @@ from app.models.schemas import ChapterCreate, ChapterUpdate
 from app.models.story_bible import StoryFact
 from app.models.story_memory import StoryEntity, OutlineNode, StateCandidate, StoryMemoryCommand, StoryMemoryHead
 from app.models.user import User
-from app.services import story_memory as memory
-from app.services.story_memory_extractor import StoryExtraction
+from app.services.memory import story as memory
+from app.services.memory.story_extractor import StoryExtraction
 
 
 @pytest.fixture
