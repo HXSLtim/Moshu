@@ -45,7 +45,7 @@ export default function LoginPage() {
       let errorMessage = '登录失败';
       if (err instanceof Error) {
         if (err.message.includes('fetch')) {
-          errorMessage = '无法连接到服务器，请检查网络连接和服务器状态';
+          errorMessage = '暂时连不上服务器，请稍后再试';
         } else if (err.message.includes('401')) {
           errorMessage = '用户名或密码错误';
         } else if (err.message.includes('CORS')) {
