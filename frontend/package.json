@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit --incremental false",
-    "test": "vitest run"
+    "test": "vitest run",
+    "codegen": "orval --config orval.config.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -27,6 +28,7 @@
     "eslint": "^9",
     "eslint-config-next": "^15.1.4",
     "jsdom": "^26.1.0",
+    "orval": "^8.39.0",
     "typescript": "^5",
     "vitest": "^3.2.7"
   }
