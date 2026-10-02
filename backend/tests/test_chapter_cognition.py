@@ -141,6 +141,17 @@ def test_rejected_draft_tombstoned_in_history(cognition_api):
     seed_turn('pending', '第 3 章的新章')
     seed_turn('accepted', '第 3 章的新章')
     seed_turn(None, '')
+
+    def seed_discussion(assistant_text):
+        row = WritingTurn(novel_id=1, request_id=str(uuid4()), chapter_id=1, chapter_title='第一章',
+                          mode='discuss', user_text='接下来怎么写', assistant_text=assistant_text,
+                          base_content_hash='0' * 64, status='completed',
+                          result={'actions': [], 'uncertainties': [], 'decided_mode': 'discuss'},
+                          novel_lifecycle_id=novel.rag_lifecycle_id)
+        db.add(row)
+
+    seed_discussion('第三章 起扫\n\n' + '内联草稿正文。' * 120)
+    seed_discussion('可以走三条线：一是宗门暗流，二是木牌来历，三是白狐身份。')
     db.commit()
 
     history = writing_chat._recent_history(db, 1)
@@ -151,3 +162,16 @@ def test_rejected_draft_tombstoned_in_history(cognition_api):
     assert history[2].assistant_text == '第三章正文草稿全文。'
     assert '已采纳' in history[2].actions_note
     assert history[3].actions_note == ''
+    # 无稿件的长回复截断并标注为讨论内容,不再以「存在的章」参与章号推断。
+    long_reply = history[4].assistant_text
+    assert len(long_reply) < 700 and '不构成已有章节' in long_reply and long_reply.startswith('第三章 起扫')
+    assert history[5].assistant_text == '可以走三条线：一是宗门暗流，二是木牌来历，三是白狐身份。'
+
+
+def test_prompt_contract_forbids_inline_manuscript():
+    """契约守卫:正文唯一通道与章号纪律必须同时在场,防止提示词回退。"""
+    assert '只有一个交付通道' in writing_chat.AGENT_SYSTEM_PROMPT
+    assert '只认系统提供的当前正文和稿件回执' in writing_chat.AGENT_SYSTEM_PROMPT
+    from app.services.conversation.runtime import PROPOSE_TOOLS
+    spec = next(item for item in PROPOSE_TOOLS if item['function']['name'] == 'write_manuscript')
+    assert '唯一交付通道' in spec['function']['description']

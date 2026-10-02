@@ -102,7 +102,8 @@ PROPOSE_TOOLS: list[dict] = [
         'type': 'function',
         'function': {
             'name': 'write_manuscript',
-            'description': '作者让你接着写、改写本章或开新章时，提交完整正文稿件。不要用它回答普通问题。',
+            'description': '作者让你接着写、改写本章或开新章时，提交完整正文稿件。不要用它回答普通问题。'
+                           '正文的唯一交付通道：不要把草稿写进对话回复。',
             'parameters': {
                 'type': 'object',
                 'properties': {
