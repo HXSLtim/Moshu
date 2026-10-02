@@ -1,5 +1,19 @@
 import type { WritingTurn } from '@/types/writingChat';
 
+/**
+ * auto/none 档自动入库后的编辑器三态（pm 裁决）：跟随，但本地稿最高优先。
+ * reload=同章且无未保存稿，自动载服务端新稿；guard=同章但有本地稿，编辑器不动只提示；
+ * background=落点非当前章，编辑器无感，仅列表/统计刷新。
+ */
+export function resolveAutoApplyAction(
+  landingChapterId: number | null | undefined,
+  currentChapterId: number | null | undefined,
+  hasLocalDraft: boolean,
+): 'reload' | 'guard' | 'background' {
+  if (landingChapterId == null || landingChapterId !== currentChapterId) return 'background';
+  return hasLocalDraft ? 'guard' : 'reload';
+}
+
 /** 轮询的旧状态不能覆盖已经完成的回复；流式中的本地文本也不能被服务端未落文本的 pending 行清掉。 */
 export function mergeWritingTurns(current: WritingTurn[], incoming: WritingTurn[]): WritingTurn[] {
   const entries = new Map(current.map((turn) => [turn.request_id, turn]));

@@ -27,6 +27,7 @@ import {
   ListItemText,
   Menu,
   MenuItem,
+  Snackbar,
   TextField,
   Typography,
  
@@ -80,6 +81,9 @@ import CloseIcon from '@mui/icons-material/Close';
 import AutoSaver from '@/components/workspace/AutoSaver';
 import CharacterStats from '@/components/workspace/CharacterStats';
 import StyleManager from '@/components/workspace/StyleManager';
+import { resolveAutoApplyAction } from '@/lib/writingChat';
+import { writingProposalApi } from '@/lib/writingProposal';
+import type { WritingTurn } from '@/types/writingChat';
 
 const DRAWER_WIDTH = 228;
 const AI_PANEL_WIDTH = 390;
@@ -348,6 +352,8 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   const dirtyRef = useRef(isDirty);
   const saveNowRef = useRef(saveNow);
   const currentChapterRef = useRef(currentChapter);
+  // 自动采纳跟手的轻提示（auto/none 档）；单例 Snackbar，新消息顶掉旧消息。
+  const [notice, setNotice] = useState<{ message: string; severity: 'success' | 'warning' } | null>(null);
   dirtyRef.current = isDirty;
   saveNowRef.current = saveNow;
   currentChapterRef.current = currentChapter;
@@ -615,6 +621,31 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
       router.push(`/workspace?novel=${novelId}&chapter=${savedChapter.id}`);
     }
   }, [adoptServerChapter, applyServerChapterLocally, identityReady, novelId, router]);
+
+  // auto/none 档自动入库后的 UI 跟手（pm 三态裁决）：列表/统计必刷，编辑器按落点与本地稿守卫分发。
+  const handleManuscriptAutoApplied = useCallback((turn: WritingTurn) => {
+    const proposalId = turn.proposal_id;
+    if (!identityReady || !proposalId) return;
+    void (async () => {
+      try {
+        // auto 档一致性检查不过、create 类闸门都会留 pending：只有真 accepted 才算入库。
+        const proposal = await writingProposalApi.get(novelId, proposalId);
+        if (proposal.status !== 'accepted' || proposal.chapter_id == null) return;
+        const savedChapter = await api.getChapter(novelId, proposal.chapter_id);
+        setChapters((previous) => mergeChapterSummaries(previous, [toChapterSummary(savedChapter)]));
+        const action = resolveAutoApplyAction(proposal.chapter_id, currentChapterRef.current?.id, dirtyRef.current);
+        if (action === 'reload') {
+          adoptServerChapter(savedChapter);
+          applyServerChapterLocally(savedChapter);
+        }
+        setNotice(action === 'guard'
+          ? { message: '服务器已有自动入库的新稿；你正在编辑的是本地稿', severity: 'warning' }
+          : { message: '自动采纳的改稿已写入正文', severity: 'success' });
+      } catch {
+        // 自动链路查询失败不打扰写作：列表与正文随下次加载/保存自愈。
+      }
+    })();
+  }, [adoptServerChapter, applyServerChapterLocally, identityReady, novelId]);
 
   const handleAcceptServerConflict = useCallback(() => {
     if (!identityReady || !conflictServerChapter) return;
@@ -957,6 +988,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
                 {authorVerified && novel && <WritingChat key={`${authenticatedUser?.id}-${novelId}-${novel.rag_lifecycle_id}`} ref={aiWritingAssistantRef} novelId={novelId} chapterId={currentChapter?.id ?? null} chapterTitle={title} currentContent={content} onContentGenerated={handleContentGenerated}
                   chapterVersion={currentChapter?.version} novelLifecycleId={novel.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
                   canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted}
+                  onManuscriptAutoApplied={handleManuscriptAutoApplied}
                   onSettingsApplied={() => { void api.getNovel(novelId).then(setNovel).catch(() => undefined); }}
                   novel={novel} selectedText={selectedText}
                   selectionStart={selectionStart} selectionEnd={selectionEnd}
@@ -1067,6 +1099,16 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
           </Button>
         </DialogActions>
       </Dialog>
+      <Snackbar
+        open={Boolean(notice)}
+        autoHideDuration={5000}
+        onClose={() => setNotice(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity={notice?.severity ?? 'success'} onClose={() => setNotice(null)} sx={{ width: '100%' }}>
+          {notice?.message}
+        </Alert>
+      </Snackbar>
     </Fragment>
   );
 }

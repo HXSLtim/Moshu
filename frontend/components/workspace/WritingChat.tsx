@@ -27,6 +27,8 @@ interface Props {
   chapterLifecycleId?: string;
   canApply?: boolean;
   onProposalAccepted?: (chapter: Chapter) => void;
+  /** auto/none 档自动入库完成信号（confirm 档手动采纳不走此路径）；页面查提案状态后做编辑器三态跟随。 */
+  onManuscriptAutoApplied?: (turn: WritingTurn) => void;
   /** 设定交流写入后通知外层刷新项目信息。 */
   onSettingsApplied?: () => void;
   /** 权限 pill 展示与选区随消息上传所需的工作区状态。 */
@@ -69,7 +71,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
   const controllerRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followBottom = useRef(true);
-  const reviewMode = (props.novel as { review_mode?: 'confirm' | 'auto' | 'none' } | null | undefined)?.review_mode ?? 'confirm';
+  const reviewMode = props.novel?.review_mode ?? 'confirm';
   const switchReviewMode = (mode: 'confirm' | 'auto' | 'none') => {
     if (reviewMode === mode || !props.novel) return;
     void api.updateNovel(novelId, { review_mode: mode }).then(() => {
@@ -158,7 +160,11 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           setToolCalls((previous) => [...previous.filter((item) => !(item.name === name && item.status === 'running')),
             { name, status: ((data as { status?: ToolCallEvent['status'] })?.status ?? 'read') as ToolCallEvent['status'], data: data as Record<string, unknown> }]);
         },
-        onDone: (turn) => { merge([turn]); },
+        onDone: (turn) => {
+          merge([turn]);
+          // auto/none 档的 UI 跟手信号；confirm 档的采纳走 WritingProposalActions 手动链，不经此处。
+          if (turn.proposal_id && reviewMode !== 'confirm') latest.current.onManuscriptAutoApplied?.(turn);
+        },
       }, { signal: controller.signal });
     } catch (failure) {
       if (!mounted.current || (failure instanceof Error && failure.name === 'AbortError')) return;
@@ -182,7 +188,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
         if (mounted.current) setSending(false);
       }
     }
-  }, [chapterId, chapterTitle, currentContent, draft, loading, merge, novelId, pending, latestSavedId]);
+  }, [chapterId, chapterTitle, currentContent, draft, loading, merge, novelId, pending, latestSavedId, reviewMode]);
 
   useEffect(() => {
     // 排队消息:上一轮完成后自动发送(Claude Code 风格)。
