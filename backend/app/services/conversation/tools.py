@@ -72,7 +72,7 @@ READ_TOOL_SPECS: list[dict] = [
         'type': 'function',
         'function': {
             'name': 'read_chapter',
-            'description': '读指定章节的当前版本原文(单次一章,超长自动截到开头)。需要引用或核对前面章节的具体文字与细节时使用;只要概要时改用 read_chapter_digest。',
+            'description': '读指定章节的已保存原文(单次一章,含当前章,超长自动截取头尾)。需要引用或核对具体文字与细节时使用;只要概要时改用 read_chapter_digest。',
             'parameters': {
                 'type': 'object',
                 'properties': {'chapter_number': {'type': 'integer', 'description': '章节号'}},
@@ -248,11 +248,14 @@ def _read_chapter_digest_sync(scope: AgentScope, chapter_number) -> str:
 
 
 def _read_chapter_sync(scope: AgentScope, chapter_number) -> str:
+    """读一章已保存正文。目标章在内(讨论本章内容合法,读的是已保存版本,
+    编辑器未保存草稿不在内,不假装实时);目标章之后对本轮不可见,按身份
+    与生命周期错误同一家族阻断,防套取未来章。"""
     if type(chapter_number) is not int or chapter_number < 1:
         return '章节号不合法，未执行查询。'
-    if chapter_number >= scope.target_chapter:
-        return (f'只能阅读目标章（第{scope.target_chapter}章）之前的原文；'
-                '当前章正文已经在上下文中，未来章节对本轮不可见。')
+    if chapter_number > scope.target_chapter:
+        raise ContextScopeError(
+            f'第{chapter_number}章在目标章（第{scope.target_chapter}章）之后，本轮不可读。')
     with SessionLocal() as db:
         _assert_scope(db, scope)
         chapter = db.query(Chapter).filter(
@@ -265,12 +268,15 @@ def _read_chapter_sync(scope: AgentScope, chapter_number) -> str:
         title = chapter.title or '无题'
     if not content:
         return f'第{chapter_number}章《{title}》还没有正文。'
-    header = f'第{chapter_number}章《{title}》原文：\n'
+    header = f'第{chapter_number}章《{title}》原文（已保存版本，未保存的编辑器草稿不在内）：\n'
     if len(header) + len(content) > MAX_READ_CHAPTER_CHARS:
-        body = compact_text(content, MAX_READ_CHAPTER_CHARS - len(header) - 400, keep='head')
+        budget = MAX_READ_CHAPTER_CHARS - len(header) - 400
+        head_len = budget * 2 // 3
+        tail_len = budget - head_len
+        body = (content[:head_len] + '\n\n……（中略）……\n\n' + content[-tail_len:])
         note = (f'\n\n（本章共 {len(content)} 字符，超过单次阅读上限 {MAX_READ_CHAPTER_CHARS} 字符，'
-                '以上仅为开头部分；需要中后段的具体内容时，请用 search_manuscript 按关键词检索，'
-                '或请作者直接提供相关段落。）')
+                f'已截取开头 {head_len} 字符与结尾 {tail_len} 字符；需要中段内容时，'
+                '请用 search_manuscript 按关键词检索，或请作者直接提供相关段落。）')
     else:
         body, note = content, ''
     return header + body + note
