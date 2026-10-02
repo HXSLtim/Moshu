@@ -62,7 +62,8 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
-  const [toolCalls, setToolCalls] = useState<ToolCallEvent[]>([]);
+  // 工具块按轮保留：终态 chip 在流式结束后仍可见（历史轮无持久数据则不渲染，不造假回填）。
+  const [toolCallsByRequest, setToolCallsByRequest] = useState<Record<string, ToolCallEvent[]>>({});
   const [queued, setQueued] = useState('');
   const mounted = useRef(true);
   const sendingRef = useRef(false);
@@ -134,7 +135,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
     const controller = new AbortController();
     controllerRef.current = controller;
     sendingRef.current = true;
-    setSending(true); setError(''); setDraft(''); setToolCalls([]); followBottom.current = true;
+    setSending(true); setError(''); setDraft(''); setToolCallsByRequest((previous) => ({ ...previous, [requestId]: [] })); followBottom.current = true;
     merge([{ id: 0, local_order: latestSavedId + 0.5, request_id: requestId, novel_id: novelId, chapter_id: chapterId, chapter_title: chapterTitle,
       mode: payload.mode, user_text: text, assistant_text: '', base_content_hash: '', status: 'pending', error: null, created_at: new Date().toISOString() }]);
     const patchLocal = (patch: Partial<WritingTurn>) => {
@@ -157,8 +158,11 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
             patchLocal({ result: { reply: '', actions: [...toolActions], uncertainties: [] } as never });
             return;
           }
-          setToolCalls((previous) => [...previous.filter((item) => !(item.name === name && item.status === 'running')),
-            { name, status: ((data as { status?: ToolCallEvent['status'] })?.status ?? 'read') as ToolCallEvent['status'], data: data as Record<string, unknown> }]);
+          setToolCallsByRequest((previous) => {
+            const list = previous[requestId] ?? [];
+            return { ...previous, [requestId]: [...list.filter((item) => !(item.name === name && item.status === 'running')),
+              { name, status: ((data as { status?: ToolCallEvent['status'] })?.status ?? 'read') as ToolCallEvent['status'], data: data as Record<string, unknown> }] };
+          });
         },
         onDone: (turn) => {
           merge([turn]);
@@ -223,9 +227,10 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.9, mt: 0.5 }}>{turn.assistant_text}</Typography>
             {turn.status === 'pending' && <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5, flexWrap: 'wrap' }}>
               <CircularProgress size={12} /><Typography variant="caption" color="text.secondary">正在继续写…</Typography>
-              <Box sx={{ width: '100%' }}>{toolCalls.map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box>
+              <Box sx={{ width: '100%' }}>{(toolCallsByRequest[turn.request_id] ?? []).map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box>
             </Box>}
             {turn.status === 'completed' && <>
+              {(toolCallsByRequest[turn.request_id] ?? []).length > 0 && <Box sx={{ width: '100%', mt: 0.5 }}>{(toolCallsByRequest[turn.request_id] ?? []).map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box>}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
                 <Tooltip title="复制回复"><IconButton size="small" aria-label="复制回复" onClick={() => { void navigator.clipboard.writeText(turn.assistant_text).catch(() => setError('复制失败，请手动选择回复复制')); }}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
                 {turn.proposal_id ? <WritingProposalActions key={turn.proposal_id} {...props} canApply={props.canApply && turn.chapter_id === chapterId} proposalId={turn.proposal_id} acceptLabel={turn.mode === 'new_chapter' ? '确认创建新章' : '采纳到本章'} landing={(turn.result as unknown as AgentTurnResult | null)?.landing} /> : manuscriptModes.has(turn.mode) && <Button size="small" disabled>采纳到本章</Button>}
@@ -245,7 +250,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
                 />}
             </>}
           </>
-          : <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 1, flexWrap: 'wrap' }}><CircularProgress size={12} /><Typography variant="body2">{turn.job_status === 'queued' ? '创作任务已保存，等待执行…' : '正在思考与创作…'}</Typography><Box sx={{ width: '100%' }}>{toolCalls.map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box></Box>}
+          : <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 1, flexWrap: 'wrap' }}><CircularProgress size={12} /><Typography variant="body2">{turn.job_status === 'queued' ? '创作任务已保存，等待执行…' : '正在思考与创作…'}</Typography><Box sx={{ width: '100%' }}>{(toolCallsByRequest[turn.request_id] ?? []).map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box></Box>}
         <ContextSources novelId={novelId} manifest={turn.context_manifest} />
         <ExecutionUsageLine execution={turn.execution} />
 
