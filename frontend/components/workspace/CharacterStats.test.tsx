@@ -98,4 +98,12 @@ describe('角色统计打磨', () => {
     const expanded = screen.getByRole('button', { name: '收起角色列表' });
     expect(expanded.getAttribute('aria-expanded')).toBe('true');
   });
+
+  it('静态「写作建议」模板退役，统计本体不受影响', () => {
+    render(<CharacterStats {...props} />);
+    expect(screen.queryByText(/写作建议/)).toBeNull();
+    expect(screen.queryByText('角色分布较为均衡，适合推进剧情发展。')).toBeNull();
+    expect(screen.getByText('活跃角色: 1')).toBeTruthy();
+    expect(screen.getByText('未出现: 1')).toBeTruthy();
+  });
 });
