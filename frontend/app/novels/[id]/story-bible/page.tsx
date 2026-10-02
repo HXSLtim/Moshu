@@ -8,6 +8,7 @@ import WorldviewEditor from '@/components/novel/WorldviewEditor';
 import StoryBibleManager from '@/components/novel/StoryBibleManager';
 import CharacterManager from '@/components/novel/CharacterManager';
 import CharacterRelationshipEditor from '@/components/novel/CharacterRelationshipEditor';
+import CharacterTimeline from '@/components/novel/CharacterTimeline';
 import { api, ApiError } from '@/lib/api';
 import type { Novel } from '@/types';
 
@@ -48,7 +49,7 @@ export default function StoryBiblePage() {
     <Box>
       {error ? <Alert severity="error" action={<Button color="inherit" onClick={() => setAttempt((value) => value + 1)}>重试</Button>}>{error}</Alert>
         : !novel ? <Typography role="status">正在读取项目…</Typography>
-        : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /><CharacterManager novelId={novelId} /><CharacterRelationshipEditor novelId={novelId} /></>}
+        : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /><CharacterManager novelId={novelId} /><CharacterRelationshipEditor novelId={novelId} /><CharacterTimeline novelId={novelId} /></>}
     </Box>
   </AppFrame>;
 }
