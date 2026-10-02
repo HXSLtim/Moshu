@@ -377,7 +377,7 @@ def test_job_budget_matches_runtime_loop_requirements():
     from app.services.conversation.jobs import _job_model_budget
     from app.services.generation.orchestrator import MAX_ORCHESTRATION_MODEL_CALLS
 
-    assert _job_model_budget('chat', {}) == 8
+    assert _job_model_budget('chat', {}) == 20  # 多轮工具循环 + 能力工具嵌套共享
     assert _job_model_budget('orchestrate', {}) == MAX_ORCHESTRATION_MODEL_CALLS
     assert _job_model_budget('continue', {}) == 5
     assert _job_model_budget('generate', {}) == 5

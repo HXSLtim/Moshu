@@ -83,7 +83,7 @@ npm run lint        # eslint .
 npm run typecheck   # tsc --noEmit
 ```
 
-当前 28 个测试文件、123 项通过(2026-10-02「对话即工作台」重构后,含动作卡片菜单/创建/关闭/折叠交互),覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端、工作台导航、设定账本表单与分页,新保存失败时保留草稿备份,以及改写快照、持久对话恢复、网络失败草稿保留和迟到响应保护。Node 25/26 使用 `NODE_OPTIONS=--no-experimental-webstorage npm test` 避免原生 Web Storage 与 jsdom 冲突。
+当前 25 个测试文件、115 项通过(2026-10-02「对话框唯一形态」重构后:七个旧工具面板组件与对应测试已删,能力并入 WritingChat、新增 ToolCallBlock 内联渲染),覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端、工作台导航、设定账本表单与分页,新保存失败时保留草稿备份,以及改写快照、持久对话恢复、网络失败草稿保留和迟到响应保护。Node 25/26 使用 `NODE_OPTIONS=--no-experimental-webstorage npm test` 避免原生 Web Storage 与 jsdom 冲突。
 
 M1 采用隔离 SQLite 与模型替身验证；真实 Embedding/Chroma 链路另有隔离 smoke，不访问作者真实数据库或真实模型。真实库启用、长篇提取质量及共享召回为单独验收项。前端新增章节记忆的展开请求、保存版本刷新、切章取消与迟到响应保护、只读历史及来源查看回归。
 
