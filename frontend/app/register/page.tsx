@@ -68,7 +68,6 @@ export default function RegisterPage() {
                 margin="normal"
                 required
                 autoFocus
-                helperText="3-50个字符"
               />
               <TextField
                 fullWidth
@@ -89,7 +88,6 @@ export default function RegisterPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 margin="normal"
                 required
-                helperText="至少6个字符"
               />
               <TextField
                 fullWidth

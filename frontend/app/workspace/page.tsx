@@ -937,7 +937,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
           <Box component="nav" aria-label="工作区活动栏" sx={{ width: 46, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', gap: 1, py: 1, bgcolor: 'background.paper', borderRight: 1, borderColor: 'divider' }}>
             <Tooltip title="章节资源管理器" placement="right"><IconButton aria-label="切换章节目录" color={sidebarOpen ? 'primary' : 'default'} onClick={() => setSidebarOpen((value) => !value)}><FolderOpenIcon /></IconButton></Tooltip>
             <Tooltip title="设定与伏笔" placement="right"><IconButton aria-label="打开设定标签" color={editorTab === 'settings' ? 'primary' : 'default'} onClick={() => setEditorTab('settings')}><MenuBookIcon /></IconButton></Tooltip>
-            <Tooltip title="创作对话" placement="right"><IconButton aria-label="查看创作对话" color="primary" disabled><SmartToyIcon /></IconButton></Tooltip>
+            <Tooltip title="创作对话" placement="right"><Box component="span" sx={{ display: 'inline-flex' }}><IconButton aria-label="查看创作对话" color="primary" disabled><SmartToyIcon /></IconButton></Box></Tooltip>
           </Box>
           {sidebarOpen && <Box component="aside" aria-label="章节资源管理器" sx={{ width: DRAWER_WIDTH, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', minHeight: 0, borderRight: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Button size="small" startIcon={<MenuBookIcon />} sx={{ justifyContent: 'flex-start', px: 2, py: 1 }} onClick={() => setEditorTab('settings')}>设定与伏笔</Button>

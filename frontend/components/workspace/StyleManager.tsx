@@ -11,8 +11,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  ListItemSecondaryAction,
-  IconButton,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -25,8 +23,6 @@ import {
 } from '@mui/material';
 import PaletteIcon from '@mui/icons-material/Palette';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
-import DeleteIcon from '@mui/icons-material/Delete';
 import { api } from '@/lib/api';
 import type { StyleSample } from '@/types';
 
@@ -48,7 +44,6 @@ export default function StyleManager({
   
   // 对话框状态
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingSample, setEditingSample] = useState<StyleSample | null>(null);
   const [sampleName, setSampleName] = useState('');
   const [sampleText, setSampleText] = useState('');
   const [saving, setSaving] = useState(false);
@@ -71,17 +66,8 @@ export default function StyleManager({
 
   // 创建新样本
   const handleCreateSample = useCallback(() => {
-    setEditingSample(null);
     setSampleName('');
     setSampleText('');
-    setDialogOpen(true);
-  }, []);
-
-  // 编辑样本
-  const handleEditSample = useCallback((sample: StyleSample) => {
-    setEditingSample(sample);
-    setSampleName(sample.name);
-    setSampleText(sample.sample_preview);
     setDialogOpen(true);
   }, []);
 
@@ -94,19 +80,11 @@ export default function StyleManager({
 
     setSaving(true);
     try {
-      if (editingSample) {
-        // 编辑现有样本（这里需要API支持更新）
-        // await api.updateStyleSample(editingSample.id, { name: sampleName, sample_text: sampleText });
-        onError('编辑功能暂未实现');
-      } else {
-        // 创建新样本
-        await api.createStyleSample({
-          novel_id: novelId,
-          name: sampleName.trim(),
-          sample_text: sampleText.trim(),
-        });
-      }
-      
+      await api.createStyleSample({
+        novel_id: novelId,
+        name: sampleName.trim(),
+        sample_text: sampleText.trim(),
+      });
       setDialogOpen(false);
       loadStyleSamples();
     } catch (err) {
@@ -114,23 +92,7 @@ export default function StyleManager({
     } finally {
       setSaving(false);
     }
-  }, [editingSample, sampleName, sampleText, novelId, onError, loadStyleSamples]);
-
-  // 删除样本
-  const handleDeleteSample = useCallback(async (sampleId: number) => {
-    void sampleId;
-    if (!confirm('确定要删除这个文风样本吗？')) {
-      return;
-    }
-
-    try {
-      // await api.deleteStyleSample(sampleId);
-      onError('删除功能暂未实现');
-      // loadStyleSamples();
-    } catch (err) {
-      onError(err instanceof Error ? err.message : '删除文风样本失败');
-    }
-  }, [onError]);
+  }, [sampleName, sampleText, novelId, onError, loadStyleSamples]);
 
   // 选择样本
   const handleSelectSample = useCallback((sampleId: number | null) => {
@@ -254,26 +216,6 @@ export default function StyleManager({
                         </Box>
                       }
                     />
-                    <ListItemSecondaryAction>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleEditSample(sample);
-                        }}
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                      <IconButton
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteSample(sample.id);
-                        }}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </ListItemSecondaryAction>
                   </ListItem>
                 ))}
               </List>
@@ -293,16 +235,14 @@ export default function StyleManager({
         </CardContent>
       </Card>
 
-      {/* 创建/编辑样本对话框 */}
+      {/* 新建样本对话框 */}
       <Dialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>
-          {editingSample ? '编辑文风样本' : '新建文风样本'}
-        </DialogTitle>
+        <DialogTitle>新建文风样本</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
@@ -331,7 +271,7 @@ export default function StyleManager({
             onClick={handleSaveSample}
             disabled={saving || !sampleName.trim() || !sampleText.trim()}
           >
-            {saving ? '保存中...' : editingSample ? '更新样本' : '创建样本'}
+            {saving ? '保存中...' : '创建样本'}
           </Button>
         </DialogActions>
       </Dialog>
