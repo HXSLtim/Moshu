@@ -232,7 +232,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   const { selectionStart, selectionEnd, selectedText, contentInputRef, handleTextSelection, clearSelection } = useTextSelection();
   useEffect(clearSelection, [novelId, requestedChapterId, clearSelection]);
   const [selectedStyleSampleId, setSelectedStyleSampleId] = useState<number | null>(null);
-  const [plotDirectionHint, setPlotDirectionHint] = useState<string | null>(null);
   const aiWritingAssistantRef = useRef<WritingChatRef | null>(null);
 
   const novelRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
@@ -679,42 +678,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
     addToHistory(newContent, { immediate: true });
   }, [addToHistory]);
 
-  const formatPlotDirection = useCallback((option: {
-    title: string;
-    summary: string;
-    impact?: string | null;
-    risk?: string | null;
-  }) => {
-    return [
-      option.title,
-      option.summary,
-      option.impact ? `影响：${option.impact}` : null,
-      option.risk ? `风险：${option.risk}` : null,
-    ].filter(Boolean).join('；');
-  }, []);
-
-  const handlePlotSelected = useCallback((option: {
-    id: number;
-    title: string;
-    summary: string;
-    impact?: string | null;
-    risk?: string | null;
-  }) => {
-    setPlotDirectionHint(formatPlotDirection(option));
-  }, [formatPlotDirection]);
-
-  const handlePlotSelectedAndContinue = useCallback((option: {
-    id: number;
-    title: string;
-    summary: string;
-    impact?: string | null;
-    risk?: string | null;
-  }) => {
-    const instruction = formatPlotDirection(option);
-    setPlotDirectionHint(instruction);
-    aiWritingAssistantRef.current?.triggerContinue(instruction);
-  }, [formatPlotDirection]);
-
   const handleCreateChapterOpen = useCallback(() => {
     setNewChapterTitle('');
     setCreateChapterDialogOpen(true);
@@ -937,7 +900,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
           <Box component="nav" aria-label="工作区活动栏" sx={{ width: 46, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', gap: 1, py: 1, bgcolor: 'background.paper', borderRight: 1, borderColor: 'divider' }}>
             <Tooltip title="章节资源管理器" placement="right"><IconButton aria-label="切换章节目录" color={sidebarOpen ? 'primary' : 'default'} onClick={() => setSidebarOpen((value) => !value)}><FolderOpenIcon /></IconButton></Tooltip>
             <Tooltip title="设定与伏笔" placement="right"><IconButton aria-label="打开设定标签" color={editorTab === 'settings' ? 'primary' : 'default'} onClick={() => setEditorTab('settings')}><MenuBookIcon /></IconButton></Tooltip>
-            <Tooltip title="创作对话" placement="right"><IconButton aria-label="查看创作对话" color="primary" disabled><SmartToyIcon /></IconButton></Tooltip>
+            <Tooltip title="创作对话" placement="right"><Box component="span" sx={{ display: 'inline-flex' }}><IconButton aria-label="查看创作对话" color="primary" disabled><SmartToyIcon /></IconButton></Box></Tooltip>
           </Box>
           {sidebarOpen && <Box component="aside" aria-label="章节资源管理器" sx={{ width: DRAWER_WIDTH, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', minHeight: 0, borderRight: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Button size="small" startIcon={<MenuBookIcon />} sx={{ justifyContent: 'flex-start', px: 2, py: 1 }} onClick={() => setEditorTab('settings')}>设定与伏笔</Button>
@@ -1094,7 +1057,7 @@ function WorkspacePageContent() {
   const authenticatedUser = useAuthenticatedUser();
   if (!authenticatedUser) return <Box sx={{ p: 3 }}>
     <Typography role="status">正在核验登录身份。若会话已失效，请重新登录。</Typography>
-    <Button href="/login">前往登录</Button>
+    <Button href="/">前往登录</Button>
   </Box>;
   // 作者改变时卸载正文、撤销历史及所有在途操作，重新读取该作者可访问的作品。
   return <WorkspaceSession key={authenticatedUser.id} authenticatedUser={authenticatedUser} />;

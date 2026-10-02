@@ -153,7 +153,7 @@ export default function NovelDetailPage() {
       if (err instanceof Error && err.name === 'AbortError') return;
       if (loadRequestRef.current?.id !== requestId) return;
       setError(err instanceof Error ? err.message : '加载失败');
-      setTimeout(() => router.push('/dashboard'), 2000);
+      setTimeout(() => router.push('/'), 2000);
     } finally {
       if (loadRequestRef.current?.id === requestId) setLoading(false);
     }

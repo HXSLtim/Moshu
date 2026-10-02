@@ -1,17 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { Alert, Box, Button, Typography } from '@mui/material';
 import AppFrame from '@/components/layout/AppFrame';
 import WorldviewEditor from '@/components/novel/WorldviewEditor';
 import StoryBibleManager from '@/components/novel/StoryBibleManager';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import type { Novel } from '@/types';
 
 
 export default function StoryBiblePage() {
   const params = useParams();
+  const router = useRouter();
   const novelId = Number(params.id);
   const [novel, setNovel] = useState<Novel | null>(null);
   const [error, setError] = useState('');
@@ -23,10 +24,17 @@ export default function StoryBiblePage() {
     void api.getNovel(novelId, { signal: controller.signal }).then((value) => {
       if (!controller.signal.aborted) setNovel(value);
     }).catch((failure) => {
-      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : '读取小说失败');
+      if (controller.signal.aborted) return;
+      // 与工作台一致：登录态失效时说明原因并送回登录页，不直出接口报错。
+      if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) {
+        setError('登录状态已失效，请重新登录');
+        setTimeout(() => router.push('/'), 2000);
+      } else {
+        setError(failure instanceof Error ? failure.message : '读取小说失败');
+      }
     });
     return () => controller.abort();
-  }, [novelId, attempt]);
+  }, [novelId, attempt, router]);
   return <AppFrame
     eyebrow="设定"
     title="设定账本"
