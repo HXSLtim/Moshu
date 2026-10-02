@@ -17,7 +17,7 @@ describe('人物档案管理区（样板）', () => {
     render(<CharacterManager {...props} />);
     await screen.findByText('林昭');
     expect(screen.getByText('游侠')).toBeTruthy();
-    expect(screen.getByText('主角')).toBeTruthy();
+    expect(screen.getByText('主力')).toBeTruthy();
     expect(screen.getByRole('button', { name: '删除林昭' })).toBeTruthy();
   });
 
