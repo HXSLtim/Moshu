@@ -212,28 +212,34 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', mt: 0.5 }}>{turn.user_text}</Typography>
         </Box>
         <Typography variant="caption" color="primary">Nai</Typography>
-        {turn.status === 'pending' ? <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 1, flexWrap: 'wrap' }}><CircularProgress size={12} /><Typography variant="body2">{turn.job_status === 'queued' ? '创作任务已保存，等待执行…' : '正在思考与创作…'}</Typography><Box sx={{ width: '100%' }}>{toolCalls.map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box></Box>
-          : turn.status !== 'completed' ? <Alert severity="info">{turn.error || '本轮未完成'}<Button size="small" onClick={() => setDraft(turn.user_text)}>重新编辑</Button></Alert>
-          : <>
+        {turn.status !== 'pending' && turn.status !== 'completed' ? <Alert severity="info">{turn.error || '本轮未完成'}<Button size="small" onClick={() => setDraft(turn.user_text)}>重新编辑</Button></Alert>
+          : turn.assistant_text ? <>
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.9, mt: 0.5 }}>{turn.assistant_text}</Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-              <Tooltip title="复制回复"><IconButton size="small" aria-label="复制回复" onClick={() => { void navigator.clipboard.writeText(turn.assistant_text).catch(() => setError('复制失败，请手动选择回复复制')); }}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
-              {turn.proposal_id ? <WritingProposalActions key={turn.proposal_id} {...props} canApply={props.canApply && turn.chapter_id === chapterId} proposalId={turn.proposal_id} acceptLabel={turn.mode === 'new_chapter' ? '确认创建新章' : '采纳到本章'} landing={(turn.result as unknown as AgentTurnResult | null)?.landing} /> : manuscriptModes.has(turn.mode) && <Button size="small" disabled>采纳到本章</Button>}
-              {turn.chapter_id !== chapterId && <Typography variant="caption" color="text.secondary">来自其他章节</Typography>}
-            </Box>
-            {turn.result && Array.isArray((turn.result as unknown as AgentTurnResult).actions)
-              && ((turn.result as unknown as AgentTurnResult).actions.length > 0) && <AgentActionsCard
-                novelId={novelId}
-                turnId={turn.id}
-                actions={(turn.result as unknown as AgentTurnResult).actions}
-                uncertainties={(turn.result as unknown as AgentTurnResult).uncertainties ?? []}
-                onDecided={(updated) => {
-                  merge([updated]);
-                  const decidedActions = (updated.result as unknown as AgentTurnResult | null)?.actions ?? [];
-                  if (decidedActions.some((action) => action.decision === 'applied')) props.onSettingsApplied?.();
-                }}
-              />}
-          </>}
+            {turn.status === 'pending' && <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5, flexWrap: 'wrap' }}>
+              <CircularProgress size={12} /><Typography variant="caption" color="text.secondary">正在继续写…</Typography>
+              <Box sx={{ width: '100%' }}>{toolCalls.map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box>
+            </Box>}
+            {turn.status === 'completed' && <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                <Tooltip title="复制回复"><IconButton size="small" aria-label="复制回复" onClick={() => { void navigator.clipboard.writeText(turn.assistant_text).catch(() => setError('复制失败，请手动选择回复复制')); }}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
+                {turn.proposal_id ? <WritingProposalActions key={turn.proposal_id} {...props} canApply={props.canApply && turn.chapter_id === chapterId} proposalId={turn.proposal_id} acceptLabel={turn.mode === 'new_chapter' ? '确认创建新章' : '采纳到本章'} landing={(turn.result as unknown as AgentTurnResult | null)?.landing} /> : manuscriptModes.has(turn.mode) && <Button size="small" disabled>采纳到本章</Button>}
+                {turn.chapter_id !== chapterId && <Typography variant="caption" color="text.secondary">来自其他章节</Typography>}
+              </Box>
+              {turn.result && Array.isArray((turn.result as unknown as AgentTurnResult).actions)
+                && ((turn.result as unknown as AgentTurnResult).actions.length > 0) && <AgentActionsCard
+                  novelId={novelId}
+                  turnId={turn.id}
+                  actions={(turn.result as unknown as AgentTurnResult).actions}
+                  uncertainties={(turn.result as unknown as AgentTurnResult).uncertainties ?? []}
+                  onDecided={(updated) => {
+                    merge([updated]);
+                    const decidedActions = (updated.result as unknown as AgentTurnResult | null)?.actions ?? [];
+                    if (decidedActions.some((action) => action.decision === 'applied')) props.onSettingsApplied?.();
+                  }}
+                />}
+            </>}
+          </>
+          : <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 1, flexWrap: 'wrap' }}><CircularProgress size={12} /><Typography variant="body2">{turn.job_status === 'queued' ? '创作任务已保存，等待执行…' : '正在思考与创作…'}</Typography><Box sx={{ width: '100%' }}>{toolCalls.map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box></Box>}
         <ContextSources novelId={novelId} manifest={turn.context_manifest} />
         <ExecutionUsageLine execution={turn.execution} />
 

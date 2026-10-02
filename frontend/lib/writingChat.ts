@@ -1,11 +1,15 @@
 import type { WritingTurn } from '@/types/writingChat';
 
-/** 轮询的旧状态不能覆盖已经完成的回复。 */
+/** 轮询的旧状态不能覆盖已经完成的回复；流式中的本地文本也不能被服务端未落文本的 pending 行清掉。 */
 export function mergeWritingTurns(current: WritingTurn[], incoming: WritingTurn[]): WritingTurn[] {
   const entries = new Map(current.map((turn) => [turn.request_id, turn]));
   for (const turn of incoming) {
     const previous = entries.get(turn.request_id);
     if (previous && previous.status !== 'pending' && turn.status === 'pending') continue;
+    // 流式期间 2s 轮询拿到服务端 pending 行（落库前 assistant_text 为空或落后于本地），
+    // 覆写会把已流出的逐字内容清掉——文本取更长一侧，服务端未来做流式持久化时自然接上。
+    if (previous && previous.status === 'pending' && turn.status === 'pending'
+      && previous.assistant_text.length >= turn.assistant_text.length) continue;
     entries.set(turn.request_id, turn);
   }
   return [...entries.values()].sort((a, b) => (a.id || a.local_order || Number.MAX_SAFE_INTEGER) - (b.id || b.local_order || Number.MAX_SAFE_INTEGER));

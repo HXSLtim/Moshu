@@ -12,6 +12,16 @@ describe('持久创作对话', () => {
     expect(merged).toHaveLength(2);
     expect(merged[0].assistant_text).toBe('新的候选');
   });
+  it('流式中的本地文本不被服务端未落文本的 pending 行清掉', () => {
+    const streaming = { ...sampleTurn, id: 0, request_id: 'stream-one', status: 'pending' as const, assistant_text: '已流出的逐字内容' };
+    const merged = mergeWritingTurns([streaming], [{ ...streaming, assistant_text: '' }]);
+    expect(merged[0].assistant_text).toBe('已流出的逐字内容');
+  });
+  it('服务端流式持久化文本更长时接受服务端行', () => {
+    const streaming = { ...sampleTurn, id: 0, request_id: 'stream-one', status: 'pending' as const, assistant_text: '半段' };
+    const merged = mergeWritingTurns([streaming], [{ ...streaming, assistant_text: '半段以及后续内容' }]);
+    expect(merged[0].assistant_text).toBe('半段以及后续内容');
+  });
   it('只允许在原小说原章节的正文快照上追加候选', async () => {
     const turn = { ...sampleTurn, base_content_hash: await contentHash('正文') };
     expect(await appendWritingCandidate('正文', 1, 2, turn)).toBe('正文\n\n新的候选');

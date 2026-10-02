@@ -307,4 +307,27 @@ describe('对话框唯一形态(能力工具化)', () => {
     await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('排队成功')).toBeTruthy();
   });
+
+  it('流式增量立即上屏，操作行等完成才出现', async () => {
+    let release: (() => void) | undefined;
+    vi.spyOn(api, 'streamWritingTurn').mockImplementation((_id, data, callbacks) => new Promise((resolve) => {
+      callbacks.onChunk?.('第一段就上屏。');
+      callbacks.onChunk?.('第二段继续。');
+      release = () => {
+        callbacks.onDone?.({ ...turn, id: 2, request_id: data.request_id, user_text: data.message, assistant_text: '第一段就上屏。第二段继续。' });
+        resolve();
+      };
+    }));
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '继续写' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    expect(await screen.findByText('第一段就上屏。第二段继续。')).toBeTruthy();
+    expect(screen.getByText('正在继续写…')).toBeTruthy();
+    // 历史完成轮自带一颗复制钮；流式轮的操作行要等完成才出现（此时全场仅 1 颗）。
+    expect(screen.getAllByRole('button', { name: '复制回复' })).toHaveLength(1);
+    release?.();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '复制回复' })).toHaveLength(2));
+    expect(screen.queryByText('正在继续写…')).toBeNull();
+  });
 });
