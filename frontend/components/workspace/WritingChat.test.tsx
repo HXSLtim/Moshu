@@ -225,6 +225,18 @@ describe('设定提案决策', () => {
     await screen.findByText(serverReason);
     expect(screen.getByRole('button', { name: '确认写入设定' })).toBeTruthy();
   });
+
+  it('状态 Chip 不嵌进 Typography（div 不得嵌 p，否则 hydration 报错）', async () => {
+    // 部分已决策（待确认卡带单条 Chip）与全决策混合（终态列表带 Chip）两条渲染路径都验证。
+    vi.mocked(api.listWritingTurns).mockResolvedValue([
+      { ...settingsTurn, result: { reply: '', actions: [{ ...settingsActions[0], decision: 'applied' as const, decided_at: decidedAt }, settingsActions[1]], uncertainties: [] } },
+      { ...settingsTurn, id: 10, request_id: 'saved-turn-2', result: { reply: '', actions: [{ ...settingsActions[0], decision: 'applied' as const, decided_at: decidedAt }, { ...settingsActions[1], decision: 'skipped' as const, decided_at: decidedAt }], uncertainties: [] } },
+    ]);
+    const { container } = render(<WritingChat {...settingsProps} />);
+    await screen.findByText(/已处理：写入 1 项/);
+    expect(container.querySelector('p .MuiChip-root')).toBeNull();
+    expect(container.querySelectorAll('.MuiChip-root').length).toBe(6);
+  });
 });
 
 
