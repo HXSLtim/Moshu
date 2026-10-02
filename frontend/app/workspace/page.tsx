@@ -924,30 +924,13 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
     {novel.rag_lifecycle_id && <StoryMemoryManager novelId={novelId} novelLifecycleId={novel.rag_lifecycle_id} chapterId={currentChapter?.id ?? null} chapterNumber={currentChapter?.chapter_number ?? null} />}
   </Box>;
 
+  // 动作型能力(续写/改写/编排/一致性/剧情/检索)已移入对话「+」菜单卡片;此处仅保留管理型工具。
   const toolsContent = authorVerified && <Box key={`${authenticatedUser?.id}-${novelId}-${novel?.rag_lifecycle_id}`} sx={{ p: 1.5, height: '100%', overflow: 'auto' }}>
     <ChapterMemory novelId={novelId} chapterId={currentChapter?.id ?? null} currentVersion={currentChapter?.version ?? 1}
       novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
       currentContent={content} canRestore={identityReady && !isDirty && !isSaving} onVersionRestored={handleProposalAccepted} />
-    <Accordion disableGutters sx={{ mb: 2, boxShadow: 'none' }}>
-      <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="body2">高级续写 · 文风与节奏</Typography></AccordionSummary>
-      <AccordionDetails sx={{ p: 0 }}><AiWritingAssistant novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
-        onError={setError} plotDirectionHint={plotDirectionHint}
-        chapterVersion={currentChapter?.version} novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
-        canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} /></AccordionDetails>
-    </Accordion>
-    <OrchestrationPanel novelId={novelId} chapterId={currentChapter?.id ?? null}
-      novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
-      chapterVersion={currentChapter?.version} currentContent={content}
-      canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} />
-    <TextRewriter novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
-      selectedText={selectedText} selectionStart={selectionStart} selectionEnd={selectionEnd}
-      onError={setError} chapterVersion={currentChapter?.version} novelLifecycleId={novel?.rag_lifecycle_id}
-      chapterLifecycleId={currentChapter?.rag_lifecycle_id} canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} />
-    <PlotOptionsGenerator novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
-      onPlotSelected={handlePlotSelected} onPlotSelectedAndContinue={handlePlotSelectedAndContinue} onError={setError} />
     {plotDirectionHint && <Alert severity="info" sx={{ mb: 2 }}>已选择：{plotDirectionHint}</Alert>}
     <StyleManager novelId={novelId} selectedStyleSampleId={selectedStyleSampleId} onStyleSampleSelected={setSelectedStyleSampleId} onError={setError} />
-    <ResearchAssistant novelId={novelId} onError={setError} />
     <CharacterStats novel={novel} currentContent={content} />
     <ConsistencyChecker novel={novel} currentChapter={currentChapter} content={content} onError={setError} />
   </Box>;
@@ -1013,7 +996,10 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
                 {authorVerified && novel && <WritingChat key={`${authenticatedUser?.id}-${novelId}-${novel.rag_lifecycle_id}`} ref={aiWritingAssistantRef} novelId={novelId} chapterId={currentChapter?.id ?? null} chapterTitle={title} currentContent={content} onContentGenerated={handleContentGenerated}
                   chapterVersion={currentChapter?.version} novelLifecycleId={novel.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
                   canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted}
-                  onSettingsApplied={() => { void api.getNovel(novelId).then(setNovel).catch(() => undefined); }} />}
+                  onSettingsApplied={() => { void api.getNovel(novelId).then(setNovel).catch(() => undefined); }}
+                  novel={novel} currentChapter={currentChapter} selectedText={selectedText}
+                  selectionStart={selectionStart} selectionEnd={selectionEnd} plotDirectionHint={plotDirectionHint}
+                  onPlotSelected={handlePlotSelected} onPlotSelectedAndContinue={handlePlotSelectedAndContinue} onError={setError} />}
               </Box>
               <Box sx={{ flex: 1, minHeight: 0, display: rightTab === 'tools' ? 'block' : 'none' }}>{toolsContent}</Box>
             </Box>
