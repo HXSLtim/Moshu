@@ -6,6 +6,7 @@ import { Alert, Box, Button, Typography } from '@mui/material';
 import AppFrame from '@/components/layout/AppFrame';
 import WorldviewEditor from '@/components/novel/WorldviewEditor';
 import StoryBibleManager from '@/components/novel/StoryBibleManager';
+import CharacterManager from '@/components/novel/CharacterManager';
 import { api, ApiError } from '@/lib/api';
 import type { Novel } from '@/types';
 
@@ -46,7 +47,7 @@ export default function StoryBiblePage() {
     <Box>
       {error ? <Alert severity="error" action={<Button color="inherit" onClick={() => setAttempt((value) => value + 1)}>重试</Button>}>{error}</Alert>
         : !novel ? <Typography role="status">正在读取项目…</Typography>
-        : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /></>}
+        : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /><CharacterManager novelId={novelId} /></>}
     </Box>
   </AppFrame>;
 }
