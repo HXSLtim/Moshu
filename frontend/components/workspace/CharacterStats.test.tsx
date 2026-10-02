@@ -72,3 +72,30 @@ describe('角色统计数据源切换', () => {
     expect(await screen.findByText('王五')).toBeTruthy();
   });
 });
+
+describe('角色统计打磨', () => {
+  it('未选章节时给引导而不是 0/0 空转', async () => {
+    render(<CharacterStats {...props} hasChapter={false} />);
+    await screen.findByText('还没有选中的章节。');
+    expect(screen.queryByText(/活跃角色/)).toBeNull();
+  });
+
+  it('次数章归灰描边，红只留真错误', () => {
+    const { container } = render(<CharacterStats {...props} />);
+    // 张三 2 次为最高占比（旧逻辑此处染 error 红），现应为 default 灰描边。
+    const chip = screen.getByText('2次').closest('.MuiChip-root') as HTMLElement;
+    expect(chip.className).toContain('MuiChip-colorDefault');
+    expect(chip.className).toContain('MuiChip-outlined');
+    expect(container.querySelector('.MuiChip-colorError')).toBeNull();
+    expect(container.querySelector('.MuiLinearProgress-barColorError')).toBeNull();
+  });
+
+  it('展开钮有中文名，展开后翻转为收起', () => {
+    render(<CharacterStats {...props} />);
+    const toggle = screen.getByRole('button', { name: '展开角色列表' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    const expanded = screen.getByRole('button', { name: '收起角色列表' });
+    expect(expanded.getAttribute('aria-expanded')).toBe('true');
+  });
+});
