@@ -978,9 +978,8 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
                   chapterVersion={currentChapter?.version} novelLifecycleId={novel.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
                   canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted}
                   onSettingsApplied={() => { void api.getNovel(novelId).then(setNovel).catch(() => undefined); }}
-                  novel={novel} currentChapter={currentChapter} selectedText={selectedText}
-                  selectionStart={selectionStart} selectionEnd={selectionEnd} plotDirectionHint={plotDirectionHint}
-                  onPlotSelected={handlePlotSelected} onPlotSelectedAndContinue={handlePlotSelectedAndContinue} onError={setError} />}
+                  novel={novel} selectedText={selectedText}
+                  selectionStart={selectionStart} selectionEnd={selectionEnd} />}
               </Box>
             </Box>
           </Box>

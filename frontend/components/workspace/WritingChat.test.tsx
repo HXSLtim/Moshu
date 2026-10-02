@@ -153,36 +153,6 @@ describe('服务端候选确认', () => {
   });
 });
 
-describe('动作卡片(对话即工作台)', () => {
-  it('「+」菜单列出六种创作工具,选择后卡片进入对话流并可关闭', async () => {
-    render(<WritingChat {...props} />);
-    await screen.findByText(turn.assistant_text);
-    fireEvent.click(screen.getByRole('button', { name: '添加创作工具' }));
-    for (const label of ['编排任务', '高级续写', '选区改写', '一致性自查', '剧情走向', '资料检索']) {
-      expect(screen.getByRole('menuitem', { name: new RegExp(label) })).toBeTruthy();
-    }
-    fireEvent.click(screen.getByRole('menuitem', { name: /编排任务/ }));
-    expect(await screen.findByText('复合指令分解为检索、生成与检查')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '添加创作工具' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /资料检索/ }));
-    expect((await screen.findAllByText('搜索历史背景、专业知识...')).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getAllByRole('button', { name: '关闭卡片' })[0]);
-    expect(screen.queryByText('复合指令分解为检索、生成与检查')).toBeNull();
-    expect(screen.getAllByText('搜索历史背景、专业知识...').length).toBeGreaterThan(0);
-  });
-
-  it('卡片可折叠再展开,折叠后内容隐藏', async () => {
-    render(<WritingChat {...props} />);
-    await screen.findByText(turn.assistant_text);
-    fireEvent.click(screen.getByRole('button', { name: '添加创作工具' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: /一致性自查/ }));
-    const collapse = await screen.findByRole('button', { name: '折叠卡片' });
-    fireEvent.click(collapse);
-    expect(screen.getByRole('button', { name: '展开卡片' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: '展开卡片' }));
-    expect(screen.getByRole('button', { name: '折叠卡片' })).toBeTruthy();
-  });
-});
 
 describe('输入体验(Claude Code 风格)', () => {
   it('Enter 直接发送,Shift+Enter 与输入法组合中的 Enter 不发送', async () => {
@@ -197,5 +167,48 @@ describe('输入体验(Claude Code 风格)', () => {
     expect(send).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+  });
+});
+
+
+describe('对话框唯一形态(能力工具化)', () => {
+  it('工具事件渲染为内联块,能力工具两阶段状态可见', async () => {
+    const send = vi.spyOn(api, 'streamWritingTurn').mockImplementation(async (_id, data, callbacks) => {
+      callbacks.onTool?.('search_story_bible', { summary: '查到青霜剑' });
+      callbacks.onTool?.('orchestrate', { status: 'running', summary: '' });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      callbacks.onDone?.({ ...turn, id: 4, request_id: data.request_id, user_text: data.message, assistant_text: '已完成编排。' });
+    });
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText(/和 Nai 聊聊/), { target: { value: '先查再写' } });
+    fireEvent.keyDown(screen.getByLabelText(/和 Nai 聊聊/), { key: 'Enter' });
+    expect(await screen.findByText('已检索设定账本')).toBeTruthy();
+    expect(screen.getByText('正在编排任务编排…')).toBeTruthy();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('处理中 Enter 入队,完成后自动发送排队消息', async () => {
+    const releaseRef: { current: ((turn: WritingTurn) => void) | null } = { current: null };
+    const gate = new Promise<WritingTurn>((resolve) => { releaseRef.current = resolve; });
+    const send = vi.spyOn(api, 'streamWritingTurn').mockImplementation(async (_id, data, callbacks) => {
+      if (data.message === '第二条') {
+        callbacks.onDone?.({ ...turn, id: 5, request_id: data.request_id, user_text: '第二条', assistant_text: '排队成功' });
+        return;
+      }
+      const settled = await gate;
+      callbacks.onDone?.({ ...settled, request_id: data.request_id });
+    });
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    fireEvent.change(screen.getByLabelText(/和 Nai 聊聊/), { target: { value: '第一条' } });
+    fireEvent.keyDown(screen.getByLabelText(/和 Nai 聊聊/), { key: 'Enter' });
+    const input = screen.getByLabelText(/排队下一条消息/);
+    fireEvent.change(input, { target: { value: '第二条' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByText(/已排队：第二条/)).toBeTruthy();
+    releaseRef.current?.({ ...turn, id: 4, request_id: 'first', user_text: '第一条', assistant_text: '完成一' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('排队成功')).toBeTruthy();
   });
 });

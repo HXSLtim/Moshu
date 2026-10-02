@@ -202,7 +202,7 @@ class AgentTrace:
 
 
 async def _execute_tool(name: str, raw_args, *, read_tool_executor, capability_tool_executor,
-                        seen: set[str], trace: AgentTrace):
+                        seen: set[str], trace: AgentTrace, publish: object):
     """执行一次工具调用。
 
     返回 ``(ack, event)``：ack 是回填给模型的确认文本，event 是给前端的观察事件。
@@ -294,7 +294,7 @@ def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[
         async def _run(**kwargs) -> str:
             ack, event = await _execute_tool(name, kwargs, read_tool_executor=read_tool_executor,
                                              capability_tool_executor=capability_tool_executor,
-                                             seen=seen, trace=trace)
+                                             seen=seen, trace=trace, publish=publish)
             if event is not None:
                 await publish(event)
             return ack

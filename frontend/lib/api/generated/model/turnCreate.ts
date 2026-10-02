@@ -24,4 +24,7 @@ export interface TurnCreate {
   mode?: TurnCreateMode;
   options?: TaskOptions;
   request_id: string;
+  selection_end?: number | null;
+  selection_start?: number | null;
+  selection_text?: string | null;
 }

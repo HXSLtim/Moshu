@@ -1,18 +1,11 @@
 'use client';
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Alert, Box, Button, CircularProgress, IconButton, ListItemIcon, ListItemText, Menu, MenuItem, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, IconButton, TextField, Tooltip, Typography } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import AddIcon from '@mui/icons-material/Add';
-import ActionCard, { ACTION_KINDS, type ActionCardState, type ActionKind } from './ActionCard';
-import AiWritingAssistant from './AiWritingAssistant';
-import TextRewriter from './TextRewriter';
-import OrchestrationPanel from './OrchestrationPanel';
-import ConsistencyChecker from './ConsistencyChecker';
-import PlotOptionsGenerator from './PlotOptionsGenerator';
-import ResearchAssistant from './ResearchAssistant';
+import ToolCallBlock, { type ToolCallEvent } from './ToolCallBlock';
 import { api } from '@/lib/api';
 import { mergeWritingTurns } from '@/lib/writingChat';
 import type { AgentAction, AgentTurnResult, WritingMode, WritingTurn } from '@/types/writingChat';
@@ -21,8 +14,6 @@ import ExecutionUsageLine from './ExecutionUsageLine';
 import WritingProposalActions from './WritingProposalActions';
 import AgentActionsCard from './AgentActionsCard';
 import type { Chapter, Novel } from '@/types';
-
-export type PlotOptionHint = { id: number; title: string; summary: string; impact?: string | null; risk?: string | null };
 
 interface Props {
   novelId: number;
@@ -37,29 +28,16 @@ interface Props {
   onProposalAccepted?: (chapter: Chapter) => void;
   /** 设定交流写入后通知外层刷新项目信息。 */
   onSettingsApplied?: () => void;
-  /** 动作卡片透传:一致性自查与改写/剧情面板所需的工作区状态。 */
+  /** 权限 pill 展示与选区随消息上传所需的工作区状态。 */
   novel?: Novel | null;
-  currentChapter?: Chapter | null;
   selectedText?: string | null;
   selectionStart?: number | null;
   selectionEnd?: number | null;
-  plotDirectionHint?: string | null;
-  onPlotSelected?: (option: PlotOptionHint) => void;
-  onPlotSelectedAndContinue?: (option: PlotOptionHint) => void;
-  onError?: (message: string) => void;
 }
 export interface WritingChatRef { triggerContinue: (instruction?: string) => void }
 
 const modeLabels: Record<WritingMode, string> = { discuss: '讨论剧情', continue: '续写正文', advanced_continue: '高级续写', rewrite: '改写本章', outline: '规划大纲', character: '设计角色', check: '检查本章', new_chapter: '起草下一章' };
 const manuscriptModes = new Set<WritingMode>(['continue', 'advanced_continue', 'rewrite', 'new_chapter']);
-const readToolLabels: Record<string, string> = {
-  search_story_bible: '查阅了设定账本',
-  lookup_character: '查阅了角色卡',
-  read_chapter_digest: '查阅了前章简介',
-  get_outline: '查阅了全书大纲',
-  search_manuscript: '检索了前文正文',
-  check_manuscript: '自查了稿件一致性',
-};
 
 const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingChatSession(props, ref) {
   const { novelId, chapterId, chapterTitle, currentContent } = props;
@@ -70,16 +48,9 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
   const [hasMore, setHasMore] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [toolTrail, setToolTrail] = useState<string[]>([]);
   const [attempt, setAttempt] = useState(0);
-  const [actions, setActions] = useState<ActionCardState[]>([]);
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
-  const openAction = (kind: ActionKind) => {
-    setMenuAnchor(null);
-    followBottom.current = true;
-    setActions((previous) => [...previous, { id: crypto.randomUUID(), kind, created_at: new Date().toISOString() }]);
-  };
-  const closeAction = (id: string) => setActions((previous) => previous.filter((action) => action.id !== id));
+  const [toolCalls, setToolCalls] = useState<ToolCallEvent[]>([]);
+  const [queued, setQueued] = useState('');
   const mounted = useRef(true);
   const sendingRef = useRef(false);
   const latest = useRef(props);
@@ -87,6 +58,13 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
   const controllerRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followBottom = useRef(true);
+  const reviewMode = (props.novel as { review_mode?: 'confirm' | 'auto' | 'none' } | null | undefined)?.review_mode ?? 'confirm';
+  const switchReviewMode = (mode: 'confirm' | 'auto' | 'none') => {
+    if (reviewMode === mode || !props.novel) return;
+    void api.updateNovel(novelId, { review_mode: mode }).then(() => {
+      props.onSettingsApplied?.();
+    }).catch((failure) => { if (mounted.current) setError(failure instanceof Error ? failure.message : '更新审核模式失败'); });
+  };
   const pending = turns.findLast((turn) => turn.status === 'pending');
   const pendingId = pending?.request_id;
   const latestSavedId = turns.reduce((value, turn) => Math.max(value, turn.id), 0);
@@ -132,14 +110,18 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
       setError('请先保存正文并完成身份核验，再生成可采纳候选'); return;
     }
     const requestId = crypto.randomUUID();
-    const payload = { request_id: requestId, chapter_id: chapterId, mode: selectedMode, message: text, current_content: currentContent,
+    const payload = {
+      request_id: requestId, chapter_id: chapterId, mode: selectedMode, message: text, current_content: currentContent,
+      selection_text: latest.current.selectedText ?? undefined,
+      selection_start: latest.current.selectionStart ?? undefined,
+      selection_end: latest.current.selectionEnd ?? undefined,
       expected_version: manuscriptModes.has(selectedMode) ? latest.current.chapterVersion : undefined,
       expected_novel_lifecycle_id: latest.current.novelLifecycleId,
       expected_chapter_lifecycle_id: latest.current.chapterLifecycleId };
     const controller = new AbortController();
     controllerRef.current = controller;
     sendingRef.current = true;
-    setSending(true); setError(''); setDraft(''); setToolTrail([]); followBottom.current = true;
+    setSending(true); setError(''); setDraft(''); setToolCalls([]); followBottom.current = true;
     merge([{ id: 0, local_order: latestSavedId + 0.5, request_id: requestId, novel_id: novelId, chapter_id: chapterId, chapter_title: chapterTitle,
       mode: payload.mode, user_text: text, assistant_text: '', base_content_hash: '', status: 'pending', error: null, created_at: new Date().toISOString() }]);
     const patchLocal = (patch: Partial<WritingTurn>) => {
@@ -162,9 +144,8 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
             patchLocal({ result: { reply: '', actions: [...toolActions], uncertainties: [] } as never });
             return;
           }
-          // 只读检索与自查事件只展示轨迹，不产生待确认动作。
-          const label = readToolLabels[name];
-          if (label) setToolTrail((previous) => [...previous, label]);
+          setToolCalls((previous) => [...previous.filter((item) => !(item.name === name && item.status === 'running')),
+            { name, status: ((data as { status?: ToolCallEvent['status'] })?.status ?? 'read') as ToolCallEvent['status'], data: data as Record<string, unknown> }]);
         },
         onDone: (turn) => { merge([turn]); },
       }, { signal: controller.signal });
@@ -192,6 +173,14 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
     }
   }, [chapterId, chapterTitle, currentContent, draft, loading, merge, novelId, pending, latestSavedId]);
 
+  useEffect(() => {
+    // 排队消息:上一轮完成后自动发送(Claude Code 风格)。
+    if (queued && !pending && !sending && !loading) {
+      const text = queued; setQueued('');
+      void send(text);
+    }
+  }, [queued, pending, sending, loading, send]);
+
   useImperativeHandle(ref, () => ({ triggerContinue: (instruction) => { void send(instruction, 'continue'); } }), [send]);
 
   const loadMore = async () => {
@@ -212,7 +201,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', mt: 0.5 }}>{turn.user_text}</Typography>
         </Box>
         <Typography variant="caption" color="primary">Nai</Typography>
-        {turn.status === 'pending' ? <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 1, flexWrap: 'wrap' }}><CircularProgress size={12} /><Typography variant="body2">{turn.job_status === 'queued' ? '创作任务已保存，等待执行…' : '正在思考与创作…'}</Typography>{toolTrail.length > 0 && <Typography variant="caption" color="text.secondary">{toolTrail[toolTrail.length - 1]}（本轮已执行 {toolTrail.length} 步查阅）</Typography>}</Box>
+        {turn.status === 'pending' ? <Box role="status" sx={{ display: 'flex', gap: 1, alignItems: 'center', py: 1, flexWrap: 'wrap' }}><CircularProgress size={12} /><Typography variant="body2">{turn.job_status === 'queued' ? '创作任务已保存，等待执行…' : '正在思考与创作…'}</Typography><Box sx={{ width: '100%' }}>{toolCalls.map((call, index) => <ToolCallBlock key={`${call.name}-${index}`} event={call} />)}</Box></Box>
           : turn.status !== 'completed' ? <Alert severity="info">{turn.error || '本轮未完成'}<Button size="small" onClick={() => setDraft(turn.user_text)}>重新编辑</Button></Alert>
           : <>
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.9, mt: 0.5 }}>{turn.assistant_text}</Typography>
@@ -235,35 +224,6 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
 
   </Box>;
 
-  const renderAction = (action: ActionCardState) => {
-    switch (action.kind) {
-      case 'orchestrate':
-        return <OrchestrationPanel novelId={novelId} chapterId={chapterId} novelLifecycleId={props.novelLifecycleId}
-          chapterLifecycleId={props.chapterLifecycleId} chapterVersion={props.chapterVersion}
-          currentContent={currentContent} canApply={props.canApply} onProposalAccepted={props.onProposalAccepted} />;
-      case 'continue':
-        return <AiWritingAssistant novelId={novelId} chapterId={chapterId} currentContent={currentContent}
-          onError={props.onError ?? (() => {})} plotDirectionHint={props.plotDirectionHint} chapterVersion={props.chapterVersion}
-          novelLifecycleId={props.novelLifecycleId} chapterLifecycleId={props.chapterLifecycleId}
-          canApply={props.canApply} onProposalAccepted={props.onProposalAccepted} />;
-      case 'rewrite':
-        return <TextRewriter novelId={novelId} chapterId={chapterId} currentContent={currentContent}
-          selectedText={props.selectedText ?? ''} selectionStart={props.selectionStart ?? null} selectionEnd={props.selectionEnd ?? null}
-          onError={props.onError ?? (() => {})} chapterVersion={props.chapterVersion} novelLifecycleId={props.novelLifecycleId}
-          chapterLifecycleId={props.chapterLifecycleId} canApply={props.canApply} onProposalAccepted={props.onProposalAccepted} />;
-      case 'consistency':
-        return <ConsistencyChecker novel={props.novel ?? null} currentChapter={props.currentChapter ?? null}
-          content={currentContent} onError={props.onError ?? (() => {})} />;
-      case 'plot':
-        return <PlotOptionsGenerator novelId={novelId} chapterId={chapterId} currentContent={currentContent}
-          onPlotSelected={props.onPlotSelected ?? (() => {})} onPlotSelectedAndContinue={props.onPlotSelectedAndContinue} onError={props.onError ?? (() => {})} />;
-      case 'research':
-        return <ResearchAssistant novelId={novelId} onError={props.onError ?? (() => {})} />;
-      default:
-        return null;
-    }
-  };
-
   return <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
     <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
       <Typography variant="subtitle2">创作对话</Typography>
@@ -281,29 +241,41 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
         <Typography variant="body2" color="text.secondary">讨论人物的动机，推敲下一幕，或让 AI 接着写。交流会留在这里。</Typography>
       </Box>}
       {turns.map((turn) => renderTurn(turn))}
-      {actions.map((action) => <ActionCard key={action.id} state={action} onClose={closeAction}>{renderAction(action)}</ActionCard>)}
     </Box>
     <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-      <TextField fullWidth multiline minRows={2} maxRows={5} label="和 Nai 聊聊" value={draft}
-        placeholder="例如：接着往下写 / 这个世界魔法要付代价 / 他为什么要隐瞒身份"
+      <TextField fullWidth multiline minRows={2} maxRows={5} label={pending ? '排队下一条消息' : '和 Nai 聊聊'} value={draft}
+        placeholder={pending ? 'Nai 正在处理上一条,Enter 把这条加入队列…' : '例如：接着往下写 / 这个世界魔法要付代价 / 他为什么要隐瞒身份'}
         slotProps={{ htmlInput: { maxLength: 4000 } }} onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => { if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.shiftKey) return; event.preventDefault(); void send(); }} />
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.shiftKey) return;
+          event.preventDefault();
+          if (pending && draft.trim()) { setQueued(draft.trim()); setDraft(''); return; }
+          void send();
+        }} />
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1 }}>
         <Typography variant="caption" color={chapterId ? 'text.secondary' : 'warning.main'}>
           {chapterId ? 'Nai 会自己判断该回答、整理设定还是起草正文 · Enter 发送，Shift+Enter 换行' : '正在准备第 1 章，稍等一下就能发送…'}
         </Typography>
         <Box sx={{ flex: 1 }} />
-        <IconButton aria-label="添加创作工具" title="创作工具" disabled={!chapterId} onClick={(event) => setMenuAnchor(event.currentTarget)}><AddIcon /></IconButton>
-        <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)} slotProps={{ list: { 'aria-label': '创作工具列表' } }}>
-          {ACTION_KINDS.map((item) => <MenuItem key={item.kind} onClick={() => openAction(item.kind)}>
-            <ListItemIcon>{item.icon}</ListItemIcon>
-            <ListItemText primary={item.label} secondary={item.hint} />
-          </MenuItem>)}
-        </Menu>
-        {pending && <IconButton aria-label="停止回复" onClick={() => {
-          void api.stopWritingTurn(novelId, pending.request_id).then((turn) => { if (mounted.current) { merge([turn]); controllerRef.current?.abort(); controllerRef.current = null; sendingRef.current = false; setSending(false); } }).catch(() => { if (mounted.current) setError('暂时无法停止，请稍后重试'); });
-        }}><StopIcon /></IconButton>}
-        <Button variant="contained" endIcon={<SendIcon />} disabled={loading || sending || Boolean(pending) || !chapterId || !draft.trim()} onClick={() => void send()}>发送</Button>
+        {queued && <Chip size="small" color="primary" variant="outlined" label={`已排队：${queued.slice(0, 18)}${queued.length > 18 ? '…' : ''}`} onDelete={() => setQueued('')} />}
+        {reviewMode && (
+          <Tooltip title="AI 稿件候选的审核模式,按本书保存">
+            <Box component="span" sx={{ display: 'flex', gap: 0.25 }}>
+              {([['confirm', '确认'], ['auto', '自动'], ['none', '无审核']] as const).map(([mode, label]) => (
+                <Chip key={mode} size="small" label={label} variant={reviewMode === mode ? 'filled' : 'outlined'}
+                  color={reviewMode === mode ? 'primary' : 'default'} onClick={() => { void switchReviewMode(mode); }}
+                  sx={{ height: 22, '& .MuiChip-label': { fontSize: 11, px: 0.75 } }} />
+              ))}
+            </Box>
+          </Tooltip>
+        )}
+        {pending ? (
+          <Button variant="contained" color="error" startIcon={<StopIcon />} onClick={() => {
+            void api.stopWritingTurn(novelId, pending.request_id).then((turn) => { if (mounted.current) { merge([turn]); controllerRef.current?.abort(); controllerRef.current = null; sendingRef.current = false; setSending(false); } }).catch(() => { if (mounted.current) setError('暂时无法停止，请稍后重试'); });
+          }}>停止</Button>
+        ) : (
+          <Button variant="contained" endIcon={<SendIcon />} disabled={loading || sending || !chapterId || !draft.trim()} onClick={() => void send()}>发送</Button>
+        )}
       </Box>
     </Box>
   </Box>;
