@@ -497,6 +497,40 @@ class GenerationResponse(BaseModel):
     )
 
 
+class ContinueResponse(BaseModel):
+    """章节续写响应(含候选提案身份与工作流追踪)"""
+
+    content: str
+    proposal_id: str
+    length: int
+    style_features: List[str] = Field(default_factory=list)
+    style_sample_id: Optional[int] = None
+    rag_style_context: List[str] = Field(default_factory=list)
+    rag_story_context: List[str] = Field(default_factory=list)
+    context_manifest: Dict[str, Any] = Field(default_factory=dict)
+    execution: Optional[Dict[str, Any]] = None
+    stage_outputs: List[StageOutput] = Field(default_factory=list)
+    consistency_checks: List[ConsistencyCheckResult] = Field(default_factory=list)
+    retry_count: int = 0
+    final_consistency: FinalConsistencyStatus
+    workflow_trace: Optional[WorkflowTrace] = None
+    settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+class OrchestrateResponse(BaseModel):
+    """复合任务编排响应:计划、不确定点与候选提案身份"""
+
+    proposal_id: str
+    content: str
+    length: int
+    plan: Dict[str, Any]
+    uncertainties: List[str] = Field(default_factory=list)
+    consistency: Optional[Dict[str, Any]] = None
+    context_manifest: Dict[str, Any] = Field(default_factory=dict)
+    workflow_trace: Optional[WorkflowTrace] = None
+    execution: Optional[Dict[str, Any]] = None
+
+
 class InitNovelResponse(BaseModel):
     """AI初始化小说设定响应"""
     novel_id: int

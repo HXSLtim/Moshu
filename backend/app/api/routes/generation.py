@@ -5,8 +5,10 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Request,
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.models.schemas import (
+    ContinueResponse,
     GenerationRequest,
     GenerationResponse,
+    OrchestrateResponse,
     InitNovelRequest,
     InitNovelResponse,
     PlotOptionsRequest,
@@ -660,7 +662,7 @@ async def rewrite_text(
         raise HTTPException(status_code=500, detail=f"改写失败: {str(e)}")
 
 
-@router.post("/continue")
+@router.post("/continue", response_model=ContinueResponse)
 @durable_route('continue')
 async def continue_chapter(
     request: ContinueRequest,
@@ -1144,7 +1146,8 @@ class OrchestrateRequest(BaseModel):
     expected_chapter_lifecycle_id: str | None = Field(None, min_length=32, max_length=32)
 
 
-@router.post("/orchestrate")
+@router.post("/orchestrate", response_model=OrchestrateResponse)
+@durable_route('orchestrate')
 async def orchestrate_task(request: OrchestrateRequest, current_user: User = Depends(get_current_user),
                            db: Session = Depends(get_db)):
     """复合任务编排：模型只做计划分解，执行是既有能力的确定性调度。"""
@@ -1325,7 +1328,7 @@ class GenerationJobCreate(BaseModel):
     request_id: UUID
     novel_id: int = Field(gt=0)
     expected_novel_lifecycle_id: str = Field(min_length=32, max_length=32)
-    kind: Literal['chat', 'generate', 'continue', 'rewrite', 'auto_chapter', 'outline', 'character', 'init', 'plot_options']
+    kind: Literal['chat', 'generate', 'continue', 'rewrite', 'auto_chapter', 'outline', 'character', 'init', 'plot_options', 'orchestrate']
     payload: dict
 
 
@@ -1365,7 +1368,8 @@ def _job_payload(kind, payload, novel_id, request_id):
     from app.api.routes.writing_chat import TurnCreate
     schemas = {'init': InitNovelRequest, 'plot_options': PlotOptionsRequest, 'chat': TurnCreate, 'generate': GenerationRequest, 'continue': ContinueRequest,
                'rewrite': RewriteRequest, 'auto_chapter': AutoChapterRequest,
-               'outline': OutlineRequest, 'character': CharacterRequest}
+               'outline': OutlineRequest, 'character': CharacterRequest,
+               'orchestrate': OrchestrateRequest}
     try:
         parsed = schemas[kind].model_validate(payload)
     except ValidationError as exc:
@@ -1465,6 +1469,7 @@ def _register_generation_handlers():
         ('generate', GenerationRequest, generate_content), ('continue', ContinueRequest, continue_chapter),
         ('rewrite', RewriteRequest, rewrite_text), ('auto_chapter', AutoChapterRequest, auto_create_chapter),
         ('outline', OutlineRequest, generate_outline), ('character', CharacterRequest, generate_character),
+        ('orchestrate', OrchestrateRequest, orchestrate_task),
     ]:
         async def execute(payload, novel_id, actor, db, schema=schema, handler=handler, kind=kind):
             kwargs = {'request': schema.model_validate(payload), 'current_user': actor, 'db': db}

@@ -182,8 +182,8 @@ def orchestrate_api(monkeypatch):
     db.add_all([User(id=1, username='author', email='a@example.com', hashed_password='unused'),
                 User(id=2, username='other', email='o@example.com', hashed_password='unused')])
     db.commit()
-    db.add_all([Novel(id=1, user_id=1, title='青州夜行', worldview='钟声报时'),
-                Novel(id=2, user_id=2, title='他人作品')])
+    db.add_all([Novel(id=1, user_id=1, title='青州夜行', worldview='钟声报时', rag_lifecycle_id='a' * 32),
+                Novel(id=2, user_id=2, title='他人作品', rag_lifecycle_id='b' * 32)])
     db.commit()
     db.add_all([Chapter(id=1, novel_id=1, title='第一章', chapter_number=1, content='已保存原稿'),
                 Chapter(id=2, novel_id=2, title='他人章节', chapter_number=1, content='私密正文')])
@@ -234,3 +234,37 @@ def test_orchestrate_isolates_other_authors(orchestrate_api):
     response = client.post('/api/generation/orchestrate', json=orchestrate_payload(novel_id=2))
     assert response.status_code == 404
     assert fake.await_count == 0
+
+
+def test_orchestrate_runs_as_durable_job(orchestrate_api):
+    """编排任务经持久任务队列执行,产物结构可直接被前端轮询消费。"""
+    client, _db, fake = orchestrate_api
+    created = client.post('/api/generation/jobs', json={
+        'request_id': str(__import__('uuid').uuid4()), 'novel_id': 1,
+        'expected_novel_lifecycle_id': 'a' * 32, 'kind': 'orchestrate',
+        'payload': {'novel_id': 1, 'chapter_id': 1, 'current_content': '最新未保存原稿',
+                    'instruction': '编排林夏的夜战'}}).json()
+    assert created['status'] in {'queued', 'running', 'completed'}
+    job = created
+    for _ in range(20):
+        if job['status'] in {'completed', 'failed', 'cancelled'}:
+            break
+        job = client.get(f"/api/generation/jobs/{created['id']}?novel_id=1").json()
+    assert job['status'] == 'completed', job
+    result = job['result']
+    assert result['proposal_id'] and result['content'] == '夜风掠过檐角。'
+    assert fake.await_count == 1
+
+
+def test_openapi_contract_declares_generation_response_models():
+    """契约文件必须包含 orchestrate 与 continue 的响应模型,漂移防线的前提。"""
+    import json as _json
+    import pathlib
+    spec = _json.loads((pathlib.Path(__file__).resolve().parents[2]
+                        / 'frontend' / 'openapi.json').read_text(encoding='utf-8'))
+    schemas = spec['components']['schemas']
+    assert 'OrchestrateResponse' in schemas
+    assert 'ContinueResponse' in schemas
+    assert 'WorkflowTrace' in schemas and 'WorkflowStep' in schemas
+    paths = spec['paths']
+    assert paths['/api/generation/orchestrate']['post']['responses']['200'] is not None
