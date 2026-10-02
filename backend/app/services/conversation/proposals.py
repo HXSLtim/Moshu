@@ -111,11 +111,11 @@ def decide_proposal(db, *, novel_id, proposal_id, actor_id, request_id, decision
             approved_hash = content_hash(approved)
             if proposal.operation == 'create':
                 if proposal.target_chapter_number != novel_crud.get_max_chapter_number(db, novel_id) + 1:
-                    raise HTTPException(409, '书中已有新章节，候选的章节位置已变化，请重新生成')
+                    raise HTTPException(409, '这稿是按当时的章节情况准备的，现在书里的章节有了变化。要不要按最新的章节重新生成一稿？')
                 saved = novel_crud.create_next_chapter(db, novel_id,
                     ChapterNextCreate(title=proposal.title, content=approved), commit=False)
                 if saved.chapter_number != proposal.target_chapter_number:
-                    raise HTTPException(409, '章节位置在确认时已变化，请重新生成')
+                    raise HTTPException(409, '这稿是按当时的章节情况准备的，现在书里的章节有了变化。要不要按最新的章节重新生成一稿？')
             elif proposal.operation in {'append', 'replace', 'replace_selection'} and chapter is not None:
                 content = chapter.content + ('\n\n' if chapter.content else '') + approved if proposal.operation == 'append' else approved
                 if proposal.operation == 'replace_selection':
