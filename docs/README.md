@@ -1,4 +1,4 @@
-# Nai 文档索引
+# 墨枢 文档索引
 
 按用途分三组。根目录只保留入口：[README.md](../README.md)（项目介绍）、[ARCHITECTURE.md](../ARCHITECTURE.md)（架构准则与当前实现）、[AGENTS.md](../AGENTS.md)（开发规范）。
 

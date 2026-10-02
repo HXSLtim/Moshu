@@ -1,6 +1,6 @@
-# Nai 快速启动
+# 墨枢 快速启动
 
-当前本地基线：Python 3.12、Node.js 20+、uv、SQLite；模型使用 LM Studio 或 OpenAI 兼容远程接口。Docker 不属于本地启动必需项。以下安装命令面向 macOS/Linux shell，每个终端先进入同一个 Nai 仓库根目录。
+当前本地基线：Python 3.12、Node.js 20+、uv、SQLite；模型使用 LM Studio 或 OpenAI 兼容远程接口。Docker 不属于本地启动必需项。以下安装命令面向 macOS/Linux shell，每个终端先进入同一个 墨枢 仓库根目录。
 
 ## 首次安装
 
@@ -57,7 +57,7 @@ EMBEDDING_ENABLED=false
 
 生成与 Embedding 分开配置；上例关闭 Embedding，RAG 明确降级。需要 RAG 时再配置可用的 Embedding 服务。不配置模型也可使用小说、正文与设定管理。
 
-当前 Nai 的 RAG 运行链是：LM Studio 的 Nomic Embedding（`/v1/embeddings`）→ Nai 内置持久化 Chroma（`backend/chroma_db`）→ 数据库 `ProjectionJob` 投影任务。它不依赖 Docker 中的 Qdrant；`docker-compose.yml` 里的 Qdrant、Redis、Neo4j 是尚未接入主链路的可选服务。
+当前 墨枢 的 RAG 运行链是：LM Studio 的 Nomic Embedding（`/v1/embeddings`）→ 墨枢 内置持久化 Chroma（`backend/chroma_db`）→ 数据库 `ProjectionJob` 投影任务。它不依赖 Docker 中的 Qdrant；`docker-compose.yml` 里的 Qdrant、Redis、Neo4j 是尚未接入主链路的可选服务。
 
 本机已有 Nomic 模型时，可这样启用：
 

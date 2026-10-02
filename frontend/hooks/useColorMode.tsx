@@ -12,7 +12,7 @@ import {
 } from 'react';
 import type { PaletteMode } from '@mui/material';
 
-export const COLOR_MODE_STORAGE_KEY = 'nai-color-mode';
+export const COLOR_MODE_STORAGE_KEY = 'moshu-color-mode';
 
 function readStoredMode(): PaletteMode | null {
   if (typeof window === 'undefined') return null;

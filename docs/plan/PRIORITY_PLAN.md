@@ -892,7 +892,7 @@ app.include_router(novels.router, prefix="/api/novels", tags=["小说管理"])  
 ### Step 1：创建目录结构
 
 ```bash
-cd C:\Users\a2778\Desktop\code\Nai\backend
+cd C:\Users\a2778\Desktop\code\墨枢\backend
 
 # 创建必要的目录
 mkdir -p app/models app/crud app/db

@@ -1,6 +1,6 @@
-# Nai：AI 辅助长篇小说创作系统
+# 墨枢：AI 辅助长篇小说创作系统
 
-Nai 是一个作者主导的本地小说创作工具，提供章节管理、版本化保存、Story Bible 事实与事件账本、AI 续写、RAG 上下文检索、一致性检查和多维审核。
+墨枢 是一个作者主导的本地小说创作工具，提供章节管理、版本化保存、Story Bible 事实与事件账本、AI 续写、RAG 上下文检索、一致性检查和多维审核。
 
 项目的核心原则是：**作者数据是唯一真源，AI 内容经作者审阅；RAG、图谱和统计都是可重建的派生数据。** 对话续写与局部改写已经返回候选，旧 `auto-chapter` 接口仍会直接创建章节，属于待统一的历史流程。 详细设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
@@ -99,7 +99,7 @@ Node 25/26 若出现原生 `localStorage` 与 jsdom 冲突，可运行 `NODE_OPT
 ## 目录
 
 ```text
-Nai/
+墨枢/
 ├── backend/
 │   ├── app/api/routes/       API 与权限边界
 │   ├── app/crud/             数据访问
