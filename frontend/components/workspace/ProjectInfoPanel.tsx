@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Alert, Box, Button, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+import { Alert, Box, Button, Stack, TextField, Typography } from '@mui/material';
+import ReviewModePicker, { type ReviewMode } from './ReviewModePicker';
 import { api } from '@/lib/api';
 import type { Novel } from '@/types';
 
@@ -41,18 +42,16 @@ export default function ProjectInfoPanel({ novel, onNovelChange }: Props) {
         <TextField fullWidth label="类型（可选）" value={genre} onChange={(event) => setGenre(event.target.value)} placeholder="如：都市奇幻、悬疑" />
         <TextField fullWidth multiline minRows={3} label="简介（可选）" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="一句话说清这本书讲什么。" />
         <Box>
-          <Typography variant="caption" color="text.secondary">审核模式:AI 稿件候选的采纳方式,按本书持久保存</Typography>
-          <ToggleButtonGroup exclusive size="small" value={reviewMode} onChange={(_event, value) => {
-            if (!value) return;
-            setBusy(true); setError(''); setNotice('');
-            void api.updateNovel(novel.id, { review_mode: value }).then((saved) => { onNovelChange(saved); setNotice('审核模式已更新。'); })
-              .catch((failure) => setError(failure instanceof Error ? failure.message : '更新审核模式失败'))
-              .finally(() => setBusy(false));
-          }}>
-            <ToggleButton value="confirm" disabled={busy}>逐条确认</ToggleButton>
-            <ToggleButton value="auto" disabled={busy}>自动(一致性通过才采纳)</ToggleButton>
-            <ToggleButton value="none" disabled={busy}>无审核(全部采纳)</ToggleButton>
-          </ToggleButtonGroup>
+          <ReviewModePicker
+            value={reviewMode as ReviewMode}
+            disabled={busy}
+            onChange={(mode) => {
+              setBusy(true); setError(''); setNotice('');
+              void api.updateNovel(novel.id, { review_mode: mode }).then((saved) => { onNovelChange(saved); setNotice('审核模式已更新。'); })
+                .catch((failure) => setError(failure instanceof Error ? failure.message : '更新审核模式失败'))
+                .finally(() => setBusy(false));
+            }}
+          />
         </Box>
         <Box><Button variant="outlined" disabled={busy} onClick={() => void save()}>{busy ? '保存中…' : '保存项目信息'}</Button></Box>
       </Stack>

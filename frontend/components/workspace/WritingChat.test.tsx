@@ -245,7 +245,8 @@ describe('设定提案决策', () => {
     const { container } = render(<WritingChat {...settingsProps} />);
     await screen.findByText(/已处理：写入 1 项/);
     expect(container.querySelector('p .MuiChip-root')).toBeNull();
-    expect(container.querySelectorAll('.MuiChip-root').length).toBe(6);
+    // 批1 后审核模式改为 ToggleButtonGroup（不再产生 Chip），状态章仅两条渲染路径各 1+2。
+    expect(container.querySelectorAll('.MuiChip-root').length).toBe(3);
   });
 });
 

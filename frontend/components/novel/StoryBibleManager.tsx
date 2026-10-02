@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { StatusChip } from '@/components/common/primitives';
 import { api } from '@/lib/api';
 import type { StoryEvent, StoryFact } from '@/types/storyBible';
 
@@ -22,6 +23,8 @@ interface Editor {
 }
 const PAGE_SIZE = 20;
 const statusLabels: Record<string, string> = { active: '有效', retired: '已失效', planned: '计划中', occurred: '已发生' };
+/** 批1 状态章语义：色+文字双通道，账本四态不再全灰；未知历史值回中性档。 */
+const statusTones: Record<string, 'success' | 'stale' | 'planned' | 'achieved'> = { active: 'success', retired: 'stale', planned: 'planned', occurred: 'achieved' };
 
 function newEditor(entry: Entry | null, kind: Kind): Editor {
   const fact = entry && 'subject' in entry ? entry : null;
@@ -150,7 +153,7 @@ function StoryBibleSection({ novelId, kind }: { novelId: number; kind: Kind }) {
       {entries.map((entry) => <Card key={entry.id} variant="outlined"><CardContent>
         <Stack direction="row" justifyContent="space-between" gap={2}>
           <Typography variant="h6">{'subject' in entry ? `${entry.subject} · ${entry.attribute}` : entry.title}</Typography>
-          <Chip size="small" label={statusLabels[entry.status]} />
+          <StatusChip tone={statusTones[entry.status] ?? 'neutral'} label={statusLabels[entry.status] ?? entry.status} />
         </Stack>
         <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', my: 1 }}>{'value' in entry ? entry.value : entry.description}</Typography>
         {'subject' in entry ? <>

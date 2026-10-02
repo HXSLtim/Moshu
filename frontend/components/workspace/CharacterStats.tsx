@@ -1,21 +1,24 @@
 'use client';
 
-import { useState, useMemo, useDeferredValue } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
+  Box,
+  Button,
   Card,
   CardContent,
-  Typography,
-  Box,
+  Chip,
+  Collapse,
   Divider,
+  IconButton,
+  LinearProgress,
   List,
   ListItem,
-  ListItemText,
   ListItemIcon,
-  Chip,
-  LinearProgress,
-  Alert,
-  Collapse,
-  IconButton,
+  ListItemText,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -23,7 +26,16 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
 import { countTextUnits } from '@/lib/textStats';
+import { charactersApi } from '@/lib/characters';
+import { EmptyState } from '@/components/common/primitives';
 import type { Novel } from '@/types';
+import type { CharacterResponse } from '@/lib/api/generated/model';
+
+type StatsSource = 'worldview' | 'character';
+
+/** 偏好键按书隔离；无记录一律回世界观正则（旧书零回退）。 */
+const sourceStorageKey = (novelId: number) => `nai.character-stats.source.${novelId}`;
+const hintDismissedKey = (novelId: number) => `nai.character-stats.source-hint-dismissed.${novelId}`;
 
 interface CharacterStat {
   name: string;
@@ -43,8 +55,50 @@ export default function CharacterStats({
   currentContent,
   previousContent = '',
 }: CharacterStatsProps) {
+  const novelId = novel?.id;
   const [expanded, setExpanded] = useState(false);
   const deferredContent = useDeferredValue(currentContent);
+
+  // 名单来源：默认世界观正则；偏好按 novelId 存 localStorage，读完存储才渲染引导防闪。
+  const [source, setSource] = useState<StatsSource>('worldview');
+  const [sourceReady, setSourceReady] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(true);
+  const [characters, setCharacters] = useState<CharacterResponse[] | null>(null);
+  const [charactersError, setCharactersError] = useState('');
+
+  useEffect(() => {
+    if (novelId == null) return;
+    const stored = window.localStorage.getItem(sourceStorageKey(novelId));
+    if (stored === 'character' || stored === 'worldview') setSource(stored);
+    setHintDismissed(window.localStorage.getItem(hintDismissedKey(novelId)) === '1');
+    setSourceReady(true);
+  }, [novelId]);
+
+  const loadCharacters = useCallback(async () => {
+    if (novelId == null) return;
+    setCharactersError('');
+    try {
+      const items = await charactersApi.list(novelId);
+      setCharacters(items);
+    } catch (failure) {
+      setCharactersError(failure instanceof Error ? failure.message : '读取人物档案失败');
+    }
+  }, [novelId]);
+
+  useEffect(() => {
+    void loadCharacters();
+  }, [loadCharacters]);
+
+  const changeSource = (next: StatsSource) => {
+    if (!next) return;
+    setSource(next);
+    if (novelId != null) window.localStorage.setItem(sourceStorageKey(novelId), next);
+  };
+
+  const dismissHint = () => {
+    setHintDismissed(true);
+    if (novelId != null) window.localStorage.setItem(hintDismissedKey(novelId), '1');
+  };
 
   // 从世界观中提取角色名单
   const extractCharacterNames = (worldviewText: string): string[] => {
@@ -113,7 +167,7 @@ export default function CharacterStats({
         const prevMatches = prevText.match(regex);
         const prevCount = prevMatches ? prevMatches.length : 0;
         const prevPercentage = prevText.length > 0 ? (prevCount / prevText.length) * 1000 : 0;
-        
+
         if (percentage > prevPercentage + 0.5) trend = 'up';
         else if (percentage < prevPercentage - 0.5) trend = 'down';
       }
@@ -126,10 +180,11 @@ export default function CharacterStats({
     return stats;
   };
 
-  const characterNames = useMemo(
-    () => (novel?.worldview ? extractCharacterNames(novel.worldview) : []),
-    [novel?.worldview],
-  );
+  // 名单按来源取：档案源直接用档案名，正则源维持世界观解析。
+  const characterNames = useMemo(() => {
+    if (source === 'character') return characters?.map((character) => character.name) ?? [];
+    return novel?.worldview ? extractCharacterNames(novel.worldview) : [];
+  }, [source, characters, novel?.worldview]);
 
   // 正文扫描使用延迟值，避免输入期间阻塞编辑器的高优先级更新。
   const characterStats = useMemo(
@@ -165,7 +220,28 @@ export default function CharacterStats({
 
   const maxCount = Math.max(...characterStats.map(s => s.count), 1);
 
-  if (!novel?.worldview) {
+  if (!novel) return null;
+
+  const sourceSwitch = (
+    <ToggleButtonGroup
+      size="small"
+      exclusive
+      value={source}
+      onChange={(_, value) => changeSource(value as StatsSource)}
+      aria-label="统计名单来源"
+    >
+      <ToggleButton value="worldview">世界观</ToggleButton>
+      <ToggleButton value="character">人物档案</ToggleButton>
+    </ToggleButtonGroup>
+  );
+
+  // 正则源读档案只为一次性引导，读取失败静默（不打扰）；档案源失败必须诚实展示。
+  const characterSourceError = source === 'character' && charactersError ? (
+    <Alert severity="error" sx={{ mt: 1 }} action={<Button color="inherit" onClick={() => void loadCharacters()}>重试</Button>}>{charactersError}</Alert>
+  ) : null;
+
+  // 名单为空：按来源分流引导，禁占位假数据。
+  if (characterNames.length === 0) {
     return (
       <Card sx={{ mb: 2 }}>
         <CardContent>
@@ -173,37 +249,32 @@ export default function CharacterStats({
             角色统计
           </Typography>
           <Divider sx={{ my: 1 }} />
-          <Typography variant="body2" color="text.secondary">
-            请在小说设置中添加世界观信息，包含【主要角色】部分。
-          </Typography>
+          {sourceSwitch}
+          <Box sx={{ mt: 2 }}>
+            {source === 'character' && characters !== null && (
+              <EmptyState
+                title="还没有人物档案。"
+                hint="去设定账本的人物档案区创建；建立后统计会按档案名单计数。"
+              />
+            )}
+            {source === 'character' && characters === null && !charactersError && (
+              <Typography role="status">正在读取人物档案…</Typography>
+            )}
+            {source === 'worldview' && (
+              <EmptyState
+                title="还没有从世界观找到角色名单。"
+                hint="在世界观加【主要角色】小节，每行一位（如「张三：主角，年轻的剑客」）；也可切到人物档案源。"
+              />
+            )}
+          </Box>
+          {characterSourceError}
         </CardContent>
       </Card>
     );
   }
 
-  if (characterStats.length === 0) {
-    return (
-      <Card sx={{ mb: 2 }}>
-        <CardContent>
-          <Typography variant="subtitle2" gutterBottom>
-            角色统计
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Alert severity="info">
-            <Typography variant="body2">
-              未在世界观中找到【主要角色】部分。请按以下格式添加：
-              <br />
-              【主要角色】
-              <br />
-              张三：主角，年轻的剑客
-              <br />
-              李四：反派，邪恶的法师
-            </Typography>
-          </Alert>
-        </CardContent>
-      </Card>
-    );
-  }
+  // 有档案且还在用正则源：一次性引导切源，知道了后按书记忆不再出现。
+  const showHint = sourceReady && source === 'worldview' && !hintDismissed && (characters?.length ?? 0) > 0;
 
   return (
     <Card sx={{ mb: 2 }}>
@@ -225,6 +296,26 @@ export default function CharacterStats({
           </IconButton>
         </Box>
         <Divider sx={{ my: 1 }} />
+
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1, mb: 1 }}>
+          {sourceSwitch}
+          <Typography variant="caption" color="text.secondary">
+            名单来源：{source === 'character' ? '人物档案' : '世界观'}
+          </Typography>
+        </Box>
+        {showHint && <Box sx={{ mb: 2 }}>
+          <EmptyState
+            title={`已建档 ${characters?.length ?? 0} 名人物。`}
+            hint="想让统计按档案名单计数，就切到「人物档案」源；本提示只出现这一次。"
+            action={
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                <Button size="small" color="inherit" onClick={() => changeSource('character')}>切换</Button>
+                <Button size="small" color="inherit" onClick={dismissHint}>知道了</Button>
+              </Box>
+            }
+          />
+        </Box>}
+        {characterSourceError}
 
         {/* 概览信息 */}
         <Box sx={{ mb: 2 }}>
@@ -292,7 +383,7 @@ export default function CharacterStats({
                 </ListItem>
               ))}
             </List>
-            
+
             {!expanded && activeCharacters.length > 3 && (
               <Typography
                 variant="caption"

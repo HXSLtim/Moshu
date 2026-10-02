@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Alert, Button, Stack, Typography } from '@mui/material';
+import { StatusChip } from '@/components/common/primitives';
 import { writingProposalApi } from '@/lib/writingProposal';
 import { useWritingProposal, type WritingScope } from '@/hooks/useWritingProposal';
 
@@ -21,7 +22,7 @@ export default function WritingProposalActions(props: Props) {
   const actualStatus = decision.decisions[proposalId] ?? status;
   return <Stack spacing={1}>
     {(decision.error || loadError) && <Alert severity="warning" action={loadError ? <Button onClick={() => setAttempt((value) => value + 1)}>重试读取</Button> : undefined}>{decision.error || loadError}</Alert>}
-    {['accepted', 'rejected', 'cancelled'].includes(actualStatus) ? <Typography variant="caption">{actualStatus === 'accepted' ? '已采纳' : actualStatus === 'rejected' ? '已拒绝' : '候选已取消'}</Typography> : <Stack spacing={0.5}>
+    {['accepted', 'rejected', 'cancelled'].includes(actualStatus) ? <StatusChip tone={actualStatus === 'accepted' ? 'success' : 'rejected'} label={actualStatus === 'accepted' ? '已采纳' : actualStatus === 'rejected' ? '已拒绝' : '候选已取消'} /> : <Stack spacing={0.5}>
       {props.landing && <Typography variant="caption" color="text.secondary">将写入：{props.landing}</Typography>}
       <Stack direction="row" gap={1}>
         <Button variant="contained" size="small" disabled={actualStatus !== 'pending' || !props.canApply || Boolean(decision.deciding) || props.candidateContent?.trim() === ''} onClick={() => void decision.decide(proposalId, 'accept', props.candidateContent)}>{props.acceptLabel ?? '采纳到本章'}</Button>
