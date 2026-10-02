@@ -217,7 +217,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.9, mt: 0.5 }}>{turn.assistant_text}</Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
               <Tooltip title="复制回复"><IconButton size="small" aria-label="复制回复" onClick={() => { void navigator.clipboard.writeText(turn.assistant_text).catch(() => setError('复制失败，请手动选择回复复制')); }}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
-              {turn.proposal_id ? <WritingProposalActions key={turn.proposal_id} {...props} canApply={props.canApply && turn.chapter_id === chapterId} proposalId={turn.proposal_id} acceptLabel={turn.mode === 'new_chapter' ? '确认创建新章' : '采纳到本章'} /> : manuscriptModes.has(turn.mode) && <Button size="small" disabled>采纳到本章</Button>}
+              {turn.proposal_id ? <WritingProposalActions key={turn.proposal_id} {...props} canApply={props.canApply && turn.chapter_id === chapterId} proposalId={turn.proposal_id} acceptLabel={turn.mode === 'new_chapter' ? '确认创建新章' : '采纳到本章'} landing={(turn.result as unknown as AgentTurnResult | null)?.landing} /> : manuscriptModes.has(turn.mode) && <Button size="small" disabled>采纳到本章</Button>}
               {turn.chapter_id !== chapterId && <Typography variant="caption" color="text.secondary">来自其他章节</Typography>}
             </Box>
             {turn.result && Array.isArray((turn.result as unknown as AgentTurnResult).actions)

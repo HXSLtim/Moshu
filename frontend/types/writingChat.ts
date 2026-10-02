@@ -21,6 +21,8 @@ export interface AgentTurnResult {
   actions: AgentAction[];
   uncertainties: string[];
   decided_mode?: WritingMode;
+  /** 稿件落点的作者可读说明，后端归一化（如「第 2 章的新章」）；缺失表示本轮无稿件或旧轮。 */
+  landing?: string;
   manuscript?: { operation: 'append' | 'rewrite' | 'create'; content: string; title: string | null };
 }
 export interface WritingTurn {
