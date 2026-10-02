@@ -11,9 +11,6 @@ import {
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Alert,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   Box,
   Button,
   CircularProgress,
@@ -32,8 +29,8 @@ import {
   MenuItem,
   TextField,
   Typography,
-  Tabs,
-  Tab,
+ 
+  
   Tooltip,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -69,8 +66,6 @@ import type {
   User,
 } from '@/types';
 import type { WritingChatRef } from '@/components/workspace/WritingChat';
-import AiWritingAssistant from '@/components/workspace/AiWritingAssistant';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import WritingChat from '@/components/workspace/WritingChat';
 import ChapterMemory from '@/components/workspace/ChapterMemory';
 import DraftRecovery from '@/components/workspace/DraftRecovery';
@@ -81,17 +76,11 @@ import WorldviewEditor from '@/components/novel/WorldviewEditor';
 import ProjectInfoPanel from '@/components/workspace/ProjectInfoPanel';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
-import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 import AutoSaver from '@/components/workspace/AutoSaver';
 import CharacterStats from '@/components/workspace/CharacterStats';
-import ConsistencyChecker from '@/components/workspace/ConsistencyChecker';
-import OrchestrationPanel from '@/components/workspace/OrchestrationPanel';
-import PlotOptionsGenerator from '@/components/workspace/PlotOptionsGenerator';
-import ResearchAssistant from '@/components/workspace/ResearchAssistant';
 import StyleManager from '@/components/workspace/StyleManager';
-import TextRewriter from '@/components/workspace/TextRewriter';
 
 const DRAWER_WIDTH = 228;
 const AI_PANEL_WIDTH = 390;
@@ -219,7 +208,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editorTab, setEditorTab] = useState<'chapter' | 'settings'>('chapter');
-  const [rightTab, setRightTab] = useState<'chat' | 'tools'>('chat');
   const [openChapters, setOpenChapters] = useState<ChapterSummary[]>([]);
   useEffect(() => { setOpenChapters([]); setEditorTab('chapter'); }, [novelId]);
   useEffect(() => {
@@ -724,7 +712,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
   }) => {
     const instruction = formatPlotDirection(option);
     setPlotDirectionHint(instruction);
-    setRightTab('chat');
     aiWritingAssistantRef.current?.triggerContinue(instruction);
   }, [formatPlotDirection]);
 
@@ -922,18 +909,16 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
     <Divider sx={{ my: 3 }} />
     <WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} />
     {novel.rag_lifecycle_id && <StoryMemoryManager novelId={novelId} novelLifecycleId={novel.rag_lifecycle_id} chapterId={currentChapter?.id ?? null} chapterNumber={currentChapter?.chapter_number ?? null} />}
-  </Box>;
-
-  // 动作型能力(续写/改写/编排/一致性/剧情/检索)已移入对话「+」菜单卡片;此处仅保留管理型工具。
-  const toolsContent = authorVerified && <Box key={`${authenticatedUser?.id}-${novelId}-${novel?.rag_lifecycle_id}`} sx={{ p: 1.5, height: '100%', overflow: 'auto' }}>
+    <Divider sx={{ my: 3 }} />
     <ChapterMemory novelId={novelId} chapterId={currentChapter?.id ?? null} currentVersion={currentChapter?.version ?? 1}
       novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
       currentContent={content} canRestore={identityReady && !isDirty && !isSaving} onVersionRestored={handleProposalAccepted} />
-    {plotDirectionHint && <Alert severity="info" sx={{ mb: 2 }}>已选择：{plotDirectionHint}</Alert>}
+    <Divider sx={{ my: 3 }} />
     <StyleManager novelId={novelId} selectedStyleSampleId={selectedStyleSampleId} onStyleSampleSelected={setSelectedStyleSampleId} onError={setError} />
+    <Divider sx={{ my: 3 }} />
     <CharacterStats novel={novel} currentContent={content} />
-    <ConsistencyChecker novel={novel} currentChapter={currentChapter} content={content} onError={setError} />
   </Box>;
+
 
   return (
     <Fragment>
@@ -952,8 +937,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
           <Box component="nav" aria-label="工作区活动栏" sx={{ width: 46, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', gap: 1, py: 1, bgcolor: 'background.paper', borderRight: 1, borderColor: 'divider' }}>
             <Tooltip title="章节资源管理器" placement="right"><IconButton aria-label="切换章节目录" color={sidebarOpen ? 'primary' : 'default'} onClick={() => setSidebarOpen((value) => !value)}><FolderOpenIcon /></IconButton></Tooltip>
             <Tooltip title="设定与伏笔" placement="right"><IconButton aria-label="打开设定标签" color={editorTab === 'settings' ? 'primary' : 'default'} onClick={() => setEditorTab('settings')}><MenuBookIcon /></IconButton></Tooltip>
-            <Tooltip title="创作对话" placement="right"><IconButton aria-label="查看创作对话" color={rightTab === 'chat' ? 'primary' : 'default'} onClick={() => setRightTab('chat')}><SmartToyIcon /></IconButton></Tooltip>
-            <Tooltip title="创作工具" placement="right"><IconButton aria-label="查看创作工具" color={rightTab === 'tools' ? 'primary' : 'default'} onClick={() => setRightTab('tools')}><BuildOutlinedIcon /></IconButton></Tooltip>
+            <Tooltip title="创作对话" placement="right"><IconButton aria-label="查看创作对话" color="primary" disabled><SmartToyIcon /></IconButton></Tooltip>
           </Box>
           {sidebarOpen && <Box component="aside" aria-label="章节资源管理器" sx={{ width: DRAWER_WIDTH, flexShrink: 0, display: { xs: 'none', md: 'flex' }, flexDirection: 'column', minHeight: 0, borderRight: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Button size="small" startIcon={<MenuBookIcon />} sx={{ justifyContent: 'flex-start', px: 2, py: 1 }} onClick={() => setEditorTab('settings')}>设定与伏笔</Button>
@@ -989,10 +973,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
               </Box>
             </Box>
             <Box component="aside" aria-label="AI 创作工作区" sx={{ width: { xs: '100%', md: AI_PANEL_WIDTH, xl: 440 }, height: { xs: '48%', md: '100%' }, minHeight: { xs: 270, md: 0 }, flexShrink: 0, display: 'flex', flexDirection: 'column', borderLeft: { md: 1 }, borderTop: { xs: 1, md: 0 }, borderColor: 'divider', bgcolor: 'background.paper' }}>
-              <Tabs value={rightTab} onChange={(_event, value: 'chat' | 'tools') => setRightTab(value)} aria-label="AI 面板" sx={{ minHeight: 38, borderBottom: 1, borderColor: 'divider', '& .MuiTab-root': { minHeight: 38, py: 0.5, fontSize: 13 } }}>
-                <Tab label="对话" value="chat" /><Tab label="工具" value="tools" />
-              </Tabs>
-              <Box sx={{ flex: 1, minHeight: 0, display: rightTab === 'chat' ? 'block' : 'none' }}>
+              <Box sx={{ flex: 1, minHeight: 0, display: 'block' }}>
                 {authorVerified && novel && <WritingChat key={`${authenticatedUser?.id}-${novelId}-${novel.rag_lifecycle_id}`} ref={aiWritingAssistantRef} novelId={novelId} chapterId={currentChapter?.id ?? null} chapterTitle={title} currentContent={content} onContentGenerated={handleContentGenerated}
                   chapterVersion={currentChapter?.version} novelLifecycleId={novel.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
                   canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted}
@@ -1001,7 +982,6 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
                   selectionStart={selectionStart} selectionEnd={selectionEnd} plotDirectionHint={plotDirectionHint}
                   onPlotSelected={handlePlotSelected} onPlotSelectedAndContinue={handlePlotSelectedAndContinue} onError={setError} />}
               </Box>
-              <Box sx={{ flex: 1, minHeight: 0, display: rightTab === 'tools' ? 'block' : 'none' }}>{toolsContent}</Box>
             </Box>
           </Box>
         </Box>

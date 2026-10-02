@@ -205,7 +205,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
     finally { if (mounted.current) setLoadingMore(false); }
   };
 
-  const renderTurn = (turn: WritingTurn) => <Box sx={{ mb: 3 }}>
+  const renderTurn = (turn: WritingTurn) => <Box key={turn.request_id} sx={{ mb: 3 }}>
 
         <Box sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
           <Typography variant="caption" color="text.secondary">你 · {turn.chapter_title} · {modeLabels[turn.mode]}</Typography>
