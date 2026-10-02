@@ -1094,7 +1094,7 @@ function WorkspacePageContent() {
   const authenticatedUser = useAuthenticatedUser();
   if (!authenticatedUser) return <Box sx={{ p: 3 }}>
     <Typography role="status">正在核验登录身份。若会话已失效，请重新登录。</Typography>
-    <Button href="/login">前往登录</Button>
+    <Button href="/">前往登录</Button>
   </Box>;
   // 作者改变时卸载正文、撤销历史及所有在途操作，重新读取该作者可访问的作品。
   return <WorkspaceSession key={authenticatedUser.id} authenticatedUser={authenticatedUser} />;
