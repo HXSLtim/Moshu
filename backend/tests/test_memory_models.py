@@ -20,13 +20,14 @@ def _seed(engine):
         user = User(username="memory-author", email="memory@example.com", hashed_password="unused")
         db.add(user)
         db.flush()
-        novel = Novel(title="原书", user_id=user.id)
-        db.add(novel)
-        db.flush()
-        chapter = Chapter(novel_id=novel.id, chapter_number=2, title="旧章名", content="\n正文 {原样}\r\n e\u0301 🐈\n", version=7)
+        # 旧 schema 没有 review_mode 列,种子数据用裸 SQL 只写当时的列。
+        db.execute(text("INSERT INTO novels (title, user_id, rag_lifecycle_id) VALUES ('原书', :uid, :lid)"),
+                  {"uid": user.id, "lid": "0" * 32})
+        novel_id = db.execute(text("SELECT id FROM novels")).scalars().one()
+        chapter = Chapter(novel_id=novel_id, chapter_number=2, title="旧章名", content="\n正文 {原样}\r\n e\u0301 🐈\n", version=7)
         db.add(chapter)
         db.commit()
-        return novel.id, chapter.id
+        return novel_id, chapter.id
 
 
 def test_memory_upgrade_preserves_source_and_backfills_only_current_version(tmp_path):

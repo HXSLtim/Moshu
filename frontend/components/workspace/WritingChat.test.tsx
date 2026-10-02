@@ -94,7 +94,7 @@ describe('常驻对话面板', () => {
     });
     render(<WritingChat {...props} />); await screen.findByText(turn.assistant_text);
     expect(screen.queryByLabelText('意图')).toBeNull();
-    expect(screen.getByText('Nai 会自己判断该回答、整理设定还是起草正文')).toBeTruthy();
+    expect(screen.getByText(/Nai 会自己判断该回答、整理设定还是起草正文/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '设计借剑之后的悬念' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('Agent 回复');
@@ -181,5 +181,21 @@ describe('动作卡片(对话即工作台)', () => {
     expect(screen.getByRole('button', { name: '展开卡片' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '展开卡片' }));
     expect(screen.getByRole('button', { name: '折叠卡片' })).toBeTruthy();
+  });
+});
+
+describe('输入体验(Claude Code 风格)', () => {
+  it('Enter 直接发送,Shift+Enter 与输入法组合中的 Enter 不发送', async () => {
+    const send = vi.spyOn(api, 'streamWritingTurn').mockImplementation(async (_id, data, callbacks) => {
+      callbacks.onDone?.({ ...turn, id: 3, request_id: data.request_id, user_text: data.message, assistant_text: '好的。' });
+    });
+    render(<WritingChat {...props} />);
+    await screen.findByText(turn.assistant_text);
+    const input = screen.getByLabelText(/和 Nai 聊聊/);
+    fireEvent.change(input, { target: { value: '测试一句' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
   });
 });

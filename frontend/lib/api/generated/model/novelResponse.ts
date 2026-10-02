@@ -5,6 +5,7 @@
  * 作者主导的长篇小说创作平台：常驻创作 Agent、固定生成工作流与可编排的复合任务
  * OpenAPI spec version: 0.1.0
  */
+import type { NovelResponseReviewMode } from './novelResponseReviewMode';
 
 /**
  * 小说响应
@@ -15,6 +16,7 @@ export interface NovelResponse {
   genre: string | null;
   id: number;
   rag_lifecycle_id: string;
+  review_mode?: NovelResponseReviewMode;
   title: string;
   updated_at: string | null;
   user_id: number;

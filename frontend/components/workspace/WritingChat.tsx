@@ -287,10 +287,10 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
       <TextField fullWidth multiline minRows={2} maxRows={5} label="和 Nai 聊聊" value={draft}
         placeholder="例如：接着往下写 / 这个世界魔法要付代价 / 他为什么要隐瞒身份"
         slotProps={{ htmlInput: { maxLength: 4000 } }} onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} />
+        onKeyDown={(event) => { if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.shiftKey) return; event.preventDefault(); void send(); }} />
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1 }}>
         <Typography variant="caption" color={chapterId ? 'text.secondary' : 'warning.main'}>
-          {chapterId ? 'Nai 会自己判断该回答、整理设定还是起草正文' : '正在准备第 1 章，稍等一下就能发送…'}
+          {chapterId ? 'Nai 会自己判断该回答、整理设定还是起草正文 · Enter 发送，Shift+Enter 换行' : '正在准备第 1 章，稍等一下就能发送…'}
         </Typography>
         <Box sx={{ flex: 1 }} />
         <IconButton aria-label="添加创作工具" title="创作工具" disabled={!chapterId} onClick={(event) => setMenuAnchor(event.currentTarget)}><AddIcon /></IconButton>

@@ -5,6 +5,7 @@
  * 作者主导的长篇小说创作平台：常驻创作 Agent、固定生成工作流与可编排的复合任务
  * OpenAPI spec version: 0.1.0
  */
+import type { NovelUpdateReviewMode } from './novelUpdateReviewMode';
 
 /**
  * 更新小说请求
@@ -14,6 +15,8 @@ export interface NovelUpdate {
   description?: string | null;
   /** 小说类型 */
   genre?: string | null;
+  /** 审核模式:confirm=逐条人工确认;auto=确定性一致性通过后自动采纳;none=全部自动采纳 */
+  review_mode?: NovelUpdateReviewMode;
   /** 小说标题 */
   title?: string | null;
   /** 世界观设定 */

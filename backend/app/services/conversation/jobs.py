@@ -276,6 +276,16 @@ async def _run_job(sessions, job_id):
                 db.query(WritingTurn).filter_by(novel_id=novel_id, request_id=payload['request_id']).update(
                     {'execution': meter.snapshot()}, synchronize_session=False)
             db.commit()
+            if job.status == 'completed':
+                # 审核模式自动采纳必须等任务标记完成后执行(采纳命令校验任务终态);
+                # 钩子是尽力而为,任何异常都不改变任务终态,候选保留待作者确认。
+                from loguru import logger as _logger
+                try:
+                    from app.services.conversation.proposals import auto_apply_pending
+                    bind = sessions.kw.get('bind') or sessions().get_bind()
+                    await asyncio.to_thread(auto_apply_pending, bind, novel_id, actor_id, job_id)
+                except BaseException as hook_exc:  # noqa: BLE001
+                    _logger.warning('审核模式自动采纳钩子未执行完成,候选保留待确认: {}', hook_exc)
     except BaseException as exc:
         with sessions() as db:
             job = db.get(WritingGenerationJob, job_id)

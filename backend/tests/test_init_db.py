@@ -96,6 +96,7 @@ def test_managed_database_upgrade_is_idempotent(tmp_path):
 def test_chat_migration_preserves_existing_manuscript(tmp_path):
     """从上一版迁移升级时新增对话表，旧正文保持原样。"""
     from alembic import command
+    from sqlalchemy import text
     from sqlalchemy.orm import Session
     from app.models.user import User
     from app.models.novel import Novel, Chapter
@@ -103,7 +104,7 @@ def test_chat_migration_preserves_existing_manuscript(tmp_path):
     command.upgrade(_alembic_config(engine), "e6dc8b549c6d")
     with Session(engine) as db:
         db.add(User(id=1, username="writer", email="writer@example.com", hashed_password="unused"))
-        db.add(Novel(id=1, user_id=1, title="原有小说"))
+        db.execute(text("INSERT INTO novels (id, title, user_id, rag_lifecycle_id) VALUES (1, '原有小说', 1, :lid)"), {"lid": "0" * 32})
         db.commit()
         db.add(Chapter(novel_id=1, chapter_number=1, title="原有章节", content="必须保留的正文"))
         db.commit()

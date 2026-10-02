@@ -149,11 +149,12 @@ class NovelUpdate(StrictWriteModel):
         if not self.model_fields_set:
             raise ValueError("至少需要提供一个要更新的小说字段")
         return self
-
-
+    review_mode: Optional[Literal['confirm', 'auto', 'none']] = Field(
+        None, description="审核模式:confirm=逐条人工确认;auto=确定性一致性通过后自动采纳;none=全部自动采纳")
 class NovelResponse(BaseModel):
     """小说响应"""
     rag_lifecycle_id: str
+    review_mode: Literal['confirm', 'auto', 'none'] = 'confirm' 
     id: int
     title: str
     genre: Optional[str]
