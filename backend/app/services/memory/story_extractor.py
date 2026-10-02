@@ -4,9 +4,9 @@ import json
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from app.core.config import settings
-from app.services.context_budget import ensure_digest_source_budget, compact_text, MAX_CHAT_OUTPUT_CHARS, MAX_DIGEST_SOURCE_CHARS
-from app.services.model_provider import create_chat_model
-from app.services.model_result import parse_model_result
+from app.services.context.budget import ensure_digest_source_budget, compact_text, MAX_CHAT_OUTPUT_CHARS, MAX_DIGEST_SOURCE_CHARS
+from app.services.model.provider import create_chat_model
+from app.services.model.result import parse_model_result
 
 
 class Quote(BaseModel):

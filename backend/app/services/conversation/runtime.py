@@ -25,11 +25,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode as _LangGraphToolNode
 from loguru import logger
 
-from app.services.agent_tools import CHECK_TOOL_NAME, READ_TOOL_NAMES, READ_TOOL_SPECS
-from app.services.context_budget import MAX_CHAT_OUTPUT_CHARS, MAX_TRACE_PREVIEW_CHARS, compact_text
-from app.services.context_builder import ContextScopeError
-from app.services.model_result import parse_model_result
-from app.services.writing_execution import record_stream_usage, stream_model
+from app.services.conversation.tools import CHECK_TOOL_NAME, READ_TOOL_NAMES, READ_TOOL_SPECS
+from app.services.context.budget import MAX_CHAT_OUTPUT_CHARS, MAX_TRACE_PREVIEW_CHARS, compact_text
+from app.services.context.builder import ContextScopeError
+from app.services.model.result import parse_model_result
+from app.services.model.execution import record_stream_usage, stream_model
 
 
 PROPOSE_TOOLS: list[dict] = [

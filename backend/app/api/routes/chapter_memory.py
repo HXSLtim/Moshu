@@ -12,9 +12,9 @@ from app.db.base import get_db
 from app.models.memory import ChapterDigest, ChapterRevision, DerivedJob, utc_now
 from app.models.novel import Chapter, Novel
 from app.models.user import User
-from app.services.chapter_memory import ensure_digest_job, ensure_revision
-from app.services.context_budget import ensure_digest_source_budget
-from app.services.memory_config import digest_recipe_version
+from app.services.memory.chapter import ensure_digest_job, ensure_revision
+from app.services.context.budget import ensure_digest_source_budget
+from app.services.memory.config import digest_recipe_version
 
 router = APIRouter()
 

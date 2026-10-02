@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.services import model_provider
+from app.services.model import provider as model_provider
 
 
 @pytest.fixture

@@ -42,7 +42,7 @@ def enqueue_projection(db, novel, chapter=None, *, delete=False):
 
 class ProjectionWorker:
     def __init__(self, session_factory=SessionLocal, service=None):
-        from app.services.rag_service import rag_service
+        from app.services.rag import rag_service
         self.sessions = session_factory
         self.service = service or rag_service
 

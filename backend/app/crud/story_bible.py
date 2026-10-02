@@ -91,7 +91,7 @@ def get_active_facts_for_generation(
     legacy = query.filter(StoryFact.entity_id.is_(None), StoryFact.source_status == "ready").order_by(StoryFact.id).limit(limit).all()
     if not include_structured:
         return legacy
-    from app.services.story_memory import get_valid_core_facts
+    from app.services.memory.story import get_valid_core_facts
     target = max_chapter if max_chapter is not None else 2_147_483_647
     structured = get_valid_core_facts(db, novel_id, target, limit=limit)
     return (structured + legacy)[:limit]

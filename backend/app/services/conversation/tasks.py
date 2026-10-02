@@ -7,12 +7,12 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from app.models.schemas import GenerationRequest
-from app.services.context_budget import (
+from app.services.context.budget import (
     MAX_CHAT_OUTPUT_CHARS, MAX_GENERATION_PROMPT_CHARS, MAX_REVIEW_CONTENT_CHARS,
     MAX_STORY_CONTEXT_CHARS, compact_text,
 )
-from app.services.model_result import ModelOutputError, parse_model_result
-from app.services.writing_execution import invoke_model
+from app.services.model.result import ModelOutputError, parse_model_result
+from app.services.model.execution import invoke_model
 
 
 WritingMode = Literal['discuss', 'continue', 'advanced_continue', 'rewrite', 'outline', 'character', 'check', 'new_chapter']
@@ -276,7 +276,7 @@ async def execute_task(*, mode: WritingMode, service, context_pack, current_cont
         output = await service.reply(messages)
         return TaskResult(output.text, operation='append')
     if mode == 'advanced_continue':
-        from app.services.agent_service import agent_service
+        from app.services.generation.workflow import agent_service
         prompt = compact_text('前文末段：\n' + compact_text(current_content, MAX_STORY_CONTEXT_CHARS, keep='tail')
                               + '\n续写要求：\n' + instruction, MAX_GENERATION_PROMPT_CHARS, keep='both')
         response = await agent_service.generate_content(
@@ -323,8 +323,8 @@ async def execute_task(*, mode: WritingMode, service, context_pack, current_cont
     elif mode == 'character':
         text = f'{parsed.name}\n\n外貌：{parsed.appearance}\n性格：{parsed.personality}\n背景：{parsed.background}\n能力：' + '、'.join(parsed.abilities) + f'\n动机：{parsed.motivation}\n关系：' + '、'.join(parsed.relationships)
     elif mode == 'check':
-        from app.services.agent_service import AgentService
-        from app.services.consistency_service import consistency_service
+        from app.services.generation.workflow import AgentService
+        from app.services.review.consistency import consistency_service
         reference = await asyncio.to_thread(AgentService._load_consistency_reference_sync,
             novel_id, actor_id, novel_lifecycle_id, target_chapter, options.current_day)
         payload['consistency'] = await consistency_service.check_content(

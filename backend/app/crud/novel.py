@@ -7,8 +7,8 @@ from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.core.text_stats import count_text_units
-from app.services.chapter_memory import record_chapter_save
-from app.services.projection_jobs import enqueue_projection
+from app.services.memory.chapter import record_chapter_save
+from app.services.memory.projection import enqueue_projection
 from app.models.novel import Novel, Chapter, StyleSample
 from app.models.schemas import (
     ChapterCreate,
@@ -410,7 +410,7 @@ def delete_chapter(db: Session, chapter_id: int) -> bool:
         return False
 
     try:
-        from app.services.story_memory import invalidate_chapter_sources
+        from app.services.memory.story import invalidate_chapter_sources
         invalidate_chapter_sources(db, db_chapter, deleted=True)
         enqueue_projection(db, db.get(Novel, db_chapter.novel_id), db_chapter, delete=True)
         db.delete(db_chapter)

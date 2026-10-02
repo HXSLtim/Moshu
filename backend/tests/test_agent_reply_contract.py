@@ -1,8 +1,8 @@
 """创作对话 Agent 输出的宽松解析：任何波动都不能把原始 JSON 丢给作者。"""
 import json
 
-from app.services.context_budget import MAX_CHAT_OUTPUT_CHARS
-from app.services.writing_tasks import _parse_agent_reply
+from app.services.context.budget import MAX_CHAT_OUTPUT_CHARS
+from app.services.conversation.tasks import _parse_agent_reply
 
 
 def test_plain_text_falls_back_without_actions():

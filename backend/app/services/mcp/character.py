@@ -23,7 +23,11 @@ from app.models.character_schemas import (
     CharacterAnalysisResponse, CharacterOptimizationResponse,
     MCPCharacterAction, MCPCharacterResponse,
 )
-from app.services.agent_service import agent_service
+from app.services.generation.creative_tools import (
+    analyze_character,
+    generate_character,
+    optimize_character,
+)
 from loguru import logger
 
 
@@ -479,7 +483,7 @@ class CharacterMCPService:
         }
         
         # 调用Agent服务生成角色
-        generated_character = await agent_service.generate_character(prompt_context)
+        generated_character = await generate_character(prompt_context)
         
         # 创建角色
         character_data = CharacterCreate(
@@ -598,7 +602,7 @@ class CharacterMCPService:
             ]
         
         # 调用Agent服务进行分析
-        return await agent_service.analyze_character(analysis_context)
+        return await analyze_character(analysis_context)
     
     async def _perform_character_optimization(
         self,
@@ -621,7 +625,7 @@ class CharacterMCPService:
         }
         
         # 调用Agent服务进行优化
-        return await agent_service.optimize_character(optimization_context)
+        return await optimize_character(optimization_context)
     
     async def _perform_ai_analysis(
         self, 

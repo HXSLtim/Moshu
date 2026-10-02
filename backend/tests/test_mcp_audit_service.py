@@ -18,8 +18,8 @@ from app.models.character_schemas import CharacterCreate
 from app.models.novel import Novel
 from app.models.user import User
 from app.models.worldview_schemas import UnifiedMCPAction, UnifiedMCPResponse
-from app.services.mcp_audit_service import MCPAuditLog, mcp_audit_service
-from app.services.unified_mcp_service import unified_mcp_service
+from app.services.mcp.audit import MCPAuditLog, mcp_audit_service
+from app.services.mcp.unified import unified_mcp_service
 
 
 @pytest.fixture

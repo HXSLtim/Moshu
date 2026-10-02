@@ -3,16 +3,16 @@ import asyncio
 from typing import Iterable, Literal, TYPE_CHECKING
 
 from app.core.config import settings
-from app.services.context_budget import (
+from app.services.context.budget import (
     MAX_CHAT_OUTPUT_CHARS,
     build_writing_chat_messages,
 )
-from app.services.model_provider import create_chat_model
-from app.services.model_result import ModelResult, parse_model_result
-from app.services.writing_execution import invoke_model
+from app.services.model.provider import create_chat_model
+from app.services.model.result import ModelResult, parse_model_result
+from app.services.model.execution import invoke_model
 
 if TYPE_CHECKING:
-    from app.services.context_builder import ContextPack
+    from app.services.context.builder import ContextPack
 
 
 class WritingService:

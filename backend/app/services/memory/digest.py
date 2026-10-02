@@ -8,12 +8,12 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 from app.core.config import settings
-from app.services.context_budget import (
+from app.services.context.budget import (
     digest_source_segments, MAX_CHAT_OUTPUT_CHARS, MAX_DIGEST_SPAN_CHARS,
     MAX_DIGEST_MERGE_CHARS,
 )
-from app.services.model_provider import create_chat_model
-from app.services.model_result import parse_model_result, model_json_text
+from app.services.model.provider import create_chat_model
+from app.services.model.result import parse_model_result, model_json_text
 
 
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=500, strip_whitespace=True)]

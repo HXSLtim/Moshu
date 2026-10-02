@@ -17,8 +17,8 @@ from app.models.worldview_schemas import (
 )
 from app.crud import novel as novel_crud
 from app.api.dependencies import get_current_user
-from app.services.unified_mcp_service import unified_mcp_service
-from app.services.mcp_audit_service import mcp_audit_service
+from app.services.mcp.unified import unified_mcp_service
+from app.services.mcp.audit import mcp_audit_service
 from loguru import logger
 
 router = APIRouter()

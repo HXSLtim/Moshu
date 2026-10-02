@@ -10,7 +10,7 @@ from app.models.user import User
 from app.api.dependencies import get_current_user
 from app.models.schemas import RAGQuery, RAGResponse
 from app.crud import novel as novel_crud
-from app.services.rag_service import rag_service
+from app.services.rag import rag_service
 from pydantic import BaseModel
 from loguru import logger
 

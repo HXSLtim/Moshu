@@ -2,7 +2,7 @@
 
 ## 测试基线
 
-- 位置:`backend/tests/`,当前最终全量为 544 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
+- 位置:`backend/tests/`,当前最终全量为 543 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
 - 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
 - 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
@@ -65,7 +65,7 @@ cd backend
 grep -rn "SessionLocal()" app --include=*.py | wc -l   # 2026-09 复核:10 处
 ```
 
-集中在 `app/services/agent_tools.py`、`agent_service.py`,以及 `app/db/base.py`、`rag_service.py`。
+集中在 `app/services/conversation/tools.py`、`generation/workflow.py`,以及 `app/db/base.py`、`app/services/rag.py`。
 怀疑某条断言是假绿时,先确认读写的归属库:当时用于判断的库内基线是 `writing_turns` 8 条、
 `novels` 4 条(重建测试库后会变,重跑取当前值)。归属对不上就是绕过了 DI,不要先改断言。
 

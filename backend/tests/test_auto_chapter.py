@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks, HTTPException
 
 from app.api.routes import generation as routes
 from app.models.schemas import AutoChapterRequest
-from app.services.writing_tasks import TaskResult
+from app.services.conversation.tasks import TaskResult
 
 
 @pytest.mark.asyncio

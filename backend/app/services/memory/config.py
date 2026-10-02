@@ -3,7 +3,7 @@ import hashlib
 import json
 
 from app.core.config import settings
-from app.services.context_budget import MAX_DIGEST_SOURCE_CHARS, MAX_DIGEST_CHAPTER_CHARS, MAX_DIGEST_SPAN_CHARS
+from app.services.context.budget import MAX_DIGEST_SOURCE_CHARS, MAX_DIGEST_CHAPTER_CHARS, MAX_DIGEST_SPAN_CHARS
 
 
 def digest_recipe_version() -> str:

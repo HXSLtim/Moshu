@@ -12,14 +12,14 @@
 """
 from typing import TypedDict, Dict, Any, List, Optional
 from datetime import datetime
-from app.services.model_provider import create_chat_model
+from app.services.model.provider import create_chat_model
 from app.core.config import settings
 from app.models.workflow_schemas import AgentWorkflowStep, AgentWorkflowTrace
-from app.services.context_budget import (
+from app.services.context.budget import (
     build_previous_chapter_context,
     build_review_content,
 )
-from app.services.review_agents import (
+from app.services.review.agents import (
     CharacterConsistencyPayload,
     ContentSafetyPayload,
     PaceReviewPayload,

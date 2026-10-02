@@ -2,9 +2,9 @@
 import pytest
 from app.crud import story_bible
 from app.models.story_bible_schemas import FactCreate, EventCreate
-from app.services.consistency_reference import load_consistency_reference
-from app.services.consistency_service import ConsistencyService
-from app.services.context_builder import ContextScopeError
+from app.services.review.reference import load_consistency_reference
+from app.services.review.consistency import ConsistencyService
+from app.services.context.builder import ContextScopeError
 from tests.test_projection_jobs import projection_db
 
 

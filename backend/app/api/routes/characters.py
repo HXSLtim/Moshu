@@ -20,7 +20,7 @@ from app.models.character_schemas import (
 from app.crud import character as character_crud
 from app.crud import novel as novel_crud
 from app.api.dependencies import get_current_user
-from app.services.character_mcp_service import character_mcp_service
+from app.services.mcp.character import character_mcp_service
 from loguru import logger
 
 router = APIRouter()

@@ -13,9 +13,9 @@ from app.core.config import settings
 from app.db.base import SessionLocal
 from app.models.memory import ChapterDigest, ChapterRevision, DerivedJob, utc_now
 from app.models.novel import Chapter, Novel
-from app.services.digest_extractor import DigestExtractor, DigestExtractionError, validate_digest
-from app.services.memory_config import digest_recipe_version
-from app.services.model_result import ModelOutputError
+from app.services.memory.digest import DigestExtractor, DigestExtractionError, validate_digest
+from app.services.memory.config import digest_recipe_version
+from app.services.model.result import ModelOutputError
 
 
 def _snapshot(row):

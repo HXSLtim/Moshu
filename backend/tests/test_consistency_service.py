@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.services.consistency_service import (
+from app.services.review.consistency import (
     RuleEngine,
     KnowledgeGraph,
     TimelineManager,

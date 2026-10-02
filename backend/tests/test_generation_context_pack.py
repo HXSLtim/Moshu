@@ -15,9 +15,9 @@ from app.models.memory import ChapterDigest, ChapterRevision
 from app.models.novel import Novel
 from app.models.schemas import ChapterCreate, ChapterUpdate, GenerationRequest
 from app.models.user import User
-from app.services.agent_service import AgentService
-from app.services.context_builder import build_context_pack
-from app.services.memory_config import digest_recipe_version
+from app.services.generation.workflow import AgentService
+from app.services.context.builder import build_context_pack
+from app.services.memory.config import digest_recipe_version
 
 
 def _add_digest(db, chapter, summary, recipe=None):
@@ -55,7 +55,7 @@ def generation_memory(monkeypatch):
         _add_digest(db, foreign, '其他作者禁止注入')
         expected_pack = build_context_pack(db, novel_id=1, actor_id=1, novel_lifecycle_id='current-life', target_chapter=3)
         good_id = good.id
-    monkeypatch.setattr('app.services.agent_service.SessionLocal', sessions)
+    monkeypatch.setattr('app.services.generation.workflow.SessionLocal', sessions)
     yield sessions, expected_pack, good_id
     engine.dispose()
 
@@ -73,8 +73,8 @@ def _service_with_real_prompts(monkeypatch):
     service.workflow = service._build_workflow()
     worldview = AsyncMock(return_value=[])
     characters = AsyncMock(return_value=[])
-    monkeypatch.setattr('app.services.agent_service.rag_service.retrieve_worldview', worldview)
-    monkeypatch.setattr('app.services.agent_service.rag_service.retrieve_character_info', characters)
+    monkeypatch.setattr('app.services.generation.workflow.rag_service.retrieve_worldview', worldview)
+    monkeypatch.setattr('app.services.generation.workflow.rag_service.retrieve_character_info', characters)
     return service, seen, worldview, characters
 
 
@@ -128,7 +128,7 @@ async def test_scope_changed_during_rag_cannot_reach_model(generation_memory, mo
             db.execute(update(Novel).where(Novel.id == 1).values(rag_lifecycle_id='replacement-life'))
             db.commit()
         return ['不能进入模型的新生命周期内容']
-    monkeypatch.setattr('app.services.agent_service.rag_service.retrieve_worldview', raced_retrieval)
+    monkeypatch.setattr('app.services.generation.workflow.rag_service.retrieve_worldview', raced_retrieval)
     with pytest.raises(ValueError, match='生命周期'):
         await service.generate_content(GenerationRequest(novel_id=1, chapter=3, prompt='继续'), actor_id=1, novel_lifecycle_id='current-life')
     assert not seen

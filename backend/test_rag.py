@@ -3,7 +3,7 @@ RAG系统测试脚本
 测试Chroma + HuggingFace Embedding
 """
 import asyncio
-from app.services.rag_service import rag_service
+from app.services.rag import rag_service
 from app.models.schemas import RAGQuery
 
 

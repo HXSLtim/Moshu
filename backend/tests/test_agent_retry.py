@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.agent_service import (
+from app.services.generation.workflow import (
     AgentService,
     _build_consistency_checks,
     _build_final_consistency_status,
@@ -210,7 +210,7 @@ async def test_retry_trace_ids_are_unique_and_prompt_is_summarized():
     )
 
     with patch(
-        "app.services.agent_service.ChatPromptTemplate.from_messages",
+        "app.services.generation.workflow.ChatPromptTemplate.from_messages",
         return_value=prompt_template,
     ):
         result = await service._agent_c_plot(state)
@@ -243,7 +243,7 @@ async def test_consistency_trace_id_contains_retry_number():
     }
 
     with patch(
-        "app.services.agent_service.consistency_service.check_content",
+        "app.services.generation.workflow.consistency_service.check_content",
         AsyncMock(return_value=check_result),
     ):
         result = await service._consistency_check(state)

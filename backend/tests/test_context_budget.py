@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.context_budget import (
+from app.services.context.budget import (
     MAX_GENERATION_PROMPT_CHARS,
     MAX_REVIEW_PREVIOUS_TOTAL_CHARS,
     MAX_STORY_CONTEXT_CHARS,
@@ -15,7 +15,7 @@ from app.services.context_budget import (
     compact_text,
     ensure_generation_prompt_budget,
 )
-from app.services.agent_service import AgentService
+from app.services.generation.creative_tools import analyze_character, generate_character
 
 
 def test_compact_text_keeps_head_and_tail_within_budget():
@@ -57,7 +57,6 @@ def test_previous_chapter_context_has_count_and_total_budget():
 async def test_character_generation_compacts_persisted_and_nested_context():
     """角色生成不能把完整世界观、要求和全部角色名原样发送给模型。"""
 
-    service = AgentService.__new__(AgentService)
     chain = AsyncMock()
     chain.ainvoke.return_value = SimpleNamespace(content='{"name":"测试角色"}')
     prompt_template = MagicMock()
@@ -72,12 +71,12 @@ async def test_character_generation_compacts_persisted_and_nested_context():
 
     with (
         patch(
-            "app.services.agent_service.ChatPromptTemplate.from_template",
+            "app.services.generation.creative_tools.ChatPromptTemplate.from_template",
             return_value=prompt_template,
         ),
-        patch("app.services.agent_service.create_chat_model", return_value=object()),
+        patch("app.services.generation.creative_tools.create_chat_model", return_value=object()),
     ):
-        await service.generate_character(context)
+        await generate_character(context)
 
     model_context = chain.ainvoke.await_args.args[0]
     assert len(model_context["worldview"]) <= MAX_WORLDVIEW_CONTEXT_CHARS
@@ -89,7 +88,6 @@ async def test_character_generation_compacts_persisted_and_nested_context():
 async def test_character_analysis_compacts_records_before_model_call():
     """关系和出场记录数量增长时，角色分析提示仍必须保持固定上限。"""
 
-    service = AgentService.__new__(AgentService)
     chain = AsyncMock()
     chain.ainvoke.return_value = SimpleNamespace(content="{}")
     prompt_template = MagicMock()
@@ -115,12 +113,12 @@ async def test_character_analysis_compacts_records_before_model_call():
 
     with (
         patch(
-            "app.services.agent_service.ChatPromptTemplate.from_template",
+            "app.services.generation.creative_tools.ChatPromptTemplate.from_template",
             return_value=prompt_template,
         ),
-        patch("app.services.agent_service.create_chat_model", return_value=object()),
+        patch("app.services.generation.creative_tools.create_chat_model", return_value=object()),
     ):
-        await service.analyze_character(context)
+        await analyze_character(context)
 
     model_context = chain.ainvoke.await_args.args[0]
     assert len(model_context["personality"]) <= MAX_STORY_CONTEXT_CHARS

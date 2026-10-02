@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.services.model_result import ModelOutputError, parse_model_result
+from app.services.model.result import ModelOutputError, parse_model_result
 
 
 def test_real_message_preserves_provider_usage_without_estimation():

@@ -26,7 +26,7 @@
 - 遵循 `ARCHITECTURE.md` 四原则:数据库唯一真源、派生数据可重建、AI 操作可审阅、能力必须诚实。
 - 未实现的功能明确返回不可用,禁止占位符、假数据、伪装成功的固定分数。
 - 破坏性改动不做向后兼容,但必须提供迁移步骤或回滚方案(`backend/app/db/sqlite_compat.py` 是范例)。
-- 所有 AI 调用经过统一上下文预算(`app/services/context_budget.py`),不得绕过预算自行拼接全文。
+- 所有 AI 调用经过统一上下文预算(`app/services/context/budget.py`),不得绕过预算自行拼接全文。
 - SOLID、DRY、单一职责;禁止过早抽象(重复三次以上再通用化)。
 
 ## 验证(强制)

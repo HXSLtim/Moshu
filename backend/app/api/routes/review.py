@@ -4,8 +4,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Annotated, List, Optional
 from loguru import logger
-from app.services.review_agent_service import review_agent_service
-from app.services.context_budget import MAX_CURRENT_CONTENT_CHARS
+from app.services.review.service import review_agent_service
+from app.services.context.budget import MAX_CURRENT_CONTENT_CHARS
 from app.api.dependencies import get_current_user
 from app.crud import novel as novel_crud
 from app.db.base import get_db

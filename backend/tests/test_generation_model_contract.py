@@ -8,8 +8,8 @@ import pytest
 from app.api.routes.consistency import ConsistencyCheckRequest
 from app.api.routes.generation import ContinueRequest
 from app.models.schemas import GenerationRequest
-from app.services.agent_service import AgentService
-from app.services.model_result import ModelOutputError
+from app.services.generation.workflow import AgentService
+from app.services.model.result import ModelOutputError
 
 
 @pytest.mark.parametrize("request_type, fields", [

@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.services.context_budget import MAX_DIGEST_SOURCE_CHARS, MAX_DIGEST_CHAPTER_CHARS
-from app.services.digest_extractor import DigestExtractor, DigestExtractionError, validate_digest
-from app.services.model_result import ModelOutputError
+from app.services.context.budget import MAX_DIGEST_SOURCE_CHARS, MAX_DIGEST_CHAPTER_CHARS
+from app.services.memory.digest import DigestExtractor, DigestExtractionError, validate_digest
+from app.services.model.result import ModelOutputError
 
 
 def source(content="李明把剑交给阿青。"):

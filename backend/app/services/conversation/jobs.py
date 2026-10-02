@@ -17,8 +17,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.models.novel import Chapter, Novel
 from app.models.writing_chat import WritingGenerationJob, WritingProposal, WritingTurn
-from app.services.writing_execution import execution_scope
-from app.services.writing_proposals import content_hash
+from app.services.model.execution import execution_scope
+from app.services.conversation.proposals import content_hash
 
 _current_job: ContextVar[str | None] = ContextVar('writing_job_id', default=None)
 _running: dict[str, tuple[asyncio.AbstractEventLoop, Future]] = {}

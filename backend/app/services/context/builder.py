@@ -12,14 +12,14 @@ from app.crud import story_bible
 from app.models.memory import ChapterDigest, ChapterRevision
 from app.models.novel import Chapter, Novel
 from app.models.story_memory import StoryMemoryHead
-from app.services.context_budget import (
+from app.services.context.budget import (
     MAX_WORLDVIEW_CONTEXT_CHARS,
     budget_digest_context,
     budget_structured_context,
     build_story_bible_context,
     compact_text,
 )
-from app.services.memory_config import digest_recipe_version
+from app.services.memory.config import digest_recipe_version
 
 
 MAX_DIGEST_CANDIDATES = 50
@@ -149,7 +149,7 @@ def build_context_pack(db: Session, *, novel_id: int, actor_id: int,
         db, novel_id, max_chapter=target_chapter, current_day=current_day,
     )
     confirmed = build_story_bible_context([fact for fact in facts if not getattr(fact, "entity_id", None)], events)
-    from app.services.story_memory import get_valid_core_facts, get_outline_for_generation
+    from app.services.memory.story import get_valid_core_facts, get_outline_for_generation
     from app.models.story_memory import StoryEntity
     structured_entries = []
     core_facts = get_valid_core_facts(db, novel_id, target_chapter, diagnostics=omitted)

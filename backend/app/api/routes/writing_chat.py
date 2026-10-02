@@ -20,19 +20,19 @@ from app.crud import novel as novel_crud
 from app.db.base import get_db
 from app.models.user import User
 from app.models.writing_chat import WritingTurn, WritingGenerationJob
-from app.services.writing_jobs import durable_route, stop_job
+from app.services.conversation.jobs import durable_route, stop_job
 from app.models.writing_schemas import ProposalResponse
-from app.services.writing_execution import ExecutionBudgetError, execution_scope
-from app.services.writing_tasks import TaskOptions, WritingMode, execute_task
-from app.services.writing_proposals import create_proposal, owned_proposal, decide_proposal, content_hash
-from app.services.context_budget import (
+from app.services.model.execution import ExecutionBudgetError, execution_scope
+from app.services.conversation.tasks import TaskOptions, WritingMode, execute_task
+from app.services.conversation.proposals import create_proposal, owned_proposal, decide_proposal, content_hash
+from app.services.context.budget import (
     MAX_CURRENT_CONTENT_CHARS, MAX_CHAT_INPUT_CHARS,
 )
-from app.services.model_result import ModelOutputError
-from app.services.writing_service import writing_service
-from app.services.context_builder import build_context_pack, ContextScopeError
-from app.services.agent_runtime import run_agent
-from app.services.agent_tools import AgentScope, execute_read_tool
+from app.services.model.result import ModelOutputError
+from app.services.conversation.service import writing_service
+from app.services.context.builder import build_context_pack, ContextScopeError
+from app.services.conversation.runtime import run_agent
+from app.services.conversation.tools import AgentScope, execute_read_tool
 
 AGENT_SYSTEM_PROMPT = """你是 Nai 的创作 Agent，和作者一起写这部小说。
 作者不会先声明意图，你要自己判断：
@@ -211,7 +211,7 @@ def _agent_messages(context_pack, data, novel, history):
     """Agent 的系统契约、最近交流与作者这一轮的话，按 LangChain 消息对象返回。"""
     from langchain_core.messages import SystemMessage
 
-    from app.services.context_budget import build_writing_chat_messages
+    from app.services.context.budget import build_writing_chat_messages
     messages = build_writing_chat_messages(
         worldview=context_pack.worldview, current_content=data.current_content,
         story_context='\n'.join(context_pack.story_bible_context),
@@ -440,5 +440,5 @@ async def _chat_job_handler(payload, novel_id, actor, db):
     return TurnResponse.model_validate(result).model_dump(mode='json')
 
 
-from app.services.writing_jobs import register_handler
+from app.services.conversation.jobs import register_handler
 register_handler('chat', _chat_job_handler)

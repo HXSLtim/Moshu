@@ -17,12 +17,12 @@ from app.models.user import User
 from tests.agent_stub import AgentStub
 from app.models.writing_chat import WritingAdoption, WritingGenerationJob, WritingProposal, WritingTurn
 from app.models.story_memory import StoryMemoryHead
-from app.services import writing_jobs
-from app.services.writing_execution import ExecutionBudgetError, execution_scope, invoke_model
-from app.services.writing_proposals import create_proposal, decide_proposal
-from app.services.context_builder import ContextScopeError
-from app.services.writing_tasks import TaskOptions, execute_task
-from app.services.model_result import ModelOutputError
+from app.services.conversation import jobs as writing_jobs
+from app.services.model.execution import ExecutionBudgetError, execution_scope, invoke_model
+from app.services.conversation.proposals import create_proposal, decide_proposal
+from app.services.context.builder import ContextScopeError
+from app.services.conversation.tasks import TaskOptions, execute_task
+from app.services.model.result import ModelOutputError
 
 @pytest.fixture
 def job_db(tmp_path):
@@ -311,7 +311,7 @@ async def test_retry_prompt_contains_previous_candidate_and_specific_problems():
     """真实渲染的修稿请求同时包含旧候选及逐项问题，花括号不二次解释。"""
     from langchain_core.messages import AIMessage
     from langchain_core.runnables import RunnableLambda
-    from app.services.agent_service import AgentService
+    from app.services.generation.workflow import AgentService
     seen = []
     async def answer(prompt):
         seen.extend(prompt.to_messages()); return AIMessage(content='修正候选')

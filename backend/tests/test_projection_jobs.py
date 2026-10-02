@@ -13,7 +13,7 @@ from app.models.memory import ChapterRevision, utc_now
 from app.models.projection_job import ProjectionJob
 from app.models.schemas import ChapterCreate, ChapterUpdate, ChapterNextCreate
 from app.crud import novel as crud
-from app.services.projection_jobs import ProjectionWorker
+from app.services.memory.projection import ProjectionWorker
 
 
 @pytest.fixture

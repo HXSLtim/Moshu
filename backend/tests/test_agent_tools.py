@@ -16,12 +16,12 @@ from app.models.novel import Novel
 from app.models.schemas import ChapterCreate, ChapterUpdate
 from app.models.story_bible import StoryEvent, StoryFact
 from app.models.user import User
-from app.services.agent_runtime import run_agent
-from app.services.agent_tools import AgentScope, execute_read_tool
-from app.services.context_builder import ContextScopeError
-from app.services.context_budget import MAX_REVIEW_CONTENT_CHARS
-from app.services.memory_config import digest_recipe_version
-from app.services.story_memory import save_outline
+from app.services.conversation.runtime import run_agent
+from app.services.conversation.tools import AgentScope, execute_read_tool
+from app.services.context.builder import ContextScopeError
+from app.services.context.budget import MAX_REVIEW_CONTENT_CHARS
+from app.services.memory.config import digest_recipe_version
+from app.services.memory.story import save_outline
 
 
 def _add_digest(db, chapter, summary):
@@ -82,7 +82,7 @@ def agent_tool_db(monkeypatch):
         _add_digest(db, chapters[0], '主角与导师决裂，离开魔法塔。')
         _add_digest(db, chapters[1], '这一章简介随后会因改稿过期。')
         novel_crud.update_chapter(db, chapters[1].id, ChapterUpdate(expected_version=1, content='作者已经改稿。'))
-    monkeypatch.setattr('app.services.agent_tools.SessionLocal', sessions)
+    monkeypatch.setattr('app.services.conversation.tools.SessionLocal', sessions)
     yield sessions
     engine.dispose()
 

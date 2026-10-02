@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.memory import ChapterDigest, ChapterRevision, DerivedJob
 from app.models.novel import Chapter, Novel
-from app.services.memory_config import digest_recipe_version
+from app.services.memory.config import digest_recipe_version
 
 
 def ensure_revision(db: Session, chapter: Chapter) -> ChapterRevision:
@@ -59,9 +59,9 @@ def ensure_digest_job(db: Session, revision: ChapterRevision) -> DerivedJob:
 def record_chapter_save(db: Session, chapter: Chapter) -> ChapterRevision:
     """正文保存、版本、任务和旧记忆失效组成一个不可拆分的事务。"""
     revision = ensure_revision(db, chapter)
-    from app.services.story_memory import invalidate_chapter_sources
+    from app.services.memory.story import invalidate_chapter_sources
     invalidate_chapter_sources(db, chapter)
-    from app.services.projection_jobs import enqueue_projection
+    from app.services.memory.projection import enqueue_projection
     enqueue_projection(db, db.get(Novel, chapter.novel_id), chapter)
     old_revisions = db.query(ChapterRevision.id).filter(
         ChapterRevision.chapter_lifecycle_id == chapter.rag_lifecycle_id,

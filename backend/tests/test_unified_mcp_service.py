@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.services.unified_mcp_service import UnifiedMCPService, unified_mcp_service
+from app.services.mcp.unified import UnifiedMCPService, unified_mcp_service
 from app.models.worldview_schemas import (
     UnifiedMCPAction, UnifiedMCPResponse,
     NovelAnalysisRequest, NovelOptimizationRequest
@@ -61,7 +61,7 @@ class TestUnifiedMCPService:
         )
         # 模拟小说查询
         with (
-            patch('app.services.unified_mcp_service.get_novel_by_id', return_value=mock_novel),
+            patch('app.services.mcp.unified.get_novel_by_id', return_value=mock_novel),
             patch.dict(
                 unified_mcp_service.target_handlers,
                 {"character": mock_handler},
@@ -84,7 +84,7 @@ class TestUnifiedMCPService:
     ):
         """测试无效小说ID的处理"""
         # 模拟小说不存在
-        with patch('app.services.unified_mcp_service.get_novel_by_id', return_value=None):
+        with patch('app.services.mcp.unified.get_novel_by_id', return_value=None):
             
             result = await unified_mcp_service.execute_unified_action(
                 mock_db, sample_mcp_action, mock_user.id
@@ -105,7 +105,7 @@ class TestUnifiedMCPService:
 
         with (
             patch(
-                'app.services.unified_mcp_service.get_novel_by_id',
+                'app.services.mcp.unified.get_novel_by_id',
                 return_value=victim_novel,
             ),
             patch.object(service, '_log_operation', new=AsyncMock()),
@@ -144,7 +144,7 @@ class TestUnifiedMCPService:
             novel_id=1
         )
         
-        with patch('app.services.unified_mcp_service.get_novel_by_id', return_value=mock_novel):
+        with patch('app.services.mcp.unified.get_novel_by_id', return_value=mock_novel):
             
             result = await unified_mcp_service.execute_unified_action(
                 mock_db, invalid_action, mock_user.id
@@ -166,7 +166,7 @@ class TestUnifiedMCPService:
             novel_id=1
         )
         
-        with patch('app.services.unified_mcp_service.get_novel_by_id', return_value=mock_novel):
+        with patch('app.services.mcp.unified.get_novel_by_id', return_value=mock_novel):
             
             result = await unified_mcp_service.execute_unified_action(
                 mock_db, invalid_action, mock_user.id
@@ -213,7 +213,7 @@ class TestUnifiedMCPService:
         self, mock_db, mock_user, sample_mcp_action
     ):
         """测试角色处理委托给角色MCP服务"""
-        with patch('app.services.character_mcp_service.character_mcp_service.execute_action') as mock_execute:
+        with patch('app.services.mcp.character.character_mcp_service.execute_action') as mock_execute:
             # 模拟角色MCP服务返回
             mock_response = MagicMock()
             mock_response.success = True
@@ -235,7 +235,7 @@ class TestUnifiedMCPService:
         self, mock_db, mock_user, sample_mcp_action
     ):
         """测试错误处理和日志记录"""
-        with patch('app.services.unified_mcp_service.get_novel_by_id', side_effect=Exception("数据库错误")):
+        with patch('app.services.mcp.unified.get_novel_by_id', side_effect=Exception("数据库错误")):
             with patch('loguru.logger.error') as mock_logger:
                 
                 result = await unified_mcp_service.execute_unified_action(
@@ -280,7 +280,7 @@ class TestUnifiedMCPService:
             novel_id=mock_novel.id,
         )
 
-        with patch('app.services.unified_mcp_service.get_novel_by_id', return_value=mock_novel):
+        with patch('app.services.mcp.unified.get_novel_by_id', return_value=mock_novel):
             result = await unified_mcp_service.execute_unified_action(
                 mock_db, action, mock_user.id
             )
@@ -305,9 +305,9 @@ class TestUnifiedMCPService:
         )
 
         with (
-            patch('app.services.unified_mcp_service.get_novel_by_id', return_value=mock_novel),
+            patch('app.services.mcp.unified.get_novel_by_id', return_value=mock_novel),
             patch(
-                'app.services.character_mcp_service.character_mcp_service.execute_action',
+                'app.services.mcp.character.character_mcp_service.execute_action',
                 return_value=child_result,
             ),
         ):
@@ -332,13 +332,13 @@ class TestUnifiedMCPService:
         child_execute = AsyncMock()
 
         with (
-            patch('app.services.unified_mcp_service.get_novel_by_id', return_value=mock_novel),
+            patch('app.services.mcp.unified.get_novel_by_id', return_value=mock_novel),
             patch(
                 'app.crud.character.get_character',
                 return_value=MagicMock(novel_id=999),
             ),
             patch(
-                'app.services.character_mcp_service.character_mcp_service.execute_action',
+                'app.services.mcp.character.character_mcp_service.execute_action',
                 child_execute,
             ),
         ):

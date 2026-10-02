@@ -22,8 +22,8 @@ from app.models.worldview_schemas import (
     UnifiedMCPAction,
     UnifiedMCPResponse,
 )
-from app.services.character_mcp_service import character_mcp_service
-from app.services.mcp_audit_service import mcp_audit_service
+from app.services.mcp.character import character_mcp_service
+from app.services.mcp.audit import mcp_audit_service
 
 
 class UnifiedMCPService:

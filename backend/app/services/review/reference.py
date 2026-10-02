@@ -3,7 +3,7 @@ import re
 from sqlalchemy import select
 from app.models.novel import Novel
 from app.crud.story_bible import get_active_facts_for_generation, get_events_for_generation
-from app.services.context_builder import ContextScopeError
+from app.services.context.builder import ContextScopeError
 
 
 def load_consistency_reference(db, *, novel_id, actor_id, novel_lifecycle_id, chapter, current_day):

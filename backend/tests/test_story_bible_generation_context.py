@@ -16,9 +16,9 @@ from app.crud.story_bible import (
 from app.db.base import Base
 from app.models.story_bible import StoryEvent, StoryFact
 from app.models.novel import Novel
-from app.services.context_builder import ContextPack
-from app.services.agent_service import AgentService
-from app.services.context_budget import (
+from app.services.context.builder import ContextPack
+from app.services.generation.workflow import AgentService
+from app.services.context.budget import (
     MAX_STORY_BIBLE_CONTEXT_CHARS,
     build_story_bible_context,
 )
@@ -255,19 +255,19 @@ async def test_retrieve_context_reads_story_bible_and_records_trace(current_day)
 
     with (
         patch(
-            "app.services.agent_service.rag_service.retrieve_worldview",
+            "app.services.generation.workflow.rag_service.retrieve_worldview",
             AsyncMock(return_value=[]),
         ),
         patch(
-            "app.services.agent_service.rag_service.retrieve_character_info",
+            "app.services.generation.workflow.rag_service.retrieve_character_info",
             AsyncMock(return_value=[]),
         ),
         patch(
-            "app.services.agent_service.AgentService._load_context_pack_sync",
+            "app.services.generation.workflow.AgentService._load_context_pack_sync",
             return_value=(ContextPack("", build_story_bible_context(facts, events), "", {"sources": []}), 7, "story-life"),
         ) as load_context,
-        patch("app.services.agent_service.AgentService._assert_context_scope_sync"),
-        patch("app.services.agent_service.AgentService._load_consistency_reference_sync", return_value={}),
+        patch("app.services.generation.workflow.AgentService._assert_context_scope_sync"),
+        patch("app.services.generation.workflow.AgentService._load_consistency_reference_sync", return_value={}),
     ):
         result = await service._retrieve_context(state)
 
@@ -300,7 +300,7 @@ async def test_agent_c_receives_story_bible_context_in_model_call():
     }
 
     with patch(
-        "app.services.agent_service.ChatPromptTemplate.from_messages",
+        "app.services.generation.workflow.ChatPromptTemplate.from_messages",
         return_value=prompt_template,
     ):
         result = await service._agent_c_plot(state)
@@ -322,7 +322,7 @@ def test_generation_loader_keeps_chapter_scope_when_day_unknown(
         story_day=1, chapter=8, status="occurred",
     ))
     story_bible_db.commit()
-    monkeypatch.setattr("app.services.agent_service.SessionLocal", lambda: story_bible_db)
+    monkeypatch.setattr("app.services.generation.workflow.SessionLocal", lambda: story_bible_db)
     facts = get_active_facts_for_generation(story_bible_db, 1, max_chapter=3)
     events = get_events_for_generation(story_bible_db, 1, max_chapter=3, current_day=current_day)
     assert [event.id for event in events] == expected

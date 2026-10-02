@@ -20,8 +20,8 @@ from app.models.schemas import (
     IdeaParseRequest,
     IdeaParseResponse,
 )
-from app.services.agent_service import agent_service
-from app.services.rag_service import rag_service
+from app.services.generation.workflow import agent_service
+from app.services.rag import rag_service
 from app.db.base import get_db
 from app.crud import novel as novel_crud
 from app.api.dependencies import get_current_user
@@ -29,26 +29,26 @@ from app.models.user import User
 from pydantic import BaseModel, Field
 from typing import Literal
 from loguru import logger
-from app.services.model_provider import create_chat_model
-from app.services.model_result import parse_model_result
-from app.services.writing_execution import execution_scope, invoke_model
-from app.services.writing_jobs import (durable_route, register_handler, submit_job, dispatch_job,
+from app.services.model.provider import create_chat_model
+from app.services.model.result import parse_model_result
+from app.services.model.execution import execution_scope, invoke_model
+from app.services.conversation.jobs import (durable_route, register_handler, submit_job, dispatch_job,
     owned_job, stop_job, reconcile_jobs, submit_legacy_job)
 from app.models.writing_chat import WritingGenerationJob
 from uuid import UUID, uuid4
 from datetime import datetime
 from pydantic import ConfigDict, ValidationError
-from app.services.writing_tasks import TaskOptions, execute_task
-from app.services.writing_service import writing_service
-from app.services.writing_proposals import create_proposal
+from app.services.conversation.tasks import TaskOptions, execute_task
+from app.services.conversation.service import writing_service
+from app.services.conversation.proposals import create_proposal
 from app.models.writing_schemas import ProposalResponse
-from app.services.context_builder import build_context_pack
+from app.services.context.builder import build_context_pack
 from types import SimpleNamespace
 from langchain.prompts import ChatPromptTemplate
 from app.core.config import settings
 import json
 import asyncio
-from app.services.context_budget import (
+from app.services.context.budget import (
     MAX_CHAT_OUTPUT_CHARS,
     MAX_CURRENT_CONTENT_CHARS,
     MAX_GENERATION_PROMPT_CHARS,

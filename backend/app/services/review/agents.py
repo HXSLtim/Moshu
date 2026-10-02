@@ -9,9 +9,9 @@ from langchain.prompts import ChatPromptTemplate
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from app.core.config import settings
 from app.models.workflow_schemas import AgentWorkflowStep
-from app.services.rag_service import rag_service
-from app.services.model_result import parse_model_result
-from app.services.context_budget import (
+from app.services.rag import rag_service
+from app.services.model.result import parse_model_result
+from app.services.context.budget import (
     MAX_CHAT_OUTPUT_CHARS,
     build_previous_chapter_context,
     build_review_content,

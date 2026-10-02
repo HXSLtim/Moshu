@@ -19,8 +19,8 @@ def content_hash(content: str) -> str:
 
 def create_proposal(db, *, novel, actor_id, chapter, base_content, operation, content,
                     title=None, turn_id=None, context_manifest=None, execution=None, selection_start=None, selection_end=None):
-    from app.services.writing_jobs import guard_job_publish
-    from app.services.context_builder import ContextScopeError, _memory_head_version
+    from app.services.conversation.jobs import guard_job_publish
+    from app.services.context.builder import ContextScopeError, _memory_head_version
     execution_job_id = guard_job_publish(db)
     current_scope = db.execute(select(Novel.user_id, Novel.rag_lifecycle_id).where(Novel.id == novel.id)).first()
     if current_scope is None or current_scope.user_id != actor_id or current_scope.rag_lifecycle_id != novel.rag_lifecycle_id:

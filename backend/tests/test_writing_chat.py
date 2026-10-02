@@ -18,7 +18,7 @@ from app.models.novel import Novel, Chapter
 from app.models.user import User
 from tests.agent_stub import AgentStub
 from app.models.writing_chat import WritingTurn
-from app.services.context_budget import build_writing_chat_messages, MAX_CHAT_HISTORY_CHARS
+from app.services.context.budget import build_writing_chat_messages, MAX_CHAT_HISTORY_CHARS
 
 
 @pytest.fixture
