@@ -57,7 +57,10 @@ export default function AgentActionsCard({ novelId, turnId, actions, uncertainti
     if (appliedCount === 0) return <Alert severity="info" sx={{ mt: 1.5 }}>这些设定已按你的选择跳过，没有写入。之后想补写，可以在左侧「项目与设定」里手动添加。</Alert>;
     // 混合终态（正常界面流程不会产生，仅服务端按条决策时可能出现）：逐条展示状态，不再提供按钮。
     return <Box sx={{ mt: 1.5 }}>
-      {actions.map((action, index) => <Typography key={index} variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}<Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ ml: 1, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} /></Typography>)}
+      {actions.map((action, index) => <Box key={index} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>
+        <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ mt: 0.25, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />
+      </Box>)}
       <Alert severity="info" sx={{ mt: 1 }}>已处理：写入 {appliedCount} 项，跳过 {skippedCount} 项。</Alert>
     </Box>;
   }
@@ -77,7 +80,10 @@ export default function AgentActionsCard({ novelId, turnId, actions, uncertainti
         {(['project_info', 'entity', 'fact', 'outline'] as const).map((kind) => grouped[kind].length > 0 && (
           <Box key={kind}>
             <Typography variant="body2" fontWeight={700}>{sectionLabel[kind]}</Typography>
-            {grouped[kind].map((action, index) => <Typography key={index} variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}{action.decision && <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ ml: 1, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />}</Typography>)}
+            {grouped[kind].map((action, index) => <Box key={index} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}>
+              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>· {describe(action)}</Typography>
+              {action.decision && <Chip size="small" label={action.decision === 'applied' ? '已写入' : '已跳过'} color={action.decision === 'applied' ? 'success' : 'default'} variant="outlined" sx={{ mt: 0.25, height: 18, '& .MuiChip-label': { fontSize: 10, px: 0.5 } }} />}
+            </Box>)}
           </Box>
         ))}
       </Stack>
