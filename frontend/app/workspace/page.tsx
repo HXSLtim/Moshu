@@ -87,6 +87,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import AutoSaver from '@/components/workspace/AutoSaver';
 import CharacterStats from '@/components/workspace/CharacterStats';
 import ConsistencyChecker from '@/components/workspace/ConsistencyChecker';
+import OrchestrationPanel from '@/components/workspace/OrchestrationPanel';
 import PlotOptionsGenerator from '@/components/workspace/PlotOptionsGenerator';
 import ResearchAssistant from '@/components/workspace/ResearchAssistant';
 import StyleManager from '@/components/workspace/StyleManager';
@@ -934,6 +935,10 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
         chapterVersion={currentChapter?.version} novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
         canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} /></AccordionDetails>
     </Accordion>
+    <OrchestrationPanel novelId={novelId} chapterId={currentChapter?.id ?? null}
+      novelLifecycleId={novel?.rag_lifecycle_id} chapterLifecycleId={currentChapter?.rag_lifecycle_id}
+      chapterVersion={currentChapter?.version} currentContent={content}
+      canApply={identityReady && !isDirty && !isSaving} onProposalAccepted={handleProposalAccepted} />
     <TextRewriter novelId={novelId} chapterId={currentChapter?.id ?? null} currentContent={content}
       selectedText={selectedText} selectionStart={selectionStart} selectionEnd={selectionEnd}
       onError={setError} chapterVersion={currentChapter?.version} novelLifecycleId={novel?.rag_lifecycle_id}

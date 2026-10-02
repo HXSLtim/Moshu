@@ -22,16 +22,17 @@ import type { OrchestrateResponse } from '@/lib/api/generated/model/orchestrateR
 import { useGenerationTask } from '@/hooks/useGenerationTask';
 import { isGenerationPending } from '@/lib/generationJobs';
 import WritingProposalActions from '@/components/workspace/WritingProposalActions';
+import type { Chapter } from '@/types';
 
 interface OrchestrationPanelProps {
   novelId: number;
   novelLifecycleId?: string;
-  chapterId: number;
+  chapterId: number | null;
   chapterLifecycleId?: string;
-  chapterVersion?: number;
+  chapterVersion?: number | null;
   currentContent: string;
   canApply?: boolean;
-  onProposalAccepted?: (chapter: { id: number; content: string; version: number }) => void;
+  onProposalAccepted?: (chapter: Chapter) => void;
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -49,13 +50,13 @@ export default function OrchestrationPanel(props: OrchestrationPanelProps) {
   });
   const result = job?.result ?? null;
   const pending = Boolean(job && isGenerationPending(job));
-  const canSubmit = Boolean(novelLifecycleId && !submitting && !pending && instruction.trim());
+  const canSubmit = Boolean(novelLifecycleId && chapterId && !submitting && !pending && instruction.trim());
 
   const submit = () => {
     if (!canSubmit) return;
     const payload: Record<string, unknown> = {
       novel_id: novelId,
-      chapter_id: chapterId,
+      chapter_id: chapterId ?? 0,
       current_content: props.currentContent,
       instruction: instruction.trim(),
     };
@@ -168,7 +169,7 @@ export default function OrchestrationPanel(props: OrchestrationPanelProps) {
                       proposalId={result.proposal_id}
                       chapterId={chapterId}
                       chapterLifecycleId={chapterLifecycleId}
-                      chapterVersion={props.chapterVersion}
+                      chapterVersion={props.chapterVersion ?? undefined}
                       currentContent={props.currentContent}
                       canApply={props.canApply}
                       onProposalAccepted={props.onProposalAccepted}
