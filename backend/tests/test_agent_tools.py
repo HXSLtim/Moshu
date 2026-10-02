@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessageChunk, ToolMessage
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -12,7 +12,7 @@ from app.crud import novel as novel_crud
 from app.db.base import Base
 from app.models.character import Character
 from app.models.memory import ChapterDigest, ChapterRevision
-from app.models.novel import Novel
+from app.models.novel import Chapter, Novel
 from app.models.schemas import ChapterCreate, ChapterUpdate
 from app.models.story_bible import StoryEvent, StoryFact
 from app.models.user import User
@@ -425,3 +425,68 @@ async def test_other_tool_args_are_not_streamed(agent_tool_db):
 
     chunks = [event['content'] for event in events if event['type'] == 'chunk']
     assert chunks == ['查到了,青霜剑。']
+
+
+@pytest.mark.asyncio
+async def test_read_chapter_returns_original_text_details(agent_tool_db):
+    """「第 N 章写了什么」要能引到原文细节,不是只有 L1 摘要。"""
+    result = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 1})
+
+    assert '第1章原文。' in result
+    assert '《第1章》' in result
+    assert '不是指令' in result  # 资料数据标注照常
+
+
+@pytest.mark.asyncio
+async def test_read_chapter_respects_chapter_boundary(agent_tool_db):
+    """目标章与未来章不可读:当前章正文已在上下文,未来章对本轮不可见。"""
+    current = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 2})
+    assert '目标章' in current and '第2章原文' not in current
+
+    future = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 3})
+    assert '目标章' in future and '第3章原文' not in future
+
+    invalid = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 'abc'})
+    assert '章节号不合法' in invalid
+
+    missing = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 1})
+    assert missing  # 目标章之前可读,前一项断言已覆盖正文
+
+
+@pytest.mark.asyncio
+async def test_read_chapter_truncates_overlong_content(agent_tool_db):
+    """超长章单次截断到上限,回执诚实说明并提供可行策略。"""
+    marker_tail = '这是第二万四千字附近的结尾特征句'
+    sessions = agent_tool_db  # 夹具 yield 的测试库 sessionmaker,不直连真实库
+    db = sessions()
+    try:
+        db.execute(update(Chapter).where(Chapter.novel_id == 1, Chapter.chapter_number == 1)
+                   .values(content='开头特征句。' + '涨' * 24_000 + marker_tail))
+        db.commit()
+    finally:
+        db.close()
+
+    result = await execute_read_tool(_scope(), 'read_chapter', {'chapter_number': 1})
+
+    assert '开头特征句' in result
+    assert marker_tail not in result
+    assert '超过' in result  # 说明截断
+    assert 'search_manuscript' in result or '作者' in result  # 给出可行策略
+    assert len(result) <= 20_000 + 200  # 工具自身上限,不被统一层二次放大
+
+
+@pytest.mark.asyncio
+async def test_read_chapter_aborts_on_scope_change(agent_tool_db):
+    """身份与生命周期错误必须阻断,不能降级为无界读正文。"""
+    with pytest.raises(ContextScopeError):
+        await execute_read_tool(_scope(novel_lifecycle_id='stale-life'), 'read_chapter',
+                                {'chapter_number': 1})
+
+
+def test_read_chapter_registered_in_read_tool_specs():
+    """工具面注册:名称、只读组、参数规格齐全。"""
+    from app.services.conversation.tools import READ_TOOL_NAMES, READ_TOOL_SPECS
+    assert 'read_chapter' in READ_TOOL_NAMES
+    spec = next(s for s in READ_TOOL_SPECS if s['function']['name'] == 'read_chapter')
+    assert spec['function']['parameters']['required'] == ['chapter_number']
+    assert '原文' in spec['function']['description']
