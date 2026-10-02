@@ -373,11 +373,13 @@ class _StreamScriptedLLM:
 
     def __init__(self, rounds):
         self.rounds = list(rounds)
+        self.seen_payloads = []
 
     def bind_tools(self, tools):
         return self
 
     async def astream(self, payload):
+        self.seen_payloads.append(payload)
         for chunk in self.rounds.pop(0):
             yield chunk
 
@@ -497,3 +499,38 @@ def test_read_chapter_registered_in_read_tool_specs():
     spec = next(s for s in READ_TOOL_SPECS if s['function']['name'] == 'read_chapter')
     assert spec['function']['parameters']['required'] == ['chapter_number']
     assert '原文' in spec['function']['description']
+
+
+@pytest.mark.asyncio
+async def test_scope_error_from_tool_terminates_run(agent_tool_db):
+    """身份/生命周期/越界类作用域错误必须穿透工具节点终止本轮,
+    不能被 ToolNode 兜底吞成降级说明——否则模型可以继续试探。"""
+    llm = _StreamScriptedLLM([
+        _args_stream_chunks('read_chapter',
+                            '{"chapter_number": 99}', [12]),
+        [_text_chunk('不应到达的收尾。')],
+    ])
+    with pytest.raises(ContextScopeError):
+        async for _event in run_agent(llm, [('user', '读第99章')],
+                                      read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_ordinary_tool_failure_still_degrades_to_notice(agent_tool_db):
+    """普通工具异常仍按显式纪律降级为说明文本,轮次照常完成。"""
+    async def broken_executor(name, args):
+        raise RuntimeError('连接抖动')
+
+    llm = _StreamScriptedLLM([
+        _args_stream_chunks('search_story_bible', '{"query": "林夏"}', [14]),
+        [_text_chunk('检索没成功,我如实说明。')],
+    ])
+    events = []
+    async for event in run_agent(llm, [('user', '查林夏')],
+                                 read_tool_executor=broken_executor):
+        events.append(event)
+
+    tool_round_text = llm.seen_payloads[1] if llm.seen_payloads else None
+    assert tool_round_text is not None  # 工具失败后模型仍收到回填并收尾
+    assert [e['type'] for e in events][-1] == 'final'

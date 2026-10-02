@@ -322,7 +322,10 @@ def _recording_tools(*, read_tool_executor, capability_tool_executor, seen: set[
                                       spec['function'].get('parameters') or {}))
         for spec in READ_TOOL_SPECS + PROPOSE_TOOLS + CAPABILITY_TOOL_SPECS
     ]
-    return _LangGraphToolNode(tools, handle_tool_errors=True)
+    # 异常纪律在 _execute_tool 内显式处理(普通失败降级为说明文本、
+    # ContextScopeError 透传);工具节点不再兜底吞异常——否则身份/生命周期/
+    # 越界类作用域错误会被降级成回填文本,模型还能继续试探,阻断语义落空。
+    return _LangGraphToolNode(tools, handle_tool_errors=False)
 
 
 # 稿件工具的参数即正文本体,只有它从工具参数流里开洞推给作者。
