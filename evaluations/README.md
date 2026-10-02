@@ -1,6 +1,6 @@
 # 小说记忆质量评测基线
 
-**状态：工程与简介提取的真实运行已部分完成；作者盲评和可比生成对照仍待执行。** [novel_memory_cases.json](novel_memory_cases.json) 包含 12 个原创合成中文任务：续写、改写、事实查询、简介提取各 3 例。文本不来自用户作品，不含真实个人信息。此目录仅固定输入与人工判据，已在当前代码和本机 Gemma 4 26B API 上运行 3 个短简介和 2 个长章样例；实际输出、来源、耗时和调用元数据保存在 `.Codex/final-digest-real-short.json` 与 `.Codex/final-digest-real-long.json`。没有生成作者评分或采纳率。
+**状态：工程与简介提取的真实运行已部分完成；作者盲评和可比生成对照仍待执行。** [novel_memory_cases.json](novel_memory_cases.json) 包含 12 个原创合成中文任务：续写、改写、事实查询、简介提取各 3 例。文本不来自用户作品，不含真实个人信息。此目录仅固定输入与人工判据，已在当前代码和本机 Gemma 4 26B API 上运行 3 个短简介和 2 个长章样例；实际输出、来源、耗时和调用元数据保存在 [results/final-digest-real-short.json](results/final-digest-real-short.json) 与 [results/final-digest-real-long.json](results/final-digest-real-long.json)。没有生成作者评分或采纳率。
 
 ## 样例与来源边界
 
