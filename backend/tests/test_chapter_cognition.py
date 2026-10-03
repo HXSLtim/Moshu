@@ -60,6 +60,9 @@ def cognition_api(monkeypatch):
     app.dependency_overrides[get_current_user] = lambda: db.get(User, 1)
     model = RecordingAgent([])
     monkeypatch.setattr(writing_chat.writing_service, 'llm', model)
+    # 域流程断言锁定旧链替身(模型级打桩)；C2 删旧链时随批迁 core 替身。
+    from app.core.config import settings as _settings
+    monkeypatch.setattr(_settings, 'NAI_AGENT_RUNTIME', 'langgraph')
     with TestClient(app) as client:
         yield client, db, model
     db.close(); engine.dispose()

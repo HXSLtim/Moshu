@@ -43,6 +43,9 @@ def chat_api(monkeypatch):
     app.dependency_overrides[get_current_user] = lambda: author
     model = AsyncMock(return_value=SimpleNamespace(content='这枚玉佩可以成为下一幕的线索。'))
     monkeypatch.setattr(writing_chat.writing_service, 'llm', AgentStub(model))
+    # 域流程断言锁定旧链替身(模型级打桩)；C2 删旧链时随批迁 core 替身。
+    from app.core.config import settings as _settings
+    monkeypatch.setattr(_settings, 'NAI_AGENT_RUNTIME', 'langgraph')
     with TestClient(app) as client:
         yield client, db, model
     db.close(); engine.dispose()
