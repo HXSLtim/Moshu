@@ -144,8 +144,8 @@ def prepare_compaction(messages: list[dict], settings: CompactionSettings) -> di
             'previous_summary': previous_summary}
 
 
-def compact(preparation: dict, summarize) -> dict:
-    """执行压缩：注入式摘要器，split turn 时主摘要+轮前缀两次调用合并。
+async def compact(preparation: dict, summarize) -> dict:
+    """执行压缩：注入式异步摘要器，split turn 时主摘要+轮前缀两次调用合并。
 
     摘要器异常向上透传——生产端把截断/错误摘要转为异常即实现
     「残缺文本不得成为会话检查点」的拒落盘纪律。
@@ -156,15 +156,31 @@ def compact(preparation: dict, summarize) -> dict:
     if preparation.get('is_split_turn') and turn_prefix:
         summary = previous if messages_to_summarize == [] and previous else None
         if summary is None:
-            summary = summarize(messages_to_summarize, previous) if messages_to_summarize \
+            summary = await summarize(messages_to_summarize, previous) if messages_to_summarize \
                 else (previous or '暂无可摘要的前情。')
-        prefix = summarize(turn_prefix, None)
+        prefix = await summarize(turn_prefix, None)
         summary = f'{summary}\n\n---\n\n**Turn Context (split turn):**\n\n{prefix}'
     else:
-        summary = summarize(messages_to_summarize, previous)
+        summary = await summarize(messages_to_summarize, previous)
     return {'summary': summary,
             'first_kept_index': preparation['first_kept_index'],
             'tokens_before': preparation['tokens_before']}
+
+
+def build_post_compaction_messages(messages: list[dict], result: dict) -> list[dict]:
+    """组装压缩后的新会话形态：摘要条目带头 + 保留区消息拷贝(剥离 usage)。
+
+    保留区旧 usage 是压缩前大上下文的实报，重排后当新锚会误判二次压缩
+    (P4 修⑥a 案)——剥离后计量退回 chars/3 估算，直到下一次 provider 实报。
+    剥离作用于拷贝，不回改原会话。
+    """
+    checkpoint = {'role': 'system', 'content': result['summary'],
+                  'is_compaction': True, 'summary': result['summary']}
+    kept = []
+    for message in messages[result['first_kept_index']:]:
+        copied = {key: value for key, value in message.items() if key != 'usage'}
+        kept.append(copied)
+    return [checkpoint, *kept]
 
 
 # 六节结构化摘要模板(设计稿 §3.2)；Nai 本地化=「保精确引用」写成

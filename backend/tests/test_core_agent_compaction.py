@@ -175,10 +175,10 @@ def test_prepare_collects_messages_to_summarize_and_previous():
     assert 'first_kept_index' in preparation
 
 
-def test_compact_uses_injected_summarizer_with_update_semantics():
+async def test_compact_uses_injected_summarizer_with_update_semantics():
     received = {}
 
-    def summarize(messages, previous_summary, custom_instructions=None):
+    async def summarize(messages, previous_summary, custom_instructions=None):
         received['messages'] = messages
         received['previous'] = previous_summary
         return '新摘要：保章号/设定键/剧情指针'
@@ -190,14 +190,14 @@ def test_compact_uses_injected_summarizer_with_update_semantics():
         _assistant('答2' + '长' * 60),
     ]
     preparation = prepare_compaction(messages, _settings(keep_recent_tokens=40))
-    result = compact(preparation, summarize)
+    result = await compact(preparation, summarize)
     assert result['summary'] == '新摘要：保章号/设定键/剧情指针'
     assert received['previous'] is None  # 无前次摘要走初始模板路径
     assert 'tokens_before' in result and result['tokens_before'] > 0
 
 
-def test_compact_update_prompt_receives_previous_summary():
-    def summarize(messages, previous_summary, custom_instructions=None):
+async def test_compact_update_prompt_receives_previous_summary():
+    async def summarize(messages, previous_summary, custom_instructions=None):
         assert previous_summary == '旧摘要'
         return '合并后的新摘要'
 
@@ -210,14 +210,14 @@ def test_compact_update_prompt_receives_previous_summary():
         _user('尾问'),
     ]
     preparation = prepare_compaction(messages, _settings(keep_recent_tokens=30))
-    result = compact(preparation, summarize)
+    result = await compact(preparation, summarize)
     assert result['summary'] == '合并后的新摘要'
 
 
-def test_compact_split_turn_appends_turn_prefix_section():
+async def test_compact_split_turn_appends_turn_prefix_section():
     calls = []
 
-    def summarize(messages, previous_summary, custom_instructions=None):
+    async def summarize(messages, previous_summary, custom_instructions=None):
         calls.append([m.get('content', '')[:6] for m in messages])
         return f'摘要{len(calls)}'
 
@@ -232,7 +232,7 @@ def test_compact_split_turn_appends_turn_prefix_section():
     ]
     preparation = prepare_compaction(messages, _settings(keep_recent_tokens=10))
     assert preparation is not None
-    result = compact(preparation, summarize)
+    result = await compact(preparation, summarize)
     # split turn：主摘要+turn prefix 两次调用合并。
     assert len(calls) == 2
     assert '摘要1' in result['summary'] and '摘要2' in result['summary']
@@ -240,9 +240,9 @@ def test_compact_split_turn_appends_turn_prefix_section():
 
 # ---------- 失败纪律：截断摘要拒落盘 ----------
 
-def test_summarizer_truncated_result_rejected():
+async def test_summarizer_truncated_result_rejected():
     """摘要命中输出上限(截断)→压缩失败，残缺文本不得成为会话检查点。"""
-    def summarize(messages, previous_summary, custom_instructions=None):
+    async def summarize(messages, previous_summary, custom_instructions=None):
         raise RuntimeError('Summarization failed: generation hit the token cap')
 
     messages = [
@@ -252,7 +252,7 @@ def test_summarizer_truncated_result_rejected():
     ]
     preparation = prepare_compaction(messages, _settings(keep_recent_tokens=5))
     with pytest.raises(RuntimeError, match='token cap'):
-        compact(preparation, summarize)
+        await compact(preparation, summarize)
 
 
 # ---------- 预算重设计：三层上下文模型 + 比例制 reserve ----------
