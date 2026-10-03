@@ -186,3 +186,64 @@ async def test_tools_passed_through_to_sdk():
     async for _event in provider.stream([{'role': 'user', 'content': 'hi'}], tools=tools):
         pass
     assert completions.last_kwargs.get('tools') == tools
+
+
+# ---- 真 SDK 类型流形状回归（2026-10-03 实证：手搓 fake 与实现同错，真 SDK 增量为嵌套 function 形状） ----
+
+def _real_sdk_stream_chunks():
+    """用真 openai SDK 类型构造流式工具增量（嵌套 function 形状），杜绝 fake 随实现走。"""
+    from openai.types.chat import ChatCompletionChunk
+    from openai.types.chat.chat_completion_chunk import (
+        Choice, ChoiceDelta, ChoiceDeltaToolCall, ChoiceDeltaToolCallFunction,
+    )
+
+    def chunk(delta):
+        return ChatCompletionChunk(
+            id='cmpl-x', choices=[Choice(index=0, delta=delta, finish_reason=None)],
+            created=0, model='deepseek-chat', object='chat.completion.chunk',
+        )
+
+    tool_chunks = [
+        chunk(ChoiceDelta(tool_calls=[ChoiceDeltaToolCall(
+            index=0, id='call_1', type='function',
+            function=ChoiceDeltaToolCallFunction(name='search_story_bible', arguments=''),
+        )])),
+        chunk(ChoiceDelta(tool_calls=[ChoiceDeltaToolCall(
+            index=0, function=ChoiceDeltaToolCallFunction(arguments='{"query": "白狐"}'),
+        )])),
+        chunk(ChoiceDelta(content='找到了。')),
+        ChatCompletionChunk(
+            id='cmpl-x', choices=[Choice(index=0, delta=ChoiceDelta(),
+                                          finish_reason='tool_calls')],
+            created=0, model='deepseek-chat', object='chat.completion.chunk',
+        ),
+    ]
+
+    async def gen():
+        for c in tool_chunks:
+            yield c
+
+    return gen()
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_nested_toolcall_shape_streamed():
+    """真 SDK 形状（name/arguments 嵌套于 call.function）必须产出 toolcall_start 与 delta 事件。"""
+    gen = _real_sdk_stream_chunks()
+
+    class RealShapeCompletions:
+        async def create(self, **kwargs):
+            return gen
+
+    provider = OpenAIStreamProvider(model='deepseek-chat')
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=RealShapeCompletions()))
+    events = []
+    async for ev in provider.stream([], None):
+        events.append(ev)
+    starts = [e for e in events if e['type'] == 'toolcall_start']
+    deltas = [e for e in events if e['type'] == 'toolcall_delta']
+    finals = [e for e in events if e['type'] == 'response_done']
+    assert starts and starts[0]['name'] == 'search_story_bible' and starts[0]['id'] == 'call_1'
+    assert deltas and deltas[0]['args_delta'] == '{"query": "白狐"}'
+    assert finals and finals[0]['response'].stop_reason != 'error'
+    assert 'ChoiceDeltaToolCall' not in (finals[0]['response'].error_message or '')
