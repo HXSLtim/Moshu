@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     NEO4J_ENABLED: bool = False
 
     # CORS配置
-    ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://192.168.31.101:3000,http://192.168.31.101:8080"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://192.168.31.101:3000,http://192.168.31.101:8080,http://localhost:21490,http://127.0.0.1:21490"
 
     # 日志配置
     LOG_LEVEL: str = "INFO"
