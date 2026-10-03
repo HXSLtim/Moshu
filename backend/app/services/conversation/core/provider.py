@@ -78,6 +78,11 @@ class OpenAIStreamProvider:
                 choice = choices[-1]
                 finish_raw = choice.finish_reason or finish_raw
                 delta = choice.delta
+                # DeepSeek 思考型 reasoning_content：显式弃用——官方字段历史
+                # 不回传，积攒了也无法续传；不进 text 也不产事件，仅记日志。
+                if getattr(delta, 'reasoning_content', None):
+                    logger.debug('provider 思考增量已弃用({} 字符)',
+                                 len(delta.reasoning_content))
                 content = getattr(delta, 'content', None)
                 if content:
                     text_parts.append(content)
@@ -135,6 +140,14 @@ class OpenAIStreamProvider:
                                  error_message='已取消', finish_reason_raw=finish_raw)
         if finish_raw is not None:
             stop = _FINISH_MAP.get(finish_raw, 'stop')
+            # 思考烧穿输出预算：length 且无正文无工具调用——转可诊断错误。
+            # 没有可拒执行的工具调用，走拒执行路径只会空转；作者需要的是
+            # 「提高输出上限或降思考档」的明确指引而非静默截断。
+            if stop == 'length' and not text_parts and not calls:
+                return ModelResponse(
+                    stop_reason='error', text='', tool_calls=[], usage=self._usage(usage_raw),
+                    error_message='输出预算被思考耗尽：模型未产出正文，请提高输出上限或降低思考档位后重试',
+                    finish_reason_raw=finish_raw)
         elif self.compat.supports_finish_reason:
             # 宣称支持的端点流结束却没给：明确失败，不静默猜(纪律①反向)。
             return ModelResponse(stop_reason='error', text=''.join(text_parts),
@@ -163,7 +176,16 @@ class OpenAIStreamProvider:
         total = pick('total_tokens')
         if prompt is None and completion is None and total is None:
             return None
-        return {'input': prompt or 0, 'output': completion or 0, 'total': total or 0}
+        usage: dict = {'input': prompt or 0, 'output': completion or 0, 'total': total or 0}
+        # reasoning_tokens 拆出(output 子集，选型会②)：DeepSeek 思考型经
+        # completion_tokens_details 上报，缺席不带键(null 不伪造)。
+        details = usage_raw.get('completion_tokens_details') if isinstance(usage_raw, dict) \
+            else getattr(usage_raw, 'completion_tokens_details', None)
+        reasoning = details.get('reasoning_tokens') if isinstance(details, dict) \
+            else getattr(details, 'reasoning_tokens', None)
+        if reasoning is not None:
+            usage['reasoning'] = int(reasoning)
+        return usage
 
     async def complete(self, messages: list[dict], max_tokens: int | None = None) -> ModelResponse:
         """非流式调用(摘要等一次性任务)；终值与流式同一纪律。"""

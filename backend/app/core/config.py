@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # 应用基础配置
     APP_NAME: str = "AI小说创作系统"
     APP_VERSION: str = "0.1.0"
+    # 双轨灰度开关(P4)：langgraph=旧链(默认零风险)/core=新核心链
+    NAI_AGENT_RUNTIME: str = "langgraph"
     DEBUG: bool = True
     SECRET_KEY: str
 

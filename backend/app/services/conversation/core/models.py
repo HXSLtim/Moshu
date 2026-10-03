@@ -22,16 +22,25 @@ class ModelInfo:
 
 
 # 生产双端点的已知面；LM Studio 本地模型无计费。
+# deepseek 参数=官方文档口径(64k 上下文/8k 输出)，候 ux 终报校对微调。
 _DEFAULT = ModelInfo(
     id='default', name='缺省(跟随 settings.OPENAI_MODEL_COMPLEX)',
     context_window=131072, max_tokens=8192,
     cost={'input': 0.0, 'output': 0.0})
-_DEEPSEEK = ModelInfo(
-    id='deepseek-chat', name='DeepSeek Chat',
-    context_window=131072, max_tokens=8192,
+_DEEPSEEK_CHAT = ModelInfo(
+    id='deepseek-chat', name='DeepSeek Chat(V3)',
+    context_window=65536, max_tokens=8192,
     cost={'input': 0.27, 'output': 1.10})
+_DEEPSEEK_REASONER = ModelInfo(
+    id='deepseek-reasoner', name='DeepSeek Reasoner(思考型)',
+    context_window=65536, max_tokens=8192,
+    cost={'input': 0.55, 'output': 2.19})
 
-_REGISTRY: dict[str, ModelInfo] = {_DEFAULT.id: _DEFAULT, _DEEPSEEK.id: _DEEPSEEK}
+_REGISTRY: dict[str, ModelInfo] = {
+    _DEFAULT.id: _DEFAULT,
+    _DEEPSEEK_CHAT.id: _DEEPSEEK_CHAT,
+    _DEEPSEEK_REASONER.id: _DEEPSEEK_REASONER,
+}
 
 
 def register_model(info: ModelInfo) -> None:
