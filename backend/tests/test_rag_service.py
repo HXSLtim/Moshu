@@ -415,3 +415,16 @@ def test_split_text_respects_limit_and_ignores_blank_chunks():
     service = RAGService()
     chunks = service._split_text("A" * 1000 + " " * 500, chunk_size=500)
     assert chunks == ["A" * 500, "A" * 500]
+
+
+def test_embedding_fingerprint_isolates_collections_on_any_component_change():
+    """backlog#1 子件③回归锁：指纹三元组任一变化→指纹变化→collection 名
+    不同→换嵌入模型/维度/端点时旧向量与新检索集合级互不可见。"""
+    from app.services.rag import embedding_fingerprint
+
+    base = embedding_fingerprint("http://a", "m1", 1024)
+    assert base == embedding_fingerprint("http://a", "m1", 1024)  # 稳定
+    assert embedding_fingerprint("http://b", "m1", 1024) != base   # 端点变
+    assert embedding_fingerprint("http://a", "m2", 1024) != base   # 模型变
+    assert embedding_fingerprint("http://a", "m1", 768) != base    # 维度变
+    assert len(base) == 10
