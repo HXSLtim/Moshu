@@ -2,7 +2,7 @@
 
 ## 测试基线
 
-- 位置:`backend/tests/`,当前最终全量为 580 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
+- 位置:`backend/tests/`,当前最终全量为 603 通过、2 个真实模型集成项按标记跳过；测试文件数量随功能增长,当前全绿。
 - 框架:pytest + pytest-asyncio + FastAPI TestClient,`pytest.ini` 已启用 `asyncio_mode = auto`、`--strict-markers`,并默认附带 `--cov=app` 覆盖率统计(HTML 报告输出到 `htmlcov/`)。
 - 测试不依赖任何真实外部服务:模型调用在夹具中打桩,数据库使用覆盖注入。
 
@@ -84,7 +84,7 @@ npm run lint        # eslint .
 npm run typecheck   # tsc --noEmit
 ```
 
-当前 35 个测试文件、167 项通过(2026-10-02「对话框唯一形态」重构后:七个旧工具面板组件与对应测试已删,能力并入 WritingChat、新增 ToolCallBlock 内联渲染;其后快赢包、P0 入口收编、N2 章号锚定、设定提案状态、角色管理两阶段与批1 状态章语义/审核模式归一批次各补充测试),覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端、工作台导航、设定账本表单与分页、人物表单/关系图/经历时间线/统计数据源切换、审核模式选择器与状态章语义档,新保存失败时保留草稿备份,以及改写快照、持久对话恢复、网络失败草稿保留和迟到响应保护。Node 25/26 使用 `NODE_OPTIONS=--no-experimental-webstorage npm test` 避免原生 Web Storage 与 jsdom 冲突。
+当前 36 个测试文件、187 项通过(2026-10-03 实测基线;此前 2026-10-02「对话框唯一形态」重构后为 35 文件/167 项:七个旧工具面板组件与对应测试已删,能力并入 WritingChat、新增 ToolCallBlock 内联渲染;其后快赢包、P0 入口收编、N2 章号锚定、设定提案状态、角色管理两阶段与批1 状态章语义/审核模式归一批次各补充测试),覆盖保存协调(`useChapterSave`)、编辑历史、API/SSE 客户端、工作台导航、设定账本表单与分页、人物表单/关系图/经历时间线/统计数据源切换、审核模式选择器与状态章语义档,新保存失败时保留草稿备份,以及改写快照、持久对话恢复、网络失败草稿保留和迟到响应保护。Node 25/26 使用 `NODE_OPTIONS=--no-experimental-webstorage npm test` 避免原生 Web Storage 与 jsdom 冲突。
 
 M1 采用隔离 SQLite 与模型替身验证；真实 Embedding/Chroma 链路另有隔离 smoke，不访问作者真实数据库或真实模型。真实库启用、长篇提取质量及共享召回为单独验收项。前端新增章节记忆的展开请求、保存版本刷新、切章取消与迟到响应保护、只读历史及来源查看回归。
 
