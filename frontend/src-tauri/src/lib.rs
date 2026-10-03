@@ -105,7 +105,7 @@ fn alloc_port() -> Option<u16> {
 
 /// 开发树路径（CARGO_MANIFEST_DIR=frontend/src-tauri 回溯仓库根）；P3 打包时切换到资源目录。
 fn backend_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-  let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../backend");
+  let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../backend");
   Ok(dir.canonicalize()?)
 }
 
