@@ -27,3 +27,5 @@ tauri-plugin-log = "2"
 tauri-plugin-localhost = "2"
 # 壳 P1：深链最小集（nai:// scheme，注册见 tauri.conf.json plugins.deep-link）
 tauri-plugin-deep-link = "2"
+# 壳 P1 件6：退出清理发 SIGTERM（std 只有 SIGKILL）
+libc = "0.2"

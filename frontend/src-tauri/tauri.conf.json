@@ -10,18 +10,7 @@
     "beforeBuildCommand": "NEXT_STATIC_BUILD=1 npm run build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "墨枢",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 960,
-        "minHeight": 640,
-        "resizable": true,
-        "fullscreen": false,
-        "url": "http://localhost:21490/"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
