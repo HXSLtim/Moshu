@@ -85,16 +85,21 @@ class OpenAIStreamProvider:
                 for call in getattr(delta, 'tool_calls', None) or []:
                     index = call.index or 0
                     entry = tool_calls.setdefault(index, {'id': None, 'name': None, 'args': ''})
-                    if call.id or call.name:
+                    # openai SDK 流式增量：call.id 平铺，name/arguments 嵌套在 call.function；
+                    # 旧版平铺形状以 getattr 容错兼容，防再犯「fake 随实现走」盲区（真 SDK 实证 2026-10-03）。
+                    fn = getattr(call, 'function', None)
+                    fn_name = getattr(fn, 'name', None) if fn else getattr(call, 'name', None)
+                    fn_args = getattr(fn, 'arguments', None) if fn is not None else getattr(call, 'arguments', None)
+                    if call.id or fn_name:
                         first_seen = entry['id'] is None and entry['name'] is None
                         entry['id'] = call.id or entry['id']
-                        entry['name'] = call.name or entry['name']
+                        entry['name'] = fn_name or entry['name']
                         if first_seen and (entry['id'] or entry['name']):
                             yield {'type': 'toolcall_start', 'index': index,
                                    'id': entry['id'], 'name': entry['name']}
-                    if call.arguments:
-                        entry['args'] += call.arguments
-                        yield {'type': 'toolcall_delta', 'index': index, 'args_delta': call.arguments}
+                    if fn_args:
+                        entry['args'] += fn_args
+                        yield {'type': 'toolcall_delta', 'index': index, 'args_delta': fn_args}
         except asyncio.CancelledError:
             # 取消同样以事件收束，不向上抛断流——「取消不是异常，是一条消息」。
             yield {'type': 'response_done', 'response': self._finalize(
