@@ -45,7 +45,7 @@ describe('常驻对话面板', () => {
     const send = vi.spyOn(api, 'streamWritingTurn');
     render(<WritingChat {...props} entryIntent="next-chapter" />);
     await screen.findByText(turn.assistant_text);
-    expect((screen.getByLabelText('和 Nai 聊聊') as HTMLTextAreaElement).value).toBe('帮我起草下一章。');
+    expect((screen.getByLabelText('和墨枢聊聊') as HTMLTextAreaElement).value).toBe('帮我起草下一章。');
     expect(send).not.toHaveBeenCalled();
   });
   it('刷新组件能恢复历史，跨章保留交流并阻止采纳其他章节候选', async () => {
@@ -67,7 +67,7 @@ describe('常驻对话面板', () => {
     });
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '刚才的伏笔怎么回收？' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '刚才的伏笔怎么回收？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('可以让守门人认出玉佩。');
     expect(screen.getByText(turn.assistant_text)).toBeTruthy();
@@ -78,7 +78,7 @@ describe('常驻对话面板', () => {
     vi.mocked(api.listWritingTurns).mockResolvedValue([{ ...turn, status: 'failed', assistant_text: '', error: '模型连接中断' }]);
     render(<WritingChat {...props} />);
     fireEvent.click(await screen.findByRole('button', { name: '重新编辑' }));
-    await waitFor(() => expect((screen.getByLabelText('和 Nai 聊聊') as HTMLTextAreaElement).value).toBe(turn.user_text));
+    await waitFor(() => expect((screen.getByLabelText('和墨枢聊聊') as HTMLTextAreaElement).value).toBe(turn.user_text));
     expect(screen.getByText('模型连接中断')).toBeTruthy();
   });
   it('网络失败保留未送达的问题，不覆盖正在输入的下一条草稿', async () => {
@@ -86,7 +86,7 @@ describe('常驻对话面板', () => {
     vi.spyOn(api, 'streamWritingTurn').mockImplementation(() => new Promise((_resolve, reject) => { rejectRequest = reject; }));
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    const input = screen.getByLabelText('和 Nai 聊聊');
+    const input = screen.getByLabelText('和墨枢聊聊');
     fireEvent.change(input, { target: { value: '未送达的问题' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     fireEvent.change(input, { target: { value: '正在写的下一条' } });
@@ -102,7 +102,7 @@ describe('常驻对话面板', () => {
     render(<WritingChat {...props} />); await screen.findByText(turn.assistant_text);
     expect(screen.queryByLabelText('意图')).toBeNull();
     expect(screen.getByPlaceholderText(/Enter 发送/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '设计借剑之后的悬念' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '设计借剑之后的悬念' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('Agent 回复');
     expect(send).toHaveBeenCalledWith(1, expect.objectContaining({ mode: 'discuss', message: '设计借剑之后的悬念' }), expect.anything(), expect.anything());
@@ -257,7 +257,7 @@ describe('输入体验(Claude Code 风格)', () => {  it('Enter 直接发送,Shi
     });
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    const input = screen.getByLabelText(/和 Nai 聊聊/);
+    const input = screen.getByLabelText(/和墨枢聊聊/);
     fireEvent.change(input, { target: { value: '测试一句' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
     expect(send).not.toHaveBeenCalled();
@@ -277,8 +277,8 @@ describe('对话框唯一形态(能力工具化)', () => {
     });
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText(/和 Nai 聊聊/), { target: { value: '先查再写' } });
-    fireEvent.keyDown(screen.getByLabelText(/和 Nai 聊聊/), { key: 'Enter' });
+    fireEvent.change(screen.getByLabelText(/和墨枢聊聊/), { target: { value: '先查再写' } });
+    fireEvent.keyDown(screen.getByLabelText(/和墨枢聊聊/), { key: 'Enter' });
     expect(await screen.findByText('已检索设定账本')).toBeTruthy();
     expect(screen.getByText('正在编排任务编排…')).toBeTruthy();
     expect(send).toHaveBeenCalledTimes(1);
@@ -297,8 +297,8 @@ describe('对话框唯一形态(能力工具化)', () => {
     });
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText(/和 Nai 聊聊/), { target: { value: '第一条' } });
-    fireEvent.keyDown(screen.getByLabelText(/和 Nai 聊聊/), { key: 'Enter' });
+    fireEvent.change(screen.getByLabelText(/和墨枢聊聊/), { target: { value: '第一条' } });
+    fireEvent.keyDown(screen.getByLabelText(/和墨枢聊聊/), { key: 'Enter' });
     const input = screen.getByLabelText(/排队下一条消息/);
     fireEvent.change(input, { target: { value: '第二条' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -320,7 +320,7 @@ describe('对话框唯一形态(能力工具化)', () => {
     }));
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '继续写' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '继续写' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findByText('第一段就上屏。第二段继续。')).toBeTruthy();
     expect(screen.getByText('正在继续写…')).toBeTruthy();
@@ -344,7 +344,7 @@ describe('对话框唯一形态(能力工具化)', () => {
     }));
     render(<WritingChat {...props} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '先读再写' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '先读再写' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findByText('已阅读正文')).toBeTruthy();
     expect(screen.getByText('已执行高级续写')).toBeTruthy();
@@ -367,7 +367,7 @@ describe('auto 档入库跟手', () => {
     sendCompletedWithProposal();
     render(<WritingChat {...props} novel={autoNovel} onManuscriptAutoApplied={autoApplied} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '接着写' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '接着写' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('续写好了。');
     expect(autoApplied).toHaveBeenCalledWith(expect.objectContaining({ proposal_id: 'p-auto' }));
@@ -378,7 +378,7 @@ describe('auto 档入库跟手', () => {
     sendCompletedWithProposal();
     render(<WritingChat {...props} onManuscriptAutoApplied={autoApplied} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '接着写' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '接着写' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('续写好了。');
     expect(autoApplied).not.toHaveBeenCalled();
@@ -391,7 +391,7 @@ describe('auto 档入库跟手', () => {
     });
     render(<WritingChat {...props} novel={{ ...autoNovel, review_mode: 'none' as const }} onManuscriptAutoApplied={autoApplied} />);
     await screen.findByText(turn.assistant_text);
-    fireEvent.change(screen.getByLabelText('和 Nai 聊聊'), { target: { value: '聊聊剧情' } });
+    fireEvent.change(screen.getByLabelText('和墨枢聊聊'), { target: { value: '聊聊剧情' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await screen.findByText('只是聊聊天。');
     expect(autoApplied).not.toHaveBeenCalled();

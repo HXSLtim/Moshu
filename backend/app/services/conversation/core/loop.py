@@ -1,11 +1,11 @@
 """Core Agent 循环：双层循环 + stopReason 分类学 + 熔断三件替代物。
 
-参考 pi Core(packages/agent/src/agent-loop.ts runLoop)移植，语义按 Nai 域
+参考 pi Core(packages/agent/src/agent-loop.ts runLoop)移植，语义按 墨枢域
 收敛(设计稿 §3.1)：不设 maxTurns，熔断=①stopReason 硬分支(error/aborted
 保留已产生结果直接收尾；length 拒执行整批工具调用、错误结果回模型重发)
 ②工具结果 terminate 拉闸(整批全 terminate 才停批)③重试预算独立于循环
 (域策略 max_model_calls，耗尽抛 ExecutionBudgetError 与旧链同语义)。
-事件出口=旧链 Nai 形状(tool/chunk/final)——「前端零改动」验收线。
+事件出口=旧链 墨枢形状(tool/chunk/final)——「前端零改动」验收线。
 """
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
                          get_pending_messages=None) -> AsyncIterator[dict]:
     """跑一轮 Agent：模型可多次调用工具，最后给出自然语言回复。
 
-    产出旧链 Nai 形状事件：``tool``、``chunk``、``final``。工具执行器签名
+    产出旧链 墨枢形状事件：``tool``、``chunk``、``final``。工具执行器签名
     与挂点形状见 types.py；预算三口径(次数/token/钱)由域策略经 budget 注入，
     传 max_model_calls 时按单口径构造(向后兼容)。
     """

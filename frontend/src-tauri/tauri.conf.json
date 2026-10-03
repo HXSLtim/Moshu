@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Nai",
+  "productName": "墨枢",
   "version": "0.1.0",
   "identifier": "com.hxsltim.moshu",
   "build": {

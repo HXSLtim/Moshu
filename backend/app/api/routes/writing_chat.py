@@ -79,7 +79,7 @@ def _core_execution_payload(budget: CoreBudget, total_calls: int, started: float
             'usage': usage, 'transport_attempts': None, 'error_code': None, 'calls': []}
 
 
-AGENT_SYSTEM_PROMPT = """你是 Nai 的创作 Agent，和作者一起写这部小说。作者只会说话，你按需要调用工具：
+AGENT_SYSTEM_PROMPT = """你是墨枢的创作 Agent，和作者一起写这部小说。作者只会说话，你按需要调用工具：
 
 - 回答书内设定、角色、旧剧情、大纲的问题前，先用 search_story_bible、lookup_character、read_chapter_digest、get_outline、search_manuscript 查清楚；查不到就明说，不要编造。
 - 书外知识（历史、制度、专业常识）用 research_web 检索，注明是参考资料。

@@ -11,7 +11,7 @@ export default function AuthFrame({ title, description, children }: { title: str
         <Stack alignItems="center" sx={{ mb: 3 }}>
           <Stack direction="row" alignItems="center" gap={1}>
             <AutoStoriesRoundedIcon color="primary" />
-            <Typography sx={{ fontWeight: 800, letterSpacing: '.14em' }}>NAI</Typography>
+            <Typography sx={{ fontWeight: 800, letterSpacing: '.14em' }}>墨枢</Typography>
           </Stack>
           <Typography component="h1" variant="h4" sx={{ mt: 2, fontWeight: 700, textAlign: 'center' }}>{title}</Typography>
           <Typography color="text.secondary" sx={{ mt: 1, textAlign: 'center' }}>{description}</Typography>

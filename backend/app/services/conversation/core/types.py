@@ -2,9 +2,9 @@
 
 参考 pi Core(packages/agent/src/types.ts)移植，双轨期与 runtime.py(LangGraph
 链)平行建设：零共享可变状态、不改旧链一行。内部事件经 events.py 翻译回
-Nai 前端既有形状(tool/chunk/final)，"前端零改动"验收线由适配层锁定。
+墨枢前端既有形状(tool/chunk/final)，"前端零改动"验收线由适配层锁定。
 
-stopReason 七态照 pi 全集移植；deferred(工具延迟)为 Nai 当前无场景的
+stopReason 七态照 pi 全集移植；deferred(工具延迟)为墨枢当前无场景的
 保留枚举，标注不产出。
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Literal
 
-# pending 仅存在于流式进行中；deferred Nai 不产出，保留枚举与 pi 对齐。
+# pending 仅存在于流式进行中；deferred 墨枢不产出，保留枚举与 pi 对齐。
 StopReason = Literal['pending', 'stop', 'length', 'toolUse', 'error', 'aborted', 'deferred']
 
 # 模型一轮响应的统一终值：无论流式与否、成功与否，都以一条结构化结果收尾。

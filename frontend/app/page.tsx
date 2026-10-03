@@ -111,7 +111,7 @@ export default function LoginPage() {
   };
 
   return (
-    <AuthFrame title="欢迎回到 Nai" description="把想法变成章节，AI 负责协助，你保留最后决定权。">
+    <AuthFrame title="欢迎回到墨枢" description="把想法变成章节，AI 负责协助，你保留最后决定权。">
         <Card sx={{ mt: 3, width: '100%' }}>
           <CardContent>
             <form onSubmit={handleLogin}>
