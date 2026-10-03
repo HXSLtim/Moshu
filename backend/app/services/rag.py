@@ -43,6 +43,14 @@ class SourceProjectionTruth:
     chapter_number: int = 0
 
 
+def embedding_fingerprint(api_base: str, model_name: str, embed_dim: int) -> str:
+    """嵌入三元组指纹：任一变化即换集合——换模型/换维度/换端点的旧向量
+    与新检索在集合层面互不可见(比查询侧校验更强的隔离形态)。"""
+    return hashlib.sha256(
+        f"{api_base}|{model_name}|{embed_dim}".encode("utf-8")
+    ).hexdigest()[:10]
+
+
 class RAGService:
     """管理可重建的小说向量投影。
 
@@ -147,9 +155,7 @@ class RAGService:
         if embed_dim <= 0:
             raise RuntimeError("Embedding服务返回了空向量")
 
-        model_fingerprint = hashlib.sha256(
-            f"{api_base}|{model_name}|{embed_dim}".encode("utf-8")
-        ).hexdigest()[:10]
+        model_fingerprint = embedding_fingerprint(api_base, model_name, embed_dim)
         base_name = re.sub(r"[^A-Za-z0-9._-]", "-", settings.CHROMA_COLLECTION_NAME)
         base_name = base_name.strip("._-") or "novel-embeddings"
         collection_name = f"{base_name}-{embed_dim}-{model_fingerprint}"
