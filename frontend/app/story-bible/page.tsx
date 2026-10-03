@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Alert, Box, Button, Typography } from '@mui/material';
 import AppFrame from '@/components/layout/AppFrame';
 import WorldviewEditor from '@/components/novel/WorldviewEditor';
@@ -13,10 +13,10 @@ import { api, ApiError } from '@/lib/api';
 import type { Novel } from '@/types';
 
 
-export default function StoryBiblePage() {
-  const params = useParams();
+function StoryBibleSession() {
   const router = useRouter();
-  const novelId = Number(params.id);
+  const searchParams = useSearchParams();
+  const novelId = Number(searchParams.get('novel'));
   const [novel, setNovel] = useState<Novel | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -54,4 +54,9 @@ export default function StoryBiblePage() {
         : <><WorldviewEditor key={novelId} novel={novel} /><StoryBibleManager novelId={novelId} /><CharacterManager novelId={novelId} onSaved={() => setCharactersVersion((value) => value + 1)} /><CharacterRelationshipEditor novelId={novelId} refreshKey={charactersVersion} /><CharacterTimeline novelId={novelId} refreshKey={charactersVersion} /></>}
     </Box>
   </AppFrame>;
+}
+
+// 静态导出要求 useSearchParams 页面套 Suspense 边界。
+export default function StoryBiblePage() {
+  return <Suspense fallback={null}><StoryBibleSession /></Suspense>;
 }

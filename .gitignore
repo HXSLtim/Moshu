@@ -209,3 +209,4 @@ docker-compose.override.yml
 .playwright-mcp/
 /ux-*.png
 frontend/tsconfig.tsbuildinfo
+frontend/.next-static/

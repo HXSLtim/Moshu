@@ -431,7 +431,7 @@ export default function DashboardPage() {
                         <Button
                           size="small"
                           startIcon={<MenuBookIcon />}
-                          onClick={() => router.push(`/novels/${novel.id}`)}
+                          onClick={() => router.push(`/novel?novel=${novel.id}`)}
                         >
                           章节管理
                         </Button>
