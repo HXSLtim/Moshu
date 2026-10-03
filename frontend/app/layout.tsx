@@ -13,6 +13,8 @@ function ThemedLayout({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      {/* 产品名进浏览器标签页（React 19 将 title 提升至 head；根布局为 client 组件，不走 metadata 导出）。 */}
+      <title>墨枢</title>
       {children}
     </ThemeProvider>
   );

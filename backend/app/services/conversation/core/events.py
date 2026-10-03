@@ -1,6 +1,6 @@
-"""Core Agent 事件序适配层：Nai 前端事件形状的守护与锁定。
+"""Core Agent 事件序适配层：墨枢前端事件形状的守护与锁定。
 
-「前端零改动」验收线(设计稿 §3.6)的承载件：loop 出口即旧链 Nai 形状
+「前端零改动」验收线(设计稿 §3.6)的承载件：loop 出口即旧链墨枢形状
 (tool/chunk/final)，本模块把形状契约显式化为可编程校验——双轨切换与
 P4 灰度期间，任何事件形状漂移在测试期即暴露，而非到前端才炸。
 形状基准=旧链 runtime.py 的 publish 面 + writing_chat.py:175-198 消费逻辑。
@@ -12,7 +12,7 @@ FINAL_OPERATIONS = {None, 'append', 'replace', 'create'}
 
 
 def validate_nai_event(event: dict) -> list[str]:
-    """校验一个事件是否符合 Nai 前端契约，返回违规项列表(空=合规)。"""
+    """校验一个事件是否符合墨枢前端契约，返回违规项列表(空=合规)。"""
     violations: list[str] = []
     kind = event.get('type')
     if kind == 'chunk':

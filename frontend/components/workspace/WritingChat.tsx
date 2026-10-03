@@ -221,7 +221,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
           <Typography variant="caption" color="text.secondary">你 · {turn.chapter_title} · {modeLabels[turn.mode]}</Typography>
           <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', mt: 0.5 }}>{turn.user_text}</Typography>
         </Box>
-        <Typography variant="caption" color="primary">Nai</Typography>
+        <Typography variant="caption" color="primary">墨枢</Typography>
         {turn.status !== 'pending' && turn.status !== 'completed' ? <Alert severity="info">{turn.error || '本轮未完成'}<Button size="small" onClick={() => setDraft(turn.user_text)}>重新编辑</Button></Alert>
           : turn.assistant_text ? <>
             <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.9, mt: 0.5 }}>{turn.assistant_text}</Typography>
@@ -275,7 +275,7 @@ const WritingChatSession = forwardRef<WritingChatRef, Props>(function WritingCha
       {turns.map((turn) => renderTurn(turn))}
     </Box>
     <Box sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-      <TextField fullWidth multiline minRows={2} maxRows={5} label={pending ? '排队下一条消息' : '和 Nai 聊聊'} value={draft}
+      <TextField fullWidth multiline minRows={2} maxRows={5} label={pending ? '排队下一条消息' : '和墨枢聊聊'} value={draft}
         placeholder={!chapterId ? '先在左侧选一章（或新建），就能开始对话'
           : pending ? '正在处理上一条,Enter 加入队列'
           : '例如:接着往下写 / 他为什么要隐瞒身份(Enter 发送,Shift+Enter 换行)'}

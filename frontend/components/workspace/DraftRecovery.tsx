@@ -14,7 +14,7 @@ export default function DraftRecovery({ drafts }: { drafts: RecoverableDraft[] }
     try {
       const url = URL.createObjectURL(new Blob([JSON.stringify(item.draft, null, 2)], { type: 'application/json;charset=utf-8' }));
       const link = document.createElement('a');
-      link.href = url; link.download = `Nai-恢复草稿-${item.draft.novelId}-${item.draft.chapterId}.json`;
+      link.href = url; link.download = `墨枢-恢复草稿-${item.draft.novelId}-${item.draft.chapterId}.json`;
       link.click();
       const revoke = URL.revokeObjectURL.bind(URL);
       setTimeout(() => revoke(url), 1000);

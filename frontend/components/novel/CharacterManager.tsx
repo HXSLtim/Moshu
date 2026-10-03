@@ -70,7 +70,7 @@ export default function CharacterManager({ novelId, onSaved }: { novelId: number
       {error && <Alert severity="error" sx={{ mt: 2 }} action={<Button color="inherit" onClick={() => void load()}>重试</Button>}>{error}</Alert>}
       {loading && <Typography role="status" sx={{ mt: 2 }}>正在读取人物档案…</Typography>}
       {!loading && !error && characters.length === 0 && <Box sx={{ mt: 2 }}>
-        <EmptyState title="还没有人物档案。" hint="点右上「新增人物」，先把名字和身份记下来；或在对话里让 Nai 整理设定，确认写入后也会出现在这里。" />
+        <EmptyState title="还没有人物档案。" hint="点右上「新增人物」，先把名字和身份记下来；或在对话里让墨枢整理设定，确认写入后也会出现在这里。" />
       </Box>}
       <Stack spacing={2} sx={{ mt: 2 }}>
         {characters.map((character) => <Box key={character.id} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 2 }}>

@@ -1,6 +1,6 @@
 """Core Agent 压缩链：混合计量、切点纪律、六节摘要与失败纪律(设计稿 §3.2)。
 
-参考 pi compaction.ts 移植、按 Nai 域收敛：估算系数 chars/3(中文起步，选型
+参考 pi compaction.ts 移植、按 墨枢域收敛：估算系数 chars/3(中文起步，选型
 会⑤——不引真 tokenizer，主力口径=provider 实报)；切点绝不落在 tool 结果
 与其调用之间；切开轮次单独生成 turn-prefix 摘要；摘要函数注入——生产端
 负责失败纪律(stopReason error/length 抛错，残缺文本不得成为会话检查点)，
@@ -20,7 +20,7 @@ _CHARS_PER_TOKEN = 3
 class CompactionSettings:
     enabled: bool = True
     reserve_tokens: int = 16384
-    keep_recent_tokens: int = 32000  # Nai 域初值：保整章+近三轮(设计稿 §3.2)
+    keep_recent_tokens: int = 32000  # 墨枢域初值：保整章+近三轮(设计稿 §3.2)
 
 
 def estimate_message_tokens(message: dict) -> int:
@@ -183,7 +183,7 @@ def build_post_compaction_messages(messages: list[dict], result: dict) -> list[d
     return [checkpoint, *kept]
 
 
-# 六节结构化摘要模板(设计稿 §3.2)；Nai 本地化=「保精确引用」写成
+# 六节结构化摘要模板(设计稿 §3.2)；墨枢本地化=「保精确引用」写成
 # 保章号/设定账本键/剧情指针——压缩不丢设定与剧情锚点。
 SUMMARIZATION_PROMPT = '''The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 

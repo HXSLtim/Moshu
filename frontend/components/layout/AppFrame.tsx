@@ -19,7 +19,7 @@ interface AppFrameProps {
 
 /** 非工作台页面统一的产品壳层：品牌、位置、页面目标和主要动作保持一致。 */
 export default function AppFrame({
-  eyebrow = 'NAI 写作系统', title, description, backHref, backLabel = '返回', actions, children, maxWidth = 'lg',
+  eyebrow = '墨枢写作系统', title, description, backHref, backLabel = '返回', actions, children, maxWidth = 'lg',
 }: AppFrameProps) {
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
@@ -28,7 +28,7 @@ export default function AppFrame({
           <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2}>
             <Stack direction="row" alignItems="center" gap={1.5} minWidth={0}>
               <Button component={Link} href="/dashboard" color="inherit" sx={{ minWidth: 0, px: 0, fontWeight: 800, letterSpacing: '.12em' }} startIcon={<AutoStoriesRoundedIcon color="primary" />}>
-                NAI
+                墨枢
               </Button>
               {backHref && <Button component={Link} href={backHref} size="small" color="inherit" startIcon={<ArrowBackRoundedIcon />} sx={{ display: { xs: 'none', sm: 'inline-flex' } }}>{backLabel}</Button>}
             </Stack>

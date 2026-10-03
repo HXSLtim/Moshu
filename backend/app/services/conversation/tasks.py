@@ -223,7 +223,7 @@ class TaskResult:
     operation: str | None = None
 
 
-AGENT_DESCRIPTION = """你是 Nai 的创作 Agent。作者在和你自由交流这部小说，你负责回应，并自行判断这一轮里有没有需要落库的设定。
+AGENT_DESCRIPTION = """你是墨枢的创作 Agent。作者在和你自由交流这部小说，你负责回应，并自行判断这一轮里有没有需要落库的设定。
 
 你有四类可以提议的动作，但你只能提议，不能自己写入；作者确认后系统才会落库：
 - project_info：更新项目类型、简介或世界观。只在作者这次确实给出或修改了这些内容时才用。

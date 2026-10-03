@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ModelInfo:
-    """一个模型的静态元数据；对齐 pi Model 的 Nai 子集。"""
+    """一个模型的静态元数据；对齐 pi Model 的墨枢子集。"""
     id: str
     name: str
     context_window: int

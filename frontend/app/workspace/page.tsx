@@ -940,7 +940,7 @@ function WorkspaceSession({ authenticatedUser }: { authenticatedUser: User }) {
         '& .MuiButton-root': { borderRadius: 1 }, '& .MuiCard-root': { boxShadow: 'none' } }}>
         <Box component="header" sx={{ height: 42, flexShrink: 0, display: 'flex', alignItems: 'center', px: 1, gap: 1, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}>
           <IconButton size="small" aria-label="返回小说" onClick={() => void handleBack()}><ArrowBackIcon fontSize="small" /></IconButton>
-          <Typography variant="subtitle2" sx={{ color: 'primary.main', mr: 1 }}>NAI</Typography>
+          <Typography variant="subtitle2" sx={{ color: 'primary.main', mr: 1 }}>墨枢</Typography>
           <Typography variant="body2" noWrap sx={{ flex: 1 }}>{novel?.title || '创作工作区'}</Typography>
           <Button size="small" startIcon={<SaveIcon />} aria-label={isSaving ? '保存中' : '保存章节'} disabled={isSaving || !isDirty} onClick={() => void handleSave()}>保存</Button>
           <ColorModeToggle />
