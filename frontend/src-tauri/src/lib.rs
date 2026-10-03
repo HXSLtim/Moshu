@@ -67,7 +67,7 @@ pub fn run() {
         let window = WebviewWindowBuilder::new(
           app,
           "main",
-          WebviewUrl::External(format!("http://localhost:{ASSET_PORT}/").parse()?),
+          WebviewUrl::External(format!("http://localhost:{ASSET_PORT}/index.html").parse()?),
         )
         .title("墨枢")
         .inner_size(1280.0, 800.0)
