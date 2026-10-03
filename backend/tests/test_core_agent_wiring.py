@@ -11,7 +11,14 @@ from app.services.conversation.core.types import ModelResponse
 from tests.test_writing_chat import chat_api, payload  # 复用隔离夹具与载荷
 
 
-def test_runtime_switch_defaults_to_legacy():
+def test_runtime_switch_defaults_to_core():
+    """P4 下线：core 为默认运行时；langgraph 选项保留作灰度回退面。"""
+    assert writing_chat._use_core_runtime() is True
+
+
+def test_runtime_switch_langgraph_still_selectable(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, 'NAI_AGENT_RUNTIME', 'langgraph')
     assert writing_chat._use_core_runtime() is False
 
 
