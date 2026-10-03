@@ -10,7 +10,6 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessageChunk
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -21,23 +20,6 @@ from app.db.base import Base, get_db
 from app.models.novel import Chapter, Novel
 from app.models.user import User
 from app.models.writing_chat import WritingAdoption, WritingProposal
-
-
-class ScriptedAgent:
-    """按脚本依次返回流式响应、保留 tool_calls 字段的模型替身。
-
-    AgentStub.astream 会重建不带工具调用的消息块,无法驱动稿件工具路径,
-    这里沿用 tests/test_agent_tools.py 中 ScriptedLLM 的最小契约。
-    """
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-
-    def bind_tools(self, tools):
-        return self
-
-    async def astream(self, payload):
-        yield self.responses.pop(0)
 
 
 @pytest.fixture
@@ -61,11 +43,9 @@ def normalize_api(monkeypatch):
 
     app.dependency_overrides[get_db] = get_test_db
     app.dependency_overrides[get_current_user] = lambda: db.get(User, 1)
-    model = ScriptedAgent([])
-    monkeypatch.setattr(writing_chat.writing_service, 'llm', model)
-    # 域流程断言锁定旧链替身(模型级打桩)；C2 删旧链时随批迁 core 替身。
-    from app.core.config import settings as _settings
-    monkeypatch.setattr(_settings, 'NAI_AGENT_RUNTIME', 'langgraph')
+    from tests.core_agent_stub import CoreAgentStub
+    model = CoreAgentStub()
+    monkeypatch.setattr(writing_chat, 'OpenAIStreamProvider', lambda: model)
     with TestClient(app) as client:
         yield client, db, model
     db.close(); engine.dispose()
@@ -73,10 +53,13 @@ def normalize_api(monkeypatch):
 
 def _agent_new_chapter_script(model):
     """模型替身脚本:先提交 create 稿件工具调用,再给出收尾答复。"""
+    from app.services.conversation.core.types import ModelResponse
     model.responses = [
-        AIMessageChunk(content='', tool_calls=[{'name': 'write_manuscript', 'args': {
-            'operation': 'create', 'content': '新章正文:灯下的人推开了门。', 'title': '第二章 灯下'}, 'id': 'call-1'}]),
-        AIMessageChunk(content='新章已经写好,请查收候选。', response_metadata={'finish_reason': 'stop'}),
+        ModelResponse(stop_reason='toolUse', tool_calls=[
+            {'id': 'call-1', 'name': 'write_manuscript',
+             'arguments': {'operation': 'create', 'content': '新章正文:灯下的人推开了门。',
+                           'title': '第二章 灯下'}}]),
+        ModelResponse(stop_reason='stop', text='新章已经写好,请查收候选。'),
     ]
 
 

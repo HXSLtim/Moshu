@@ -11,23 +11,6 @@ from app.services.conversation.core.types import ModelResponse
 from tests.test_writing_chat import chat_api, payload  # 复用隔离夹具与载荷
 
 
-def test_runtime_switch_defaults_to_core():
-    """P4 下线：core 为默认运行时；langgraph 选项保留作灰度回退面。"""
-    assert writing_chat._use_core_runtime() is True
-
-
-def test_runtime_switch_langgraph_still_selectable(monkeypatch):
-    from app.core.config import settings
-    monkeypatch.setattr(settings, 'NAI_AGENT_RUNTIME', 'langgraph')
-    assert writing_chat._use_core_runtime() is False
-
-
-def test_runtime_switch_reads_env(monkeypatch):
-    from app.core.config import settings
-    monkeypatch.setattr(settings, 'NAI_AGENT_RUNTIME', 'core')
-    assert writing_chat._use_core_runtime() is True
-
-
 def test_core_agent_messages_shape(chat_api, monkeypatch):
     client, db, _model = chat_api
     from app.models.novel import Novel, Chapter
@@ -76,10 +59,8 @@ class _ScriptedCoreProvider:
 
 
 def test_stream_endpoint_core_runtime_event_sequence(chat_api, monkeypatch):
-    """NAI_AGENT_RUNTIME=core 下端到端：SSE 帧序与旧链一致，execution 载荷兼容。"""
-    from app.core.config import settings
+    """core 唯一路径下端到端：SSE 帧序与旧链一致，execution 载荷兼容。"""
     client, db, _model = chat_api
-    monkeypatch.setattr(settings, 'NAI_AGENT_RUNTIME', 'core')
     monkeypatch.setattr(writing_chat, 'OpenAIStreamProvider', lambda: _ScriptedCoreProvider())
 
     with client.stream('POST', '/api/writing-chat/1/turns/stream', json=payload()) as response:

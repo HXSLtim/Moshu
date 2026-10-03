@@ -41,11 +41,14 @@ def chat_api(monkeypatch):
         finally: session.close()
     app.dependency_overrides[get_db] = get_test_db
     app.dependency_overrides[get_current_user] = lambda: author
+    # 双替身：固定任务链(continue/outline 等 execute_task→service.llm)仍走 LangChain
+    # AgentStub；discuss 的 agent 循环走 core 替身(P4 后唯一对话链)。
     model = AsyncMock(return_value=SimpleNamespace(content='这枚玉佩可以成为下一幕的线索。'))
     monkeypatch.setattr(writing_chat.writing_service, 'llm', AgentStub(model))
-    # 域流程断言锁定旧链替身(模型级打桩)；C2 删旧链时随批迁 core 替身。
-    from app.core.config import settings as _settings
-    monkeypatch.setattr(_settings, 'NAI_AGENT_RUNTIME', 'langgraph')
+    from tests.core_agent_stub import CoreAgentStub
+    core_model = CoreAgentStub(default_text='这枚玉佩可以成为下一幕的线索。')
+    monkeypatch.setattr(writing_chat, 'OpenAIStreamProvider', lambda: core_model)
+    model.core = core_model  # discuss(agent 循环)注入面；model 本体仍是固定任务链替身
     with TestClient(app) as client:
         yield client, db, model
     db.close(); engine.dispose()
@@ -65,12 +68,12 @@ def test_history_survives_new_requests_and_enters_next_context(chat_api):
     assert second['id'] > first['id']
     history = client.get('/api/writing-chat/1/turns').json()
     assert len(history) == 2 and history[0]['assistant_text'] == first['assistant_text']
-    sent = model.call_args.args[0]
-    assert any(getattr(message, 'content', None) == first['assistant_text']
-               or message == ('ai', first['assistant_text']) for message in sent)
-    assert any('主角为什么要隐瞒身份' in (message.content if hasattr(message, 'content') else message[1])
-               for message in sent)
-    assert '最新未保存原稿' in (sent[0].content if hasattr(sent[0], 'content') else sent[0][1])
+    sent = model.core.calls[-1]  # 第二轮 discuss 走 core 链,消息为 OpenAI dict 形态
+    assert any(m.get('role') == 'assistant' and m.get('content') == first['assistant_text']
+               for m in sent)
+    assert any(m.get('role') == 'user' and '主角为什么要隐瞒身份' in m.get('content', '')
+               for m in sent)
+    assert '最新未保存原稿' in sent[0]['content']
     assert db.get(Chapter, 1).content == '已保存原稿'
 
 
@@ -99,7 +102,7 @@ def test_owner_and_chapter_isolation(chat_api):
 def test_model_failure_keeps_question_without_leaking_provider_error(chat_api):
     """连接失败保留问题并明确标记，不能泄露上游错误中的配置。"""
     client, _, model = chat_api
-    model.side_effect = RuntimeError('secret-provider-error')
+    model.core.fail_with = RuntimeError('secret-provider-error')
     result = client.post('/api/writing-chat/1/turns', json=payload()).json()
     assert result['status'] == 'failed'
     assert result['user_text'] == '主角为什么要隐瞒身份？'
@@ -114,7 +117,7 @@ def test_stopped_turn_ignores_late_model_reply(chat_api):
         db.query(WritingTurn).update({'status': 'cancelled', 'error': '已停止生成'})
         db.commit()
         return SimpleNamespace(content='迟到回复')
-    model.side_effect = complete_after_stop
+    model.core.hook = complete_after_stop
     result = client.post('/api/writing-chat/1/turns', json=payload()).json()
     assert result['status'] == 'cancelled' and result['assistant_text'] == ''
 
@@ -208,8 +211,8 @@ def test_incomplete_reply_never_becomes_adoptable_or_enters_history_context(chat
     model.return_value = SimpleNamespace(content='完整的新回复')
     completed = client.post('/api/writing-chat/1/turns', json=payload(message='重新续写')).json()
     assert completed['status'] == 'completed'
-    assert all('主角为什么要隐瞒身份' not in message.content
-               for message in model.await_args.args[0])
+    assert all('主角为什么要隐瞒身份' not in str(message)
+               for message in model.core.calls[-1])
     assert db.get(Chapter, 1).content == '已保存原稿'
 
 
@@ -217,7 +220,7 @@ def test_timeout_is_distinct_from_provider_connection_failure(chat_api):
     """作者看到明确超时原因，仍可通过原历史恢复失败问题。"""
     import asyncio
     client, _, model = chat_api
-    model.side_effect = asyncio.TimeoutError()
+    model.core.fail_with = asyncio.TimeoutError()
     result = client.post('/api/writing-chat/1/turns', json=payload()).json()
     assert result['status'] == 'failed'
     assert '超时' in result['error']
@@ -226,11 +229,13 @@ def test_timeout_is_distinct_from_provider_connection_failure(chat_api):
 def test_cancelled_turn_ignores_late_truncated_result(chat_api):
     """取消后的输出验证失败不能反向覆盖取消终态。"""
     client, db, model = chat_api
-    async def truncate_after_stop(*_args):
+    from app.services.conversation.core.types import ModelResponse
+
+    async def truncate_after_stop():
         db.query(WritingTurn).update({'status': 'cancelled', 'error': '已停止生成'})
         db.commit()
-        return SimpleNamespace(content='半段回复', response_metadata={'finish_reason': 'length'})
-    model.side_effect = truncate_after_stop
+    model.core.hook = truncate_after_stop
+    model.core.responses = [ModelResponse(stop_reason='length', text='半段回复')]
     result = client.post('/api/writing-chat/1/turns', json=payload()).json()
     assert result['status'] == 'cancelled'
     assert result['error'] == '已停止生成'
@@ -297,8 +302,7 @@ def test_previous_actions_note_enters_next_context(chat_api):
     db.commit()
     second = client.post('/api/writing-chat/1/turns', json=payload(message='继续聊这把剑')).json()
     assert second['status'] == 'completed'
-    sent = model.call_args.args[0]
-    joined = ' '.join(message.content if hasattr(message, 'content') else str(message)
-                      for message in sent)
+    sent = model.core.calls[-1]
+    joined = ' '.join(str(message) for message in sent)
     assert '上轮已登记提案' in joined and '青霜剑' in joined
     assert '未确认点:剑的来历未确认' in joined

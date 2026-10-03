@@ -1,6 +1,6 @@
 """多 Agent 编排器：计划分解由模型，执行由既有受审能力。
 
-与固定流水线(generation/workflow.py)和单 Agent 工具循环(conversation/runtime.py)
+与固定流水线(generation/workflow.py)和单 Agent 工具循环(conversation/core)
 的分工:编排器用一次模型调用产出严格校验的执行计划(检索/生成/一致性步骤的
 DAG),执行层按编号顺序确定性调度——检索走 conversation/tools 的受权只读工具,
 生成走 WritingService 的预算内单次调用,一致性走四层确定性检查。子步骤不是

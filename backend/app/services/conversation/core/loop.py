@@ -71,6 +71,7 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
                          read_tool_executor=None, capability_tool_executor=None,
                          manuscript_ack=None, before_tool_call=None, after_tool_call=None,
                          max_model_calls: int = 20, budget: CoreBudget | None = None,
+                         max_rounds: int = 8,
                          get_pending_messages=None) -> AsyncIterator[dict]:
     """跑一轮 Agent：模型可多次调用工具，最后给出自然语言回复。
 
@@ -88,6 +89,11 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
     rounds = 0
 
     while True:
+        if rounds >= max_rounds:
+            # 轮次软闸(对齐旧链 recursion 语义)：到顶按已有结果收尾不判失败，
+            # 已登记的提案与稿件不丢；预算硬闸(budget)另行拦截。
+            yield _final_event(actions, manuscript, 'stop', None, rounds)
+            return
         rounds += 1
         # 每轮新建：同一轮对话内模型可能再次起草，稿件流状态不跨轮续接。
         assembler = ManuscriptStream()
@@ -170,7 +176,9 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
                     conversation.append(dict(pending))
             continue
 
-        # 最终答复：完成契约与旧链一致——空文本、超限一律失败，不因新核心放宽。
+        # 最终答复：完成契约与旧链一致——截断、空文本、超限一律失败，不因新核心放宽。
+        if response.stop_reason == 'length':
+            raise ModelOutputError('output_truncated', '模型回复被截断，内容不完整，请重新发送。')
         text = (response.text or '').strip()
         if not text:
             raise ModelOutputError('empty_reply', '模型没有返回可显示的回复，请重新发送。')
