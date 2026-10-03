@@ -179,10 +179,15 @@ async def test_length_with_tool_calls_keeps_reject_path():
 # ---------- ④ deepseek 系 ModelInfo 真实参数 ----------
 
 def test_deepseek_models_registered_with_real_params():
+    """官方 api-docs 口径(2026-10 核)：上下文 1M；max_tokens=请求级输出预算档。"""
     chat = get_model('deepseek-chat')
-    assert chat.context_window == 65536
+    assert chat.context_window == 1048576
     assert chat.max_tokens == 8192
     reasoner = get_model('deepseek-reasoner')
-    assert reasoner.context_window == 65536
+    assert reasoner.context_window == 1048576
     assert reasoner.max_tokens == 8192
+    flash = get_model('deepseek-flash')
+    assert flash.context_window == 1048576
+    assert flash.max_tokens == 8192
+    assert flash.cost['input'] < chat.cost['input']  # 轻量档更便宜
     assert reasoner.supports_usage_in_streaming and reasoner.supports_finish_reason

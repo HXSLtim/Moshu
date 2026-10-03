@@ -21,6 +21,15 @@ from app.services.conversation.tools import CHECK_TOOL_NAME, READ_TOOL_NAMES
 from app.services.model.result import ModelOutputError
 from app.services.conversation.core.assembly import ManuscriptStream
 from app.services.conversation.core.budget import BudgetExceeded, CoreBudget
+from app.services.conversation.core.compaction import (
+    CompactionSettings,
+    build_post_compaction_messages,
+    compact,
+    estimate_context_tokens,
+    prepare_compaction,
+    should_compact,
+)
+from app.services.conversation.core.models import get_model
 from app.services.conversation.core.tools import (
     DUPLICATE_CALL_ACK,
     MODE,
@@ -71,8 +80,8 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
                          read_tool_executor=None, capability_tool_executor=None,
                          manuscript_ack=None, before_tool_call=None, after_tool_call=None,
                          max_model_calls: int = 20, budget: CoreBudget | None = None,
-                         max_rounds: int = 8,
-                         get_pending_messages=None) -> AsyncIterator[dict]:
+                         max_rounds: int = 8, compaction: CompactionSettings | None = None,
+                         summarize=None, get_pending_messages=None) -> AsyncIterator[dict]:
     """跑一轮 Agent：模型可多次调用工具，最后给出自然语言回复。
 
     产出旧链 Nai 形状事件：``tool``、``chunk``、``final``。工具执行器签名
@@ -170,6 +179,20 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
                 # terminate 拉闸：整批全部拉闸才停，收尾保留已登记结果。
                 yield _final_event(actions, manuscript, 'stop', None, rounds)
                 return
+            # 轮间压缩(prepareNextTurn 语义，设计稿 §3.1「压缩从此挂入」)：
+            # 工具批完成后、下一模型调用前，超限即压缩重建会话；摘要失败
+            # 拒落盘纪律由 compact 透传异常——轮次明确失败而非静默降级。
+            if compaction is not None:
+                estimate = estimate_context_tokens(conversation)
+                window = get_model(getattr(provider, 'model', None)).context_window
+                if should_compact(estimate['tokens'], window, compaction):
+                    preparation = prepare_compaction(conversation, compaction)
+                    if preparation is not None:
+                        if summarize is None:
+                            from app.services.conversation.core.compaction import make_provider_summarizer
+                            summarize = make_provider_summarizer(provider)
+                        result = await compact(preparation, summarize)
+                        conversation = build_post_compaction_messages(conversation, result)
             # steering：工具批完成后注入排队消息，与前端排队输入语义对齐。
             if get_pending_messages is not None:
                 for pending in get_pending_messages() or []:
