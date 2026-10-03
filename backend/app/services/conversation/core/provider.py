@@ -23,7 +23,8 @@ from loguru import logger
 from app.core.config import settings
 from app.services.conversation.core.types import ModelResponse, ProviderEvent
 
-_FINISH_MAP = {'stop': 'stop', 'length': 'length', 'tool_calls': 'toolUse', 'function_call': 'toolUse'}
+_FINISH_MAP = {'stop': 'stop', 'length': 'length', 'tool_calls': 'toolUse',
+               'function_call': 'toolUse', 'content_filter': 'error'}
 
 
 @dataclass
@@ -158,6 +159,33 @@ class OpenAIStreamProvider:
         if prompt is None and completion is None and total is None:
             return None
         return {'input': prompt or 0, 'output': completion or 0, 'total': total or 0}
+
+    async def complete(self, messages: list[dict], max_tokens: int | None = None) -> ModelResponse:
+        """非流式调用(摘要等一次性任务)；终值与流式同一纪律。"""
+        kwargs: dict = {'model': self.model, 'messages': messages, 'stream': False,
+                        'temperature': self.temperature,
+                        'max_tokens': max_tokens or self.max_tokens}
+        try:
+            raw = await self._client.chat.completions.create(**kwargs)
+        except asyncio.CancelledError:
+            return ModelResponse(stop_reason='aborted', error_message='已取消')
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Core provider 非流式调用失败：{}', exc)
+            return ModelResponse(stop_reason='error', error_message=str(exc)[:500])
+        choice = (getattr(raw, 'choices', None) or [None])[0]
+        finish_raw = getattr(choice, 'finish_reason', None) if choice else None
+        message = getattr(choice, 'message', None) if choice else None
+        text = getattr(message, 'content', None) or ''
+        if finish_raw is None:
+            if self.compat.supports_finish_reason:
+                return ModelResponse(stop_reason='error', text=text,
+                                     error_message='Stream ended without finish_reason')
+            stop = 'stop'
+        else:
+            stop = _FINISH_MAP.get(finish_raw, 'stop')
+        return ModelResponse(stop_reason=stop, text=text,
+                             usage=self._usage(getattr(raw, 'usage', None)),
+                             finish_reason_raw=finish_raw)
 
     async def close(self) -> None:
         await self._client.close()
