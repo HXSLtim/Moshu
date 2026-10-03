@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessageChunk, ToolMessage
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -20,21 +19,7 @@ from app.db.base import Base, get_db
 from app.models.novel import Chapter, Novel
 from app.models.user import User
 from app.models.writing_chat import WritingProposal, WritingTurn
-
-
-class RecordingAgent:
-    """按脚本返回流式响应并记录每轮实际收到的消息,便于断言回执内容。"""
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.seen_payloads = []
-
-    def bind_tools(self, tools):
-        return self
-
-    async def astream(self, payload):
-        self.seen_payloads.append(payload)
-        yield self.responses.pop(0)
+from app.services.conversation.core.types import ModelResponse as _MR
 
 
 @pytest.fixture
@@ -58,11 +43,9 @@ def cognition_api(monkeypatch):
 
     app.dependency_overrides[get_db] = get_test_db
     app.dependency_overrides[get_current_user] = lambda: db.get(User, 1)
-    model = RecordingAgent([])
-    monkeypatch.setattr(writing_chat.writing_service, 'llm', model)
-    # 域流程断言锁定旧链替身(模型级打桩)；C2 删旧链时随批迁 core 替身。
-    from app.core.config import settings as _settings
-    monkeypatch.setattr(_settings, 'NAI_AGENT_RUNTIME', 'langgraph')
+    from tests.core_agent_stub import CoreAgentStub
+    model = CoreAgentStub()
+    monkeypatch.setattr(writing_chat, 'OpenAIStreamProvider', lambda: model)
     with TestClient(app) as client:
         yield client, db, model
     db.close(); engine.dispose()
@@ -70,9 +53,10 @@ def cognition_api(monkeypatch):
 
 def _create_manuscript_script(model):
     model.responses = [
-        AIMessageChunk(content='', tool_calls=[{'name': 'write_manuscript', 'args': {
-            'operation': 'create', 'content': '新章正文。', 'title': '第二章'}, 'id': 'call-1'}]),
-        AIMessageChunk(content='写好了。', response_metadata={'finish_reason': 'stop'}),
+        _MR(stop_reason='toolUse', tool_calls=[
+            {'id': 'call-1', 'name': 'write_manuscript',
+             'arguments': {'operation': 'create', 'content': '新章正文。', 'title': '第二章'}}]),
+        _MR(stop_reason='stop', text='写好了。'),
     ]
 
 
@@ -94,8 +78,8 @@ async def test_ack_states_next_chapter_when_tail_has_content(cognition_api):
 
     turn = _send_turn(client, '已有正文')
     assert turn['result']['landing'] == '第 2 章的新章'
-    second_round = model.seen_payloads[1]
-    acks = [message.content for message in second_round if isinstance(message, ToolMessage)]
+    second_round = model.calls[1]
+    acks = [message['content'] for message in second_round if message.get('role') == 'tool']
     assert any('第 2 章的新章' in ack and '采纳前它不是已存在的章' in ack for ack in acks), acks
 
 
@@ -109,8 +93,8 @@ async def test_ack_states_blank_tail_fill_when_last_chapter_empty(cognition_api)
 
     turn = _send_turn(client, '')
     assert turn['result']['landing'].startswith('第 1 章的填充')
-    second_round = model.seen_payloads[1]
-    acks = [message.content for message in second_round if isinstance(message, ToolMessage)]
+    second_round = model.calls[1]
+    acks = [message['content'] for message in second_round if message.get('role') == 'tool']
     assert any('第 1 章的填充' in ack for ack in acks), acks
 
 
@@ -177,7 +161,7 @@ def test_prompt_contract_forbids_inline_manuscript():
     assert '只有一个交付通道' in writing_chat.AGENT_SYSTEM_PROMPT
     assert '只认系统提供的当前正文和稿件回执' in writing_chat.AGENT_SYSTEM_PROMPT
     assert '「写下一章／开新章」对应 operation=create' in writing_chat.AGENT_SYSTEM_PROMPT
-    from app.services.conversation.runtime import PROPOSE_TOOLS
+    from app.services.conversation.core.tools import PROPOSE_TOOLS
     spec = next(item for item in PROPOSE_TOOLS if item['function']['name'] == 'write_manuscript')
     assert '唯一交付通道' in spec['function']['description']
 
@@ -203,9 +187,9 @@ async def test_chapter_anchor_injected_before_drafting(cognition_api):
     rejected.proposal_id = proposal.id
     db.commit()
 
-    model.responses = [AIMessageChunk(content='我先看看现有设定。', response_metadata={'finish_reason': 'stop'})]
+    model.responses = [_MR(stop_reason='stop', text='我先看看现有设定。')]
     _send_turn(client, '已有正文')
-    system = model.seen_payloads[0][0].content
+    system = model.calls[0][0]['content']
     assert '【章节真值】' in system and '现有 1 章' in system and '新建第 2 章' in system
     assert '不是已存在的章' in system
 
@@ -216,9 +200,9 @@ async def test_chapter_anchor_blank_tail_states_fill(cognition_api):
     client, db, model = cognition_api
     db.add(Chapter(id=1, novel_id=1, chapter_number=1, title='第一章', content=''))
     db.commit()
-    model.responses = [AIMessageChunk(content='好的。', response_metadata={'finish_reason': 'stop'})]
+    model.responses = [_MR(stop_reason='stop', text='好的。')]
     _send_turn(client, '')
-    system = model.seen_payloads[0][0].content
+    system = model.calls[0][0]['content']
     assert '现有 1 章' in system and '填充第 1 章' in system
 
 

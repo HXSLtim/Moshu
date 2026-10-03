@@ -16,7 +16,15 @@ from app.models.novel import Chapter, Novel
 from app.models.schemas import ChapterCreate, ChapterUpdate
 from app.models.story_bible import StoryEvent, StoryFact
 from app.models.user import User
-from app.services.conversation.runtime import execute_agent_tool, run_agent
+from app.services.conversation.core.loop import run_core_agent
+from app.services.conversation.core.tools import execute_agent_tool
+from app.services.conversation.core.types import ModelResponse
+from tests.core_agent_stub import CoreAgentStub
+from app.services.conversation.tools import READ_TOOL_SPECS
+from app.services.conversation.capability_tools import CAPABILITY_TOOL_SPECS
+from app.services.conversation.core.tools import PROPOSE_TOOLS
+
+TOOLS = PROPOSE_TOOLS + READ_TOOL_SPECS + CAPABILITY_TOOL_SPECS
 from app.services.conversation.tools import AgentScope, execute_read_tool
 from app.services.context.builder import ContextScopeError
 from app.services.context.budget import MAX_REVIEW_CONTENT_CHARS
@@ -163,102 +171,85 @@ async def test_check_manuscript_reports_real_violations(agent_tool_db):
     assert '最多支持' in oversized
 
 
-class ScriptedLLM:
-    """按脚本依次返回流式响应的模型替身，记录每次实际收到的消息。"""
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.seen_payloads = []
-
-    def bind_tools(self, tools):
-        return self
-
-    async def ainvoke(self, payload):
-        return self.responses.pop(0)
-
-    async def astream(self, payload):
-        self.seen_payloads.append(payload)
-        yield self.responses.pop(0)
-
-
 def _tool_call_chunk(name, args, call_id='call-1'):
-    return AIMessageChunk(content='', tool_calls=[{'name': name, 'args': args, 'id': call_id}])
+    return ModelResponse(stop_reason='toolUse',
+                         tool_calls=[{'id': call_id, 'name': name, 'arguments': args}])
 
 
 def _text_chunk(text):
-    return AIMessageChunk(content=text, response_metadata={'finish_reason': 'stop'})
+    return ModelResponse(stop_reason='stop', text=text)
 
 
 @pytest.mark.asyncio
 async def test_run_agent_reads_tools_before_answering(agent_tool_db):
-    llm = ScriptedLLM([
+    llm = CoreAgentStub([
         _tool_call_chunk('search_story_bible', {'query': '林夏'}),
         _text_chunk('根据账本，林夏的武器是青霜剑。'),
     ])
     events = []
-    async for event in run_agent(
-            llm, [('user', '林夏的武器是什么？')],
+    async for event in run_core_agent(
+            llm, [{'role': 'user', 'content': '林夏的武器是什么？'}], tools_spec=TOOLS,
             read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
         events.append(event)
 
     tool_events = [event for event in events if event['type'] == 'tool']
     assert [(event['name'], event['status']) for event in tool_events] == [('search_story_bible', 'read')]
     # 模型第二轮必须真实看到账本内容，而不是模型自己编造的上下文。
-    second_round = llm.seen_payloads[1]
-    assert any(isinstance(message, ToolMessage) and '青霜剑' in message.content for message in second_round)
+    second_round = llm.calls[1]
+    assert any(message.get('role') == 'tool' and '青霜剑' in message['content'] for message in second_round)
     assert events[-1]['type'] == 'final'
 
 
 @pytest.mark.asyncio
 async def test_run_agent_self_check_tool_marks_checked_event(agent_tool_db):
-    llm = ScriptedLLM([
+    llm = CoreAgentStub([
         _tool_call_chunk('check_manuscript', {'content': '他是一位12级魔法师。'}),
         _text_chunk('草稿里有冲突，我已修正。'),
     ])
     events = []
-    async for event in run_agent(
-            llm, [('user', '帮我看看这段')],
+    async for event in run_core_agent(
+            llm, [{'role': 'user', 'content': '帮我看看这段'}], tools_spec=TOOLS,
             read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
         events.append(event)
 
     assert [(event['name'], event['status']) for event in events if event['type'] == 'tool'] == [
         ('check_manuscript', 'checked')]
-    second_round = llm.seen_payloads[1]
-    assert any(isinstance(message, ToolMessage) and '超出上限' in message.content for message in second_round)
+    second_round = llm.calls[1]
+    assert any(message.get('role') == 'tool' and '超出上限' in message['content'] for message in second_round)
 
 
 @pytest.mark.asyncio
 async def test_run_agent_without_executor_declares_tools_unavailable():
-    llm = ScriptedLLM([
+    llm = CoreAgentStub([
         _tool_call_chunk('search_story_bible', {'query': '林夏'}),
         _text_chunk('本轮无法核实，只能按已有信息回答。'),
     ])
-    async for _event in run_agent(llm, [('user', '林夏的武器是什么？')]):
+    async for _event in run_core_agent(llm, [{'role': 'user', 'content': '林夏的武器是什么？'}], tools_spec=TOOLS):
         pass
 
-    second_round = llm.seen_payloads[1]
-    assert any(isinstance(message, ToolMessage) and '没有检索工具可用' in message.content
+    second_round = llm.calls[1]
+    assert any(message.get('role') == 'tool' and '没有检索工具可用' in message['content']
                for message in second_round)
 
 
 @pytest.mark.asyncio
 async def test_run_agent_dedupes_identical_calls(agent_tool_db):
-    llm = ScriptedLLM([
-        AIMessageChunk(content='', tool_calls=[
-            {'name': 'search_story_bible', 'args': {'query': '林夏'}, 'id': 'call-1'},
-            {'name': 'search_story_bible', 'args': {'query': '林夏'}, 'id': 'call-2'},
+    llm = CoreAgentStub([
+        ModelResponse(stop_reason='toolUse', tool_calls=[
+            {'id': 'call-1', 'name': 'search_story_bible', 'arguments': {'query': '林夏'}},
+            {'id': 'call-2', 'name': 'search_story_bible', 'arguments': {'query': '林夏'}},
         ]),
         _text_chunk('查到了，青霜剑。'),
     ])
-    async for _event in run_agent(
-            llm, [('user', '林夏的武器是什么？')],
+    async for _event in run_core_agent(
+            llm, [{'role': 'user', 'content': '林夏的武器是什么？'}], tools_spec=TOOLS,
             read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
         pass
 
-    tool_messages = [message for message in llm.seen_payloads[1] if isinstance(message, ToolMessage)]
+    tool_messages = [message for message in llm.calls[1] if message.get('role') == 'tool']
     assert len(tool_messages) == 2
-    assert '青霜剑' in tool_messages[0].content
-    assert '重复调用已忽略' in tool_messages[1].content
+    assert '青霜剑' in tool_messages[0]['content']
+    assert '重复调用已忽略' in tool_messages[1]['content']
 
 
 @pytest.mark.asyncio
@@ -266,21 +257,21 @@ async def test_run_agent_stops_at_round_budget_without_failing(agent_tool_db):
     """模型一直请求工具时按轮次预算收尾，图不得无限循环也不得抛出框架异常。"""
     calls = []
 
-    class EndlessToolCallLLM:
+    class EndlessProvider:
         """每轮都请求不同的工具调用，永远不会自行给出最终答复。"""
 
-        def bind_tools(self, tools):
-            return self
-
-        async def astream(self, payload):
+        async def stream(self, messages, tools=None):
             index = len(calls)
-            calls.append(payload)
-            yield AIMessageChunk(content='', tool_calls=[
-                {'name': 'search_story_bible', 'args': {'query': f'林夏{index}'}, 'id': f'call-{index}'}])
+            calls.append(messages)
+            yield {'type': 'response_done', 'response': ModelResponse(
+                stop_reason='toolUse', tool_calls=[
+                    {'id': f'call-{index}', 'name': 'search_story_bible',
+                     'arguments': {'query': f'林夏{index}'}}])}
 
     events = []
-    async for event in run_agent(
-            EndlessToolCallLLM(), [('user', '林夏的武器是什么？')], max_rounds=3,
+    async for event in run_core_agent(
+            EndlessProvider(), [{'role': 'user', 'content': '林夏的武器是什么？'}],
+            tools_spec=TOOLS, max_rounds=3,
             read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
         events.append(event)
 
@@ -293,14 +284,14 @@ async def test_run_agent_stops_at_round_budget_without_failing(agent_tool_db):
 @pytest.mark.asyncio
 async def test_write_manuscript_carries_uncertainties_through_tool_args():
     """数组参数不能被参数表校验静默丢弃，不确定点要随稿件进入 final 事件。"""
-    llm = ScriptedLLM([
+    llm = CoreAgentStub([
         _tool_call_chunk('write_manuscript', {'operation': 'append',
                                               'content': '他推开门，风灌了进来。',
                                               'uncertainties': ['门后是否有人尚未确定']}),
         _text_chunk('已按你的要求续写这一段。'),
     ])
     events = []
-    async for event in run_agent(llm, [('user', '接着写一段')]):
+    async for event in run_core_agent(llm, [{'role': 'user', 'content': '接着写一段'}], tools_spec=TOOLS):
         events.append(event)
 
     drafted = [event for event in events if event.get('name') == 'write_manuscript']
@@ -339,7 +330,7 @@ async def test_capability_tool_runs_and_emits_running_then_completed():
     no_selection = await execute_capability_tool(context, 'rewrite_selection', {'instruction': '更紧凑'})
     assert '没有选中文字' in no_selection
 
-    llm = ScriptedLLM([_text_chunk('改写后的正文。')])
+    llm = CoreAgentStub([_text_chunk('改写后的正文。')])
     context = CapabilityContext(novel_id=1, actor_id=1, novel_lifecycle_id='l' * 32,
                                 chapter_id=1, chapter_number=2, chapter_version=1,
                                 chapter_lifecycle_id='c' * 32, current_content='原文',
@@ -359,29 +350,45 @@ def _args_stream_chunks(name, args_json, splits):
     for cut in list(splits) + [len(args_json)]:
         pieces.append(args_json[offset:cut])
         offset = cut
-    chunks = [
-        AIMessageChunk(content='', tool_call_chunks=[
-            {'name': name if index == 0 else None, 'args': piece,
-             'id': 'call-m-1' if index == 0 else None, 'index': 0}])
-        for index, piece in enumerate(pieces) if piece
-    ]
-    return chunks
+    events = []
+    for index, piece in enumerate(pieces):
+        if not piece:
+            continue
+        if index == 0:
+            events.append({'type': 'toolcall_start', 'index': 0, 'id': 'call-m-1', 'name': name})
+        events.append({'type': 'toolcall_delta', 'index': 0, 'args_delta': piece})
+    return events
 
 
 class _StreamScriptedLLM:
-    """每轮按脚本依次 yield 一串流式 chunk。"""
+    """每轮按脚本依次 yield 一串 provider 事件；脚本末尾补 response_done。"""
 
     def __init__(self, rounds):
         self.rounds = list(rounds)
         self.seen_payloads = []
 
-    def bind_tools(self, tools):
-        return self
-
-    async def astream(self, payload):
-        self.seen_payloads.append(payload)
-        for chunk in self.rounds.pop(0):
-            yield chunk
+    async def stream(self, messages, tools=None):
+        import json as _json
+        self.seen_payloads.append(messages)
+        script = self.rounds.pop(0)
+        text = ''.join(e.get('delta', '') for e in script if e.get('type') == 'text_delta')
+        args_by_index: dict[int, dict] = {}
+        for event in script:
+            yield event
+            if event.get('type') == 'toolcall_start':
+                args_by_index[event['index']] = {'id': event['id'], 'name': event['name'], 'args': ''}
+            elif event.get('type') == 'toolcall_delta':
+                args_by_index.setdefault(event['index'], {'id': None, 'name': None, 'args': ''})
+                args_by_index[event['index']]['args'] += event.get('args_delta', '')
+        tool_calls = []
+        for index, entry in sorted(args_by_index.items()):
+            try:
+                arguments = _json.loads(entry['args']) if entry['args'] else {}
+            except ValueError:
+                arguments = {}
+            tool_calls.append({'id': entry['id'], 'name': entry['name'], 'arguments': arguments})
+        yield {'type': 'response_done', 'response': ModelResponse(
+            stop_reason='toolUse' if tool_calls else 'stop', text=text, tool_calls=tool_calls)}
 
 
 @pytest.mark.asyncio
@@ -395,11 +402,11 @@ async def test_manuscript_args_stream_as_chunks(agent_tool_db):
               len(args_json) - 3]
     llm = _StreamScriptedLLM([
         _args_stream_chunks('write_manuscript', args_json, splits),
-        [_text_chunk('已登记为候选,确认后并入本章。')],
+        [{'type': 'text_delta', 'delta': '已登记为候选,确认后并入本章。'}],
     ])
     events = []
-    async for event in run_agent(llm, [('user', '接着写一段')],
-                                 read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
+    async for event in run_core_agent(llm, [{'role': 'user', 'content': '接着写一段'}], tools_spec=TOOLS,
+                                      read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
         events.append(event)
 
     chunks = [event['content'] for event in events if event['type'] == 'chunk']
@@ -418,11 +425,11 @@ async def test_other_tool_args_are_not_streamed(agent_tool_db):
     args_json = _json.dumps({'query': '林夏的武器是什么青霜剑在哪里'}, ensure_ascii=False)
     llm = _StreamScriptedLLM([
         _args_stream_chunks('search_story_bible', args_json, [10, 25]),
-        [_text_chunk('查到了,青霜剑。')],
+        [{'type': 'text_delta', 'delta': '查到了,青霜剑。'}],
     ])
     events = []
-    async for event in run_agent(llm, [('user', '林夏的武器是什么？')],
-                                 read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
+    async for event in run_core_agent(llm, [{'role': 'user', 'content': '林夏的武器是什么？'}], tools_spec=TOOLS,
+                                      read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
         events.append(event)
 
     chunks = [event['content'] for event in events if event['type'] == 'chunk']
@@ -508,11 +515,11 @@ async def test_scope_error_from_tool_terminates_run(agent_tool_db):
     llm = _StreamScriptedLLM([
         _args_stream_chunks('read_chapter',
                             '{"chapter_number": 99}', [12]),
-        [_text_chunk('不应到达的收尾。')],
+        [{'type': 'text_delta', 'delta': '不应到达的收尾。'}],
     ])
     with pytest.raises(ContextScopeError):
-        async for _event in run_agent(llm, [('user', '读第99章')],
-                                      read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
+        async for _event in run_core_agent(llm, [{'role': 'user', 'content': '读第99章'}], tools_spec=TOOLS,
+                                           read_tool_executor=lambda name, args: execute_read_tool(_scope(), name, args)):
             pass
 
 
@@ -524,11 +531,11 @@ async def test_ordinary_tool_failure_still_degrades_to_notice(agent_tool_db):
 
     llm = _StreamScriptedLLM([
         _args_stream_chunks('search_story_bible', '{"query": "林夏"}', [14]),
-        [_text_chunk('检索没成功,我如实说明。')],
+        [{'type': 'text_delta', 'delta': '检索没成功,我如实说明。'}],
     ])
     events = []
-    async for event in run_agent(llm, [('user', '查林夏')],
-                                 read_tool_executor=broken_executor):
+    async for event in run_core_agent(llm, [{'role': 'user', 'content': '查林夏'}], tools_spec=TOOLS,
+                                      read_tool_executor=broken_executor):
         events.append(event)
 
     tool_round_text = llm.seen_payloads[1] if llm.seen_payloads else None

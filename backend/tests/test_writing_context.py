@@ -37,9 +37,9 @@ def seed_previous_digest(db):
 
 
 def _first_content(payload):
-    """取首条消息文本；Agent 路径给 LangChain 消息对象，其余路径给 (role, text)。"""
+    """取首条消息文本；Agent 路径(core)给 OpenAI dict，其余路径给 (role, text)。"""
     first = payload[0]
-    return first.content if hasattr(first, 'content') else first[1]
+    return first['content'] if isinstance(first, dict) else (first.content if hasattr(first, 'content') else first[1])
 
 
 def test_chat_recall_reaches_real_messages_and_manifest_survives_history(chat_api):
@@ -49,7 +49,7 @@ def test_chat_recall_reaches_real_messages_and_manifest_survives_history(chat_ap
     data = payload(mode='continue')
     first = client.post('/api/writing-chat/1/turns', json=data).json()
     assert first['status'] == 'completed'
-    system = _first_content(model.await_args.args[0])
+    system = _first_content(model.await_args.args[0])  # mode=continue 走固定任务链
     assert digest.summary in system
     assert '自动提取' in system
     assert '危险候选' not in system and '危险未来' not in system
@@ -66,14 +66,15 @@ def test_chat_recall_reaches_real_messages_and_manifest_survives_history(chat_ap
     assert history[0]['context_manifest'] == manifest
     next_turn = client.post('/api/writing-chat/1/turns', json=payload(message='只按目前原文继续')).json()
     assert next_turn['context_manifest']['sources'] == []
-    assert digest.summary not in _first_content(model.await_args.args[0])
+    assert digest.summary not in _first_content(model.core.calls[-1])
 
 
 def test_failed_turn_keeps_context_manifest_without_adoptable_text(chat_api):
     """模型失败仍可核对本轮参考，且不会产生可采纳正文。"""
     client, db, model = chat_api
     _, revision, _ = seed_previous_digest(db)
-    model.return_value = SimpleNamespace(content='截断回复', response_metadata={'finish_reason': 'length'})
+    from app.services.conversation.core.types import ModelResponse
+    model.core.responses = [ModelResponse(stop_reason='length', text='截断回复')]
     result = client.post('/api/writing-chat/1/turns', json=payload()).json()
     assert result['status'] == 'failed' and result['assistant_text'] == ''
     assert result['context_manifest']['sources'][0]['source_revision_id'] == revision.id
@@ -88,7 +89,7 @@ def test_unavailable_l1_storage_preserves_question_and_current_content(chat_api)
     assert result['status'] == 'completed'
     assert result['context_manifest']['sources'] == []
     assert any('暂不可用' in warning for warning in result['context_manifest']['warnings'])
-    assert '最新未保存原稿' in _first_content(model.await_args.args[0])
+    assert '最新未保存原稿' in _first_content(model.core.calls[-1])
     assert db.query(WritingTurn).count() == 1
 
 

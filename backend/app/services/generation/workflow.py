@@ -2,7 +2,7 @@
 
 LangGraph 固定流水线：检索上下文 → 世界观/角色/剧情三个专精角色顺序产出 →
 一致性检查，冲突按条件边带反馈重试。流程是固定的，Agent 角色没有自主
-选择下一步的权力；自主工具循环见 conversation/runtime 的单 Agent 运行时。
+选择下一步的权力；自主工具循环见 conversation/core 的单 Agent 运行时。
 每步产出 WorkflowStep 追踪，供前端可视化数据流。
 """
 import asyncio

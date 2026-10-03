@@ -33,7 +33,6 @@ from app.services.context.budget import (
 from app.services.model.result import ModelOutputError
 from app.services.conversation.service import writing_service
 from app.services.context.builder import build_context_pack, ContextScopeError
-from app.services.conversation.runtime import run_agent
 from app.services.conversation.capability_tools import CapabilityContext, execute_capability_tool
 from app.services.conversation.tools import AgentScope, execute_read_tool
 from app.services.conversation.core.loop import run_core_agent
@@ -41,11 +40,6 @@ from app.services.conversation.core.provider import OpenAIStreamProvider
 from app.services.conversation.core.budget import CoreBudget
 from app.services.conversation.core.tools import PROPOSE_TOOLS as _CORE_PROPOSE_TOOLS
 from app.services.conversation.core.events import assert_nai_event
-
-def _use_core_runtime() -> bool:
-    """双轨灰度开关：默认 langgraph 旧链零风险，NAI_AGENT_RUNTIME=core 切新核心。"""
-    return settings.NAI_AGENT_RUNTIME == 'core'
-
 
 def _core_agent_tools() -> list[dict]:
     """core 链工具面：与旧链 AGENT_TOOLS 同源同序(读/能力规格复用，提案面走 core 迁移件)。"""
@@ -214,10 +208,9 @@ async def stream_turn(novel_id: int, data: TurnCreate, http_request: Request,
         _started = _monotonic()
         execution_payload: dict | None = None
         try:
-            if _use_core_runtime():
-                core_budget = CoreBudget(max_model_calls=20)
-                core_rounds = 0
-                async for event in run_core_agent(
+            core_budget = CoreBudget(max_model_calls=20)
+            core_rounds = 0
+            async for event in run_core_agent(
                         OpenAIStreamProvider(),
                         _core_agent_messages(context_pack, data, novel, history, db, chapter),
                         tools_spec=_core_agent_tools(),
@@ -225,37 +218,18 @@ async def stream_turn(novel_id: int, data: TurnCreate, http_request: Request,
                         capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
                         manuscript_ack=_build_manuscript_ack(db, novel_id, chapter),
                         budget=core_budget):
-                    if await http_request.is_disconnected():
-                        raise asyncio.CancelledError()
-                    if event['type'] == 'chunk':
-                        accumulated.append(event['content'])
-                        yield _sse(event)
-                    elif event['type'] == 'tool':
-                        yield _sse(assert_nai_event(event))
-                    elif event['type'] == 'final':
-                        final_data = event['data']
-                        manuscript_text = event.get('text')
-                        core_rounds = event['data'].get('rounds_used', core_rounds)
-                execution_payload = _core_execution_payload(core_budget, core_rounds, _started)
-            else:
-                async with execution_scope(max_model_calls=20) as meter:
-                    async for event in run_agent(
-                        writing_service.llm,
-                        list(_agent_messages(context_pack, data, novel, history, db, chapter)),
-                        read_tool_executor=lambda name, args: execute_read_tool(agent_scope, name, args),
-                        capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
-                        manuscript_ack=_build_manuscript_ack(db, novel_id, chapter)):
-                        if await http_request.is_disconnected():
-                            raise asyncio.CancelledError()
-                        if event['type'] == 'chunk':
-                            accumulated.append(event['content'])
-                            yield _sse(event)
-                        elif event['type'] == 'tool':
-                            yield _sse(event)
-                        elif event['type'] == 'final':
-                            final_data = event['data']
-                            manuscript_text = event.get('text')
-                execution_payload = meter.snapshot()
+                if await http_request.is_disconnected():
+                    raise asyncio.CancelledError()
+                if event['type'] == 'chunk':
+                    accumulated.append(event['content'])
+                    yield _sse(event)
+                elif event['type'] == 'tool':
+                    yield _sse(assert_nai_event(event))
+                elif event['type'] == 'final':
+                    final_data = event['data']
+                    manuscript_text = event.get('text')
+                    core_rounds = event['data'].get('rounds_used', core_rounds)
+            execution_payload = _core_execution_payload(core_budget, core_rounds, _started)
             text = (manuscript_text if final_data and final_data.get('manuscript')
                     else ''.join(accumulated).strip()) or '模型没有返回可显示的回复，请重新发送。'
             if final_data and final_data.get('manuscript') and content_hash(data.current_content) != content_hash(chapter.content):
@@ -324,24 +298,6 @@ def _chapter_anchor(db, novel_id, chapter):
         landing = f"「下一章／开新章」的落点是新建第 {total + 1} 章"
     return (f"\n【章节真值】全书按正文现有 {total} 章；当前编辑的是第 {chapter.chapter_number} 章；{landing}。"
             f"稿件标题与叙述中的章号必须以此为准；历史对话或大纲计划里出现的其他章号不是已存在的章。")
-
-
-def _agent_messages(context_pack, data, novel, history, db, chapter):
-    """Agent 的系统契约、最近交流与作者这一轮的话，按 LangChain 消息对象返回。"""
-    from langchain_core.messages import SystemMessage
-
-    from app.services.context.budget import build_writing_chat_messages
-    messages = build_writing_chat_messages(
-        worldview=context_pack.worldview, current_content=data.current_content,
-        story_context='\n'.join(context_pack.story_bible_context),
-        digest_context=context_pack.digest_context,
-        structured_context=context_pack.structured_context,
-        turns=history, instruction=data.message, mode='discuss',
-    )
-    system = (messages[0][1] + '\n\n' + AGENT_SYSTEM_PROMPT + _chapter_anchor(db, novel.id, chapter)
-              + f"\n当前项目信息（未填写表示暂无）：\n类型：{novel.genre or '未填写'}"
-              + f"\n简介：{novel.description or '未填写'}")
-    return [SystemMessage(content=system), *messages[1:]]
 
 
 def _actions_note(result, proposal_status=None) -> str:
@@ -555,39 +511,24 @@ async def _run_agent_turn(novel_id, data, db, novel, chapter, context_pack, turn
     try:
         if data.mode == 'discuss':
             chunks, final_data = [], None
-            execution_payload: dict | None = None
-            if _use_core_runtime():
-                from time import monotonic
-                started = monotonic()
-                core_budget = CoreBudget(max_model_calls=20)
-                core_rounds = 0
-                async for event in run_core_agent(
-                        OpenAIStreamProvider(),
-                        _core_agent_messages(context_pack, data, novel, history, db, chapter),
-                        tools_spec=_core_agent_tools(),
-                        read_tool_executor=lambda name, args: execute_read_tool(agent_scope, name, args),
-                        capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
-                        manuscript_ack=_build_manuscript_ack(db, novel_id, chapter),
-                        budget=core_budget):
-                    if event['type'] == 'chunk':
-                        chunks.append(event['content'])
-                    elif event['type'] == 'final':
-                        final_data = event['data']
-                        core_rounds = event['data'].get('rounds_used', core_rounds)
-                execution_payload = _core_execution_payload(core_budget, core_rounds, started)
-            else:
-                async with execution_scope(max_model_calls=20) as meter:
-                    async for event in run_agent(
-                            writing_service.llm,
-                            list(_agent_messages(context_pack, data, novel, history, db, chapter)),
-                            read_tool_executor=lambda name, args: execute_read_tool(agent_scope, name, args),
-                        capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
-                        manuscript_ack=_build_manuscript_ack(db, novel_id, chapter)):
-                        if event['type'] == 'chunk':
-                            chunks.append(event['content'])
-                        elif event['type'] == 'final':
-                            final_data = event['data']
-                    execution_payload = meter.snapshot()
+            from time import monotonic
+            started = monotonic()
+            core_budget = CoreBudget(max_model_calls=20)
+            core_rounds = 0
+            async for event in run_core_agent(
+                    OpenAIStreamProvider(),
+                    _core_agent_messages(context_pack, data, novel, history, db, chapter),
+                    tools_spec=_core_agent_tools(),
+                    read_tool_executor=lambda name, args: execute_read_tool(agent_scope, name, args),
+                    capability_tool_executor=lambda name, args: execute_capability_tool(capability_context, name, args),
+                    manuscript_ack=_build_manuscript_ack(db, novel_id, chapter),
+                    budget=core_budget):
+                if event['type'] == 'chunk':
+                    chunks.append(event['content'])
+                elif event['type'] == 'final':
+                    final_data = event['data']
+                    core_rounds = event['data'].get('rounds_used', core_rounds)
+            execution_payload = _core_execution_payload(core_budget, core_rounds, started)
             manuscript = (final_data or {}).get('manuscript')
             text = (manuscript or {}).get('content', '').strip() or ''.join(chunks).strip()
             if manuscript and content_hash(data.current_content) != content_hash(chapter.content):
