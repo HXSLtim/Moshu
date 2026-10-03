@@ -18,9 +18,9 @@ from app.services.context.budget import MAX_CHAT_OUTPUT_CHARS, MAX_TRACE_PREVIEW
 from app.services.context.builder import ContextScopeError
 from app.services.conversation.capability_tools import CAPABILITY_TOOL_NAMES
 from app.services.conversation.tools import CHECK_TOOL_NAME, READ_TOOL_NAMES
-from app.services.model.execution import ExecutionBudgetError
 from app.services.model.result import ModelOutputError
 from app.services.conversation.core.assembly import ManuscriptStream
+from app.services.conversation.core.budget import BudgetExceeded, CoreBudget
 from app.services.conversation.core.tools import (
     DUPLICATE_CALL_ACK,
     MODE,
@@ -70,13 +70,16 @@ def _final_event(actions: list[dict], manuscript: dict | None,
 async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dict],
                          read_tool_executor=None, capability_tool_executor=None,
                          manuscript_ack=None, before_tool_call=None, after_tool_call=None,
-                         max_model_calls: int = 20,
+                         max_model_calls: int = 20, budget: CoreBudget | None = None,
                          get_pending_messages=None) -> AsyncIterator[dict]:
     """跑一轮 Agent：模型可多次调用工具，最后给出自然语言回复。
 
     产出旧链 Nai 形状事件：``tool``、``chunk``、``final``。工具执行器签名
-    与挂点形状见 types.py；预算是域策略注入的模型调用次数上限。
+    与挂点形状见 types.py；预算三口径(次数/token/钱)由域策略经 budget 注入，
+    传 max_model_calls 时按单口径构造(向后兼容)。
     """
+    if budget is None:
+        budget = CoreBudget(max_model_calls=max_model_calls)
     conversation: list[dict] = [dict(m) for m in messages]
     seen: set[str] = set()
     actions: list[dict] = []
@@ -85,8 +88,6 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
     rounds = 0
 
     while True:
-        if calls_used >= max_model_calls:
-            raise ExecutionBudgetError('本轮模型调用次数已达到上限，请缩小任务后重新发送。')
         rounds += 1
         # 每轮新建：同一轮对话内模型可能再次起草，稿件流状态不跨轮续接。
         assembler = ManuscriptStream()
@@ -105,6 +106,10 @@ async def run_core_agent(provider, messages: list[dict], *, tools_spec: list[dic
         calls_used += 1
         if response is None:
             raise ModelOutputError('empty_reply', '模型没有返回可显示的回复，请重新发送。')
+        # 预算三口径记账与检查：token/钱按 provider 实报 usage 累计，
+        # usage 缺席(不伪造)时对应口径休眠；超限在此拦下不发起下一轮。
+        budget.record_call(response.usage)
+        budget.check(total_calls=calls_used)
 
         # error/aborted 硬分支：保留已产生的提案与稿件，不重试不吞，直接收尾。
         if response.stop_reason in ('error', 'aborted'):

@@ -39,11 +39,17 @@ class OpenAIStreamProvider:
     def __init__(self, *, client=None, model: str | None = None,
                  compat: ProviderCompat | None = None, temperature: float = 0.8,
                  max_tokens: int | None = None):
+        from app.services.conversation.core.models import get_model
         self.model = model or settings.OPENAI_MODEL_COMPLEX
-        self.compat = compat or ProviderCompat()
+        info = get_model(self.model)
+        # 元数据命中优先于全局档：per-model max_tokens/compat(设计稿 §3.4)；
+        # 未注册名回退缺省档时不覆盖 settings，保持既有全局行为。
+        known = info.id != 'default'
+        self.compat = compat or (ProviderCompat(
+            supports_usage_in_streaming=info.supports_usage_in_streaming,
+            supports_finish_reason=info.supports_finish_reason) if known else ProviderCompat())
         self.temperature = temperature
-        # 请求级输出预算默认取全局档；P2 换 per-model 元数据(设计稿 §3.4)。
-        self.max_tokens = max_tokens or settings.LLM_MAX_OUTPUT_TOKENS
+        self.max_tokens = max_tokens or (info.max_tokens if known else settings.LLM_MAX_OUTPUT_TOKENS)
         self._client = client or openai.AsyncClient(
             api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_API_BASE,
             timeout=settings.LLM_TIMEOUT_SECONDS, max_retries=0)
