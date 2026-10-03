@@ -5,8 +5,34 @@
  * ApiError 与 Abort 语义,与既有 lib/api.ts 的行为完全一致。
  * OpenAPI 路径已含 /api 前缀,这里只补源站地址。
  */
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
-const API_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
+
+declare global {
+  interface Window {
+    /** 桌面壳运行时注入的 API 基址(壳动态分配端口,构建期 env 不可用)。 */
+    __NAI_API_BASE__?: string;
+  }
+}
+
+/**
+ * API 基址解析序(壳 P1 件5 运行时覆盖点):
+ * 壳注入 window.__NAI_API_BASE__ > 构建期 NEXT_PUBLIC_API_BASE > 本地缺省。
+ * 逐请求解析,不支持构建期烧死单一值。
+ */
+export const resolveApiBase = (): string => {
+  if (typeof window !== 'undefined' && window.__NAI_API_BASE__) {
+    return window.__NAI_API_BASE__;
+  }
+  return process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
+};
+
+/** 兼容两类路径:OpenAPI 全路径(/api/...)只补源站,旧相对路径(/novels/...)拼完整 API_BASE。 */
+export const resolveApiUrl = (url: string): string => {
+  if (url.startsWith('http')) return url;
+  const apiBase = resolveApiBase();
+  const apiOrigin = apiBase.replace(/\/api\/?$/, '');
+  if (url.startsWith('/api/')) return `${apiOrigin}${url}`;
+  return `${apiBase}${url}`;
+};
 
 export class ApiError extends Error {
   constructor(
@@ -58,13 +84,6 @@ export const getHeaders = (): HeadersInit => {
     'Accept': 'application/json',
     ...(token && { 'Authorization': `Bearer ${token}` }),
   };
-};
-
-/** 兼容两类路径:OpenAPI 全路径(/api/...)只补源站,旧相对路径(/novels/...)拼完整 API_BASE。 */
-export const resolveApiUrl = (url: string): string => {
-  if (url.startsWith('http')) return url;
-  if (url.startsWith('/api/')) return `${API_ORIGIN}${url}`;
-  return `${API_BASE}${url}`;
 };
 
 const enhancedFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {

@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Box,
   Typography,
@@ -43,10 +43,10 @@ import type {
 
 const CHAPTER_PAGE_SIZE = 50;
 
-export default function NovelDetailPage() {
+function NovelDetailSession() {
   const router = useRouter();
-  const params = useParams();
-  const novelId = Number(params.id);
+  const searchParams = useSearchParams();
+  const novelId = Number(searchParams.get('novel'));
 
   const [novel, setNovel] = useState<Novel | null>(null);
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
@@ -429,7 +429,7 @@ export default function NovelDetailPage() {
                 >
                   AI初始化设定
                 </Button>
-                <Button size="small" onClick={() => router.push(`/novels/${novelId}/story-bible`)}>管理设定与伏笔</Button>
+                <Button size="small" onClick={() => router.push(`/story-bible?novel=${novelId}`)}>管理设定与伏笔</Button>
                 <Button size="small" disabled={exporting} onClick={() => void handleExport()}>{exporting ? '导出中…' : '导出全书 TXT'}</Button>
               </Box>
             </Box>
@@ -727,4 +727,9 @@ export default function NovelDetailPage() {
       </Dialog>
     </AppFrame>
   );
+}
+
+// 静态导出要求 useSearchParams 页面套 Suspense 边界。
+export default function NovelDetailPage() {
+  return <Suspense fallback={null}><NovelDetailSession /></Suspense>;
 }

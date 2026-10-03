@@ -20,6 +20,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InfoIcon from '@mui/icons-material/Info';
 import AuthFrame from '@/components/layout/AuthFrame';
 import { api } from '@/lib/api';
+import { resolveApiBase } from '@/lib/api/mutator';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -67,7 +68,7 @@ export default function LoginPage() {
     setError('');
     
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
+      const apiBase = resolveApiBase();
       const healthUrl = apiBase.replace('/api', '') + '/api/health';
       
       console.log('[DEBUG] 测试API连接:', healthUrl);
@@ -97,7 +98,7 @@ export default function LoginPage() {
 
   // 获取调试信息
   const getDebugInfo = () => {
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
+    const apiBase = resolveApiBase();
     const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown';
     const currentUrl = typeof window !== 'undefined' ? window.location.href : 'Unknown';
     
