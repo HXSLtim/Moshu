@@ -1,6 +1,7 @@
 'use client';
 
 import { createTheme, PaletteMode } from '@mui/material/styles';
+import type { Shadows } from '@mui/material/styles';
 
 // 扩展 token：内嵌卡/条目组的 subtle 底色（GUIDE「扩展 token」节，批1 落值）。
 declare module '@mui/material/styles' {
@@ -9,8 +10,34 @@ declare module '@mui/material/styles' {
   }
 }
 
+// 字体栈（GUIDE v2「字体系统」节，批0）：UI 中文走系统栈，零在线字体；数字/拉丁/
+// 代码感元素取 mono 栈（字数统计、章号、版本号、时间戳、用量行等场景显式取用，
+// 组件落地随批4）。小说正文阅读区禁 mono，保持 16px/1.75 阅读体。
+export const UI_FONT_STACK = [
+  '-apple-system',
+  'BlinkMacSystemFont',
+  '"Segoe UI"',
+  'Roboto',
+  '"Noto Sans SC"',
+  '"PingFang SC"',
+  '"Microsoft YaHei"',
+  'sans-serif',
+].join(',');
+
+export const MONO_FONT_STACK = [
+  'ui-monospace',
+  '"SF Mono"',
+  '"JetBrains Mono"',
+  'Consolas',
+  'monospace',
+].join(',');
+
+// 全站零 elevation（GUIDE v2「形体语言」节，批0）：阴影通道整列置空，
+// depth 靠层级与 1px 边框立，不靠投影。
+const noShadows = Array(25).fill('none') as Shadows;
+
 /**
- * 纸墨配色方案 - 浅色模式
+ * 冷灰配色方案 - 浅色模式（纸墨日间档，v2 保留）
  */
 const lightPalette = {
   primary: {
@@ -38,7 +65,7 @@ const lightPalette = {
     subtle: '#F3F0EA',      // 内嵌条目组底
   },
   text: {
-    primary: '#1D1C1A',     // 墨黑 (87% opacity)
+    primary: '#1D1C1A',     // 墨黑
     secondary: '#5F5F5F',
   },
   divider: '#C7C2B9',
@@ -46,37 +73,38 @@ const lightPalette = {
 };
 
 /**
- * 纸墨配色方案 - 深色模式
+ * 冷灰配色方案 - 深色模式（v2 默认档：CODEX 系冷灰）
  */
 const darkPalette = {
   primary: {
-    main: '#4EC9A1',        // 降低亮度的绿
+    main: '#4EC9A1',
     contrastText: '#000000',
     container: '#004D3A',
   },
   secondary: {
-    main: '#9E9E9E',
+    main: '#9B9B9B',
     contrastText: '#000000',
   },
+  // 状态色深色列微调适配冷底（GUIDE v2 状态色表，语义映射不变）
   success: {
-    main: '#5FC9A6',
+    main: '#4EC98F',
   },
   warning: {
     main: '#D9A441',
   },
   error: {
-    main: '#E57368',
+    main: '#E5655E',
   },
   background: {
-    default: '#1B1B1B',     // 纯黑5%上浮
-    paper: '#242424',
-    subtle: '#2B2B28',      // 内嵌条目组底
+    default: '#0A0A0A',     // 冷黑
+    paper: '#121212',
+    subtle: '#1A1A1A',      // 内嵌条目组底
   },
   text: {
-    primary: '#E2E0DB',     // 米白 (93% white)
-    secondary: '#9E9E9E',
+    primary: '#E8E8E8',
+    secondary: '#9B9B9B',
   },
-  divider: '#494944',
+  divider: '#2A2A2A',
   mode: 'dark' as PaletteMode,
 };
 
@@ -89,15 +117,9 @@ export const createAppTheme = (mode: PaletteMode) => {
 
   return createTheme({
     palette,
+    shadows: noShadows,
     typography: {
-      fontFamily: [
-        '-apple-system',
-        'BlinkMacSystemFont',
-        '"Segoe UI"',
-        'Roboto',
-        '"Noto Sans SC"',
-        'sans-serif',
-      ].join(','),
+      fontFamily: UI_FONT_STACK,
       // 针对阅读优化的字体大小
       body1: {
         fontSize: '16px',
@@ -113,25 +135,47 @@ export const createAppTheme = (mode: PaletteMode) => {
         fontWeight: 600,
       },
     },
+    // 全局方角 2px（GUIDE v2「形体语言」节；v1 的 8px 作废）。
     shape: {
-      borderRadius: 8,
+      borderRadius: 2,
     },
     components: {
       MuiButton: {
         styleOverrides: {
           root: {
             textTransform: 'none',
-            borderRadius: '8px',
+            borderRadius: '2px',
           },
         },
       },
-      MuiCard: {
+      // 深色 Paper 的抬升叠影随 elevation 通道叠加，一并关掉。
+      MuiPaper: {
         styleOverrides: {
           root: {
-            boxShadow: mode === 'light'
-              ? '0 2px 8px rgba(0,0,0,0.08)'
-              : '0 2px 8px rgba(0,0,0,0.3)',
+            backgroundImage: 'none',
           },
+        },
+      },
+      // 浮层 = 实底 paper + 1px divider 细边框（GUIDE v2「形体语言」节）。
+      MuiDialog: {
+        styleOverrides: {
+          paper: { border: `1px solid ${palette.divider}` },
+        },
+      },
+      MuiMenu: {
+        styleOverrides: {
+          paper: { border: `1px solid ${palette.divider}` },
+        },
+      },
+      MuiPopover: {
+        styleOverrides: {
+          paper: { border: `1px solid ${palette.divider}` },
+        },
+      },
+      // 非 mono 场景数字兜底等宽对齐（GUIDE v2「字体系统」节）。
+      MuiCssBaseline: {
+        styleOverrides: {
+          body: { fontVariantNumeric: 'tabular-nums' },
         },
       },
     },

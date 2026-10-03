@@ -1,67 +1,52 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   COLOR_MODE_STORAGE_KEY,
   ColorModeProvider,
   useColorMode,
 } from './useColorMode';
 
-function mockMatchMedia(matchesDark: boolean) {
-  const listeners = new Set<() => void>();
-  const media = {
-    matches: matchesDark,
-    media: '(prefers-color-scheme: dark)',
-    onchange: null,
-    addEventListener: vi.fn((_type: string, listener: () => void) => {
-      listeners.add(listener);
-    }),
-    removeEventListener: vi.fn((_type: string, listener: () => void) => {
-      listeners.delete(listener);
-    }),
-    dispatchEvent: vi.fn(),
-  };
-  vi.stubGlobal('matchMedia', vi.fn(() => media));
-  return listeners;
-}
-
 describe('useColorMode', () => {
   beforeEach(() => {
     localStorage.clear();
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
     localStorage.clear();
   });
 
-  it('没有用户选择时跟随系统深色偏好', async () => {
-    mockMatchMedia(true);
+  it('无存储偏好时默认深色，不跟随系统且不写入手动偏好', async () => {
     const { result } = renderHook(() => useColorMode(), { wrapper: ColorModeProvider });
 
     await waitFor(() => expect(result.current.mode).toBe('dark'));
     expect(result.current.isDark).toBe(true);
-    // 自动跟随系统不应写入手动偏好，后续系统变化仍能生效。
+    // 深色默认不写入手动偏好，避免把「没选过」固化成选择。
     expect(localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBeNull();
   });
 
   it('切换模式后写入 localStorage 并更新 document 配色', async () => {
-    mockMatchMedia(false);
     const { result } = renderHook(() => useColorMode(), { wrapper: ColorModeProvider });
 
-    await waitFor(() => expect(result.current.mode).toBe('light'));
+    await waitFor(() => expect(result.current.mode).toBe('dark'));
     act(() => result.current.toggleColorMode());
 
     await waitFor(() => {
-      expect(result.current.mode).toBe('dark');
-      expect(localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBe('dark');
+      expect(result.current.mode).toBe('light');
+      expect(localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBe('light');
     });
-    expect(document.documentElement.style.colorScheme).toBe('dark');
+    expect(document.documentElement.style.colorScheme).toBe('light');
   });
 
-  it('用户已保存浅色时优先于系统深色偏好', async () => {
-    mockMatchMedia(true);
+  it('已存浅色偏好的老用户不被深色默认迁移', async () => {
     localStorage.setItem(COLOR_MODE_STORAGE_KEY, 'light');
     const { result } = renderHook(() => useColorMode(), { wrapper: ColorModeProvider });
 
     await waitFor(() => expect(result.current.mode).toBe('light'));
+  });
+
+  it('存储值非法时按无偏好兜底深色', async () => {
+    localStorage.setItem(COLOR_MODE_STORAGE_KEY, 'sepia');
+    const { result } = renderHook(() => useColorMode(), { wrapper: ColorModeProvider });
+
+    await waitFor(() => expect(result.current.mode).toBe('dark'));
   });
 });
